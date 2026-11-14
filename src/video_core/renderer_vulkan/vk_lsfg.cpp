@@ -19,7 +19,11 @@
 #include "lsfg-vk-common/vulkan/fence.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
+#if defined(__SWITCH2__)
+extern "C" PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName);
+#else
 extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+#endif
 
 namespace Vulkan {
 
@@ -175,7 +179,11 @@ private:
     };
 
     static PFN_vkGetInstanceProcAddr LoadInstanceProcAddr() {
+#if defined(__SWITCH2__)
+        return reinterpret_cast<PFN_vkGetInstanceProcAddr>(&vkGetInstanceProcAddr);
+#else
         return reinterpret_cast<PFN_vkGetInstanceProcAddr>(&vk_icdGetInstanceProcAddr);
+#endif
     }
 
     Slot& AcquireSlot() {

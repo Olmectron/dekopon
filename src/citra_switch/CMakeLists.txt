@@ -101,7 +101,8 @@ if (ENABLE_OPENGL)
         ${SWITCH_EGL} ${SWITCH_GLESV2} ${SWITCH_GLAPI} ${SWITCH_DRM_NOUVEAU})
 endif()
 
-# Vulkan supported provided by the NXVK project
+# Vulkan driver: OunceVK (-lvulkan) on Switch 2, NXVK archives on Switch 1.
+# Both are exposed through the INTERFACE target `nxvk` (see externals/CMakeLists.txt).
 if (ENABLE_VULKAN)
     target_link_libraries(citra_switch PRIVATE nxvk)
 endif()

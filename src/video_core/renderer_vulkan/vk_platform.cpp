@@ -10,6 +10,9 @@
 #elif defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
 #elif defined(__SWITCH__)
+// Both Switch 1 (NXVK) and Switch 2 (OunceVK) present through the VI/NWindow
+// system, so the NN VI surface is used on both. TODO(switch2): confirm OunceVK
+// exposes VK_NN_vi_surface; if it uses a different WSI, branch on __SWITCH2__.
 #define VK_USE_PLATFORM_VI_NN
 #else
 #define VK_USE_PLATFORM_WAYLAND_KHR
@@ -29,8 +32,13 @@
 
 #ifdef __SWITCH__
 #include <cstdlib>
+#if defined(__SWITCH2__)
+// OunceVK is linked statically and exports the standard Vulkan loader entry.
+extern "C" PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName);
+#else
 // NXVK is statically linked and exposes a single ICD entrypoint.
 extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+#endif
 #endif
 
 namespace Vulkan {
@@ -316,7 +324,13 @@ vk::InstanceCreateFlags GetInstanceFlags() {
 vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
                                   Frontend::WindowSystemType window_type, bool enable_validation,
                                   bool dump_command_buffers) {
-#ifdef __SWITCH__
+#if defined(__SWITCH2__)
+    // OunceVK provides a standard Vulkan loader; initialise the dispatcher from
+    // its exported vkGetInstanceProcAddr. No NXVK/Mesa env vars are needed.
+    const auto vk_get_instance_proc_addr =
+        reinterpret_cast<PFN_vkGetInstanceProcAddr>(&vkGetInstanceProcAddr);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_get_instance_proc_addr);
+#elif defined(__SWITCH__)
     // NVK gates device creation behind this var.
     setenv("NVK_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
     setenv("MESA_SHADER_CACHE_DISABLE", "false", 1);

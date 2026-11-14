@@ -565,8 +565,18 @@ if (DEKOPON)
     add_subdirectory(libusbhsfs EXCLUDE_FROM_ALL)
 endif()
 
-# NXVK  is consumed as a set of prebuilt static archives rather than an add_subdirectory.
-if (DEKOPON AND ENABLE_VULKAN)
+# Vulkan driver for the Switch build.
+#  * Switch 2 (ounce-devkit): Vulkan comes from OunceVK, installed with the
+#    devkit and linked with -lvulkan. No NXVK archives are needed.
+#  * Switch 1: NXVK is consumed as a set of prebuilt static archives.
+# The INTERFACE target keeps the name `nxvk` in both cases so consumers
+# (src/citra_switch) link the same target regardless of platform.
+if (DEKOPON AND ENABLE_VULKAN AND NINTENDO_SWITCH2)
+    add_library(nxvk INTERFACE)
+    # OunceVK's loader exports the standard vkGetInstanceProcAddr entrypoint,
+    # so no whole-archive ICD wiring is required.
+    target_link_libraries(nxvk INTERFACE vulkan)
+elseif (DEKOPON AND ENABLE_VULKAN)
     set(NXVK_ROOT "${CMAKE_SOURCE_DIR}/externals/nxvk" CACHE PATH
         "Root of the NXVK checkout that holds the prebuilt driver archives")
 

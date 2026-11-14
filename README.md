@@ -199,10 +199,12 @@ The current build requires DevkitPro. Please install from here [DevkitPro Instal
 - cmake
 - git
 
-\*The default GPU backend is Vulkan via [NXVK](https://github.com/PalindromicBreadLoaf/nxvk)
-NXVK and switch-mesa cannot be included simultaneously, so the driver must be chosen at buildtime.
-NXVK is default since it supports both GL and Vulkan, however, it is possible to swap back to 
-switch-mesa if so desired.
+\*The default GPU backend is Vulkan. On Switch 2 it is provided by
+[OunceVK](https://github.com/ouncebrew/ouncevk), installed with
+[ounce-devkit](https://github.com/ouncebrew/ounce-devkit) and linked with `-lvulkan`.
+On Switch 1 it is provided by [NXVK](https://github.com/PalindromicBreadLoaf/nxvk).
+The Vulkan driver and switch-mesa cannot be included simultaneously, so the backend
+is chosen at build time.
 
 \*\*Both are detected at configure time. If they are missing, configuring prints
 `libusbhsfs: FAT and exFAT support only` and NTFS/EXT drives simply won't mount in that build.
@@ -213,23 +215,38 @@ git clone --recursive https://github.com/PalindromicBreadLoaf/dekopon.git
 cd dekopon
 ```
 
-## 2. Build NXVK
-NXVK has it's own build documentation that lives in the [NXVK repository](https://github.com/PalindromicBreadLoaf/nxvk).
-Please follow that and create a libnvk.a file. Once you've done that you can return here.
+## 2. Build for Switch 2 (ounce-devkit)
+Install [ounce-devkit](https://github.com/ouncebrew/ounce-devkit) on top of
+devkitPro. OunceVK provides Vulkan, so no NXVK build is required. Configure with
+the ounce CMake toolchain:
 
-Configuring looks for `switch/build/cross/src/nouveau/vulkan/libnvk.a` under `externals/nxvk`.
-If you built nxvk in-place, it should be found automatically.
-
-## 3. Configure
 ```shell
+source $DEVKITPRO/switch2vars.sh
+cmake -S . -B build/switch \
+    -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/libounce/cmake/Switch2.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build/switch --target citra_switch_nro -j$(nproc)
+```
+
+The toolchain defines `NINTENDO_SWITCH2`, which selects OunceVK (`-lvulkan`) as
+the Vulkan driver. See `PORT_SWITCH2.md` for the status and open items of the
+Switch 2 port.
+
+## 3. Build for Switch 1 (NXVK)
+Switch 1 still uses NXVK. Build it first following the
+[NXVK repository](https://github.com/PalindromicBreadLoaf/nxvk) to produce a
+`libnvk.a`; configuring looks for `switch/build/cross/src/nouveau/vulkan/libnvk.a`
+under `externals/nxvk`. The `nxvk` submodule was removed from the default set, so
+fetch it explicitly, then configure with the stock devkitPro Switch toolchain:
+
+```shell
+git -c submodule.nxvk.url=https://github.com/PalindromicBreadLoaf/nxvk.git \
+    submodule add -b switch https://github.com/PalindromicBreadLoaf/nxvk.git externals/nxvk
 cmake -S . -B build/switch \
     -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-```
-
-## 4. Build
-```shell
 cmake --build build/switch --target citra_switch_nro -j$(nproc)
 ```
 
