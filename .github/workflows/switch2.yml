@@ -1,0 +1,36 @@
+name: dekopon-switch2
+
+# Builds the Switch 2 port (ounce-devkit / OunceVK) in CI so no local devkitPro
+# install is needed. The build log in the PR is the feedback loop for finishing
+# the port; the NRO is uploaded as an artifact once it compiles.
+on:
+  push:
+    branches: [switch2-ounce-devkit]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build the Switch 2 toolchain image
+        run: docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .
+
+      - name: Build dekopon.nro
+        run: docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch2/build.sh
+
+      - name: Upload NRO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dekopon-switch2-nro
+          path: build/switch/src/citra_switch/dekopon.nro
+          if-no-files-found: error
