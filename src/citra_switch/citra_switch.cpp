@@ -23,11 +23,51 @@ void StopAllThreadWorkers();
 }
 
 extern "C" {
+#if defined(__SWITCH2__)
+// Switch 2 bring-up: use whatever applet type kaiHEN launched us with instead of
+// forcing Application (title takeover). Forcing Application aborts in appInit —
+// before main, before any SD folder is created — when the loader did not grant
+// it, which matches dekopon exiting instantly under kaiHEN/OunceShell.
+u32 __nx_applet_type = AppletType_Default;
+#else
 u32 __nx_applet_type = AppletType_Application;
+#endif
 size_t __nx_heap_size = 0;
 }
 
 namespace {
+
+#if defined(__SWITCH2__)
+// Switch 2 bring-up breadcrumb. A crash before Bootstrap() leaves no normal log,
+// so record how far startup got by rewriting sdmc:/switch/dekopon/log/boot.txt
+// (raw fs, like the exception handler). Absent file => died before main.
+std::string s_boot_log;
+void Switch2BootMark(const char* stage) {
+    s_boot_log += stage;
+    s_boot_log += '\n';
+    FsFileSystem* sdmc = fsdevGetDeviceFileSystem("sdmc");
+    if (sdmc == nullptr) {
+        return;
+    }
+    fsFsCreateDirectory(sdmc, "/switch");
+    fsFsCreateDirectory(sdmc, "/switch/dekopon");
+    fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
+    const char* path = "/switch/dekopon/log/boot.txt";
+    fsFsDeleteFile(sdmc, path);
+    if (R_FAILED(fsFsCreateFile(sdmc, path, static_cast<s64>(s_boot_log.size()), 0))) {
+        return;
+    }
+    FsFile file;
+    if (R_FAILED(fsFsOpenFile(sdmc, path, FsOpenMode_Write, &file))) {
+        return;
+    }
+    fsFileWrite(&file, 0, s_boot_log.data(), s_boot_log.size(), FsWriteOption_Flush);
+    fsFileClose(&file);
+}
+#define SWITCH2_BOOT_MARK(stage) Switch2BootMark(stage)
+#else
+#define SWITCH2_BOOT_MARK(stage) ((void)0)
+#endif
 
 constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 16> button_map{{
     {HidNpadButton_A, SwitchFrontend::InputButton::A},
@@ -327,6 +367,7 @@ void RunGame(PadState& pad, const std::string& rom) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    SWITCH2_BOOT_MARK("01 main entered");
     SwitchFrontend::SetUpdaterExecutablePath(argc > 0 && argv[0] != nullptr ? argv[0] : "");
     const bool have_socket = R_SUCCEEDED(socketInitializeDefault());
     if (have_socket) {
@@ -337,6 +378,7 @@ int main(int argc, char* argv[]) {
     if (!have_romfs) {
         std::printf("Warning: romfsInit() failed.\n");
     }
+    SWITCH2_BOOT_MARK("02 socket+romfs");
     if (!Common::Horizon::PinCurrentThread(Common::Horizon::CoreFrontend)) {
         std::printf("Warning: failed to pin frontend thread to core 0.\n");
     }
@@ -347,6 +389,7 @@ int main(int argc, char* argv[]) {
 
     // Resolve SD-card dirs and create folders/files if not present
     const int launch_count = SwitchFrontend::Bootstrap();
+    SWITCH2_BOOT_MARK("03 bootstrap done");
     std::printf("FS & logging up (launch #%d). Logs are located at sdmc:/switch/dekopon/log/\n",
                 launch_count);
 
@@ -357,6 +400,7 @@ int main(int argc, char* argv[]) {
     StartSixAxis();
 
     SwitchFrontend::InitializeInput();
+    SWITCH2_BOOT_MARK("04 input ready - entering menu loop");
 
     std::string pending_rom = (argc > 1 && argv[1] != nullptr) ? argv[1] : std::string{};
 
