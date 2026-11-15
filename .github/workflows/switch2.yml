@@ -35,14 +35,25 @@ jobs:
           path: build/switch/src/citra_switch/dekopon.nro
           if-no-files-found: error
 
-      # Unstripped ELF (and linker map, if any) so a crash.txt pc/lr offset can
-      # be resolved to a function with aarch64-none-elf-addr2line.
+      # Collect the unstripped ELF wherever CMake/nx_create_nro left it, so a
+      # crash.txt pc/lr offset can be resolved with aarch64-none-elf-addr2line.
+      - name: Collect debug ELF
+        if: always()
+        run: |
+          mkdir -p debug
+          echo "== elf/map candidates in build tree =="
+          find build -type f \( -name '*.elf' -o -name '*.map' \) -print || true
+          find build -type f -name '*.elf' -exec cp -v {} debug/ \; || true
+          find build -type f -name '*.map' -exec cp -v {} debug/ \; || true
+          # Fallback: the citra_switch executable may have no .elf suffix.
+          find build -type f -name 'citra_switch' -exec cp -v {} debug/citra_switch.elf \; || true
+          echo "== collected =="
+          ls -la debug || true
+
       - name: Upload debug ELF
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dekopon-switch2-debug
-          path: |
-            build/switch/src/citra_switch/*.elf
-            build/switch/src/citra_switch/*.map
+          path: debug/
           if-no-files-found: warn
