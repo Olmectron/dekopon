@@ -107,14 +107,10 @@ if (ENABLE_VULKAN)
     target_link_libraries(citra_switch PRIVATE nxvk)
 endif()
 
-if (NINTENDO_SWITCH2)
-    # Bring-up: drop dekopon's custom __libnx_exception_entry so libounce's
-    # default exception setup is used, to test whether the hand-written handler
-    # aborts startup before main. Disables dynarmic fastmem fault recovery,
-    # which only matters once a game is actually running.
-    set_source_files_properties(horizon_exception.cpp horizon_exception_entry.S
-        PROPERTIES HEADER_FILE_ONLY ON)
-endif()
+# NOTE (switch2 bring-up): the custom __libnx_exception_entry is kept ENABLED so
+# that a crash in a global constructor is caught and written to log/crash.txt
+# with the faulting pc. It was briefly disabled to rule it out; it was not the
+# cause (startup now reaches the constructor phase either way).
 
 nx_generate_nacp(OUTPUT dekopon.nacp
     NAME "Dekopon"
