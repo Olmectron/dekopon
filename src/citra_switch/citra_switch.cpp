@@ -64,6 +64,15 @@ void Switch2BootMark(const char* stage) {
     fsFileWrite(&file, 0, s_boot_log.data(), s_boot_log.size(), FsWriteOption_Flush);
     fsFileClose(&file);
 }
+// Runs during libnx/libounce __appInit, before global constructors and main.
+// (Writes only if sdmc is already mounted at that point; otherwise it no-ops.)
+extern "C" void userAppInit(void) {
+    Switch2BootMark("00 userAppInit (appInit reached)");
+}
+// Highest-priority global constructor: runs after appInit, before main.
+__attribute__((constructor(101))) void Switch2EarlyCtor() {
+    Switch2BootMark("00b early ctor");
+}
 #define SWITCH2_BOOT_MARK(stage) Switch2BootMark(stage)
 #else
 #define SWITCH2_BOOT_MARK(stage) ((void)0)
