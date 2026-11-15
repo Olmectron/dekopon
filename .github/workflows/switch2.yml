@@ -34,3 +34,15 @@ jobs:
           name: dekopon-switch2-nro
           path: build/switch/src/citra_switch/dekopon.nro
           if-no-files-found: error
+
+      # Unstripped ELF (and linker map, if any) so a crash.txt pc/lr offset can
+      # be resolved to a function with aarch64-none-elf-addr2line.
+      - name: Upload debug ELF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dekopon-switch2-debug
+          path: |
+            build/switch/src/citra_switch/*.elf
+            build/switch/src/citra_switch/*.map
+          if-no-files-found: warn
