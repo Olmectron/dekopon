@@ -8,6 +8,8 @@ name: dekopon-switch2
 on:
   push:
     branches: [switch2-ounce-devkit]
+    # Docs-only pushes do not build (and so do not cancel a build in progress).
+    paths-ignore: ['**.md']
   workflow_dispatch:
 
 concurrency:

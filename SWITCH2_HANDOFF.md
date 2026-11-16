@@ -3,31 +3,36 @@
 Everything needed to continue the Switch 2 port on another machine. All code is
 pushed to GitHub (see below); clone the fork and read this file.
 
-Last updated: 2026-11-16 (after diag6 / JIT fix).
+Last updated: 2026-11-16 (boots to menu).
 
 ## TL;DR status
 
-- The port **builds, links, and produces a valid NRO** in CI. OunceVK supplies
-  the Vulkan symbols at link time (`vkGetInstanceProcAddr`, `VK_NN_vi_surface`).
-- On a real Switch 2 (kaiHEN / OunceShell), it **does not boot yet.** We are
-  debugging startup, iterating via CI builds the user flashes.
-- **Bug #1 — FIXED:** dekopon forced `__nx_applet_type = AppletType_Application`
-  (title takeover). Under a normal kaiHEN applet launch this aborts in `appInit`
-  **before `main`** (no SD folders created). Changed to `AppletType_Default` on
-  `__SWITCH2__`. The working references (mGBA, SW2NES, SW2SNES) force no applet
-  type — launch is the normal hbmenu, **not** title takeover.
-- **Bug #2 — ROOT CAUSE FOUND, fix built, NOT yet confirmed on console:** the
-  abort before `main` was global constructor 15/36, dynarmic's
-  `spin_lock_arm64.cpp`. Its static `oaknut::CodeBlock` threw `std::bad_alloc`
-  because `jitCreate` failed: on Switch 2, libounce's `Jit` API only works with
-  kaiHEN's provider object linked (`-lkaihen`), and nothing linked it.
-  Found with the constructor tracer (diag6, commit `7d99b16`): `boot.txt` said
-  `TERMINATE: std::bad_alloc`, `ctor.txt` said `RUNNING init 15/36 off=0x13c900`.
-- **Fix (commit `5edc01b`):** link `-lkaihen`, and adapt to kaiHEN's JIT model
-  (see "JIT on Switch 2" below).
-- **Next step:** launch the build of `5edc01b` (or newer) from the normal
-  homebrew menu and read `boot.txt` / `ctor.txt`. Expect either `01 main
-  entered` and later stages, or a new failure line.
+- **It boots to the dekopon menu on a real Switch 2** (kaiHEN, HOS 20.0.0,
+  launched from the normal homebrew menu), as of commit `8a1d0d4`. `boot.txt`
+  reaches `04 input ready - entering menu loop` in ~230 ms and the config /
+  sysdata / roms folders are created under `sdmc:/switch/dekopon/`.
+- **Next step: boot a game.** Nothing past the menu has been exercised yet:
+  Vulkan instance/surface/swapchain (OunceVK), the JIT actually executing
+  published code, fastmem, audio, input in-game. Put a ROM in
+  `/switch/dekopon/roms/` (and `aes_keys.txt` in `/switch/dekopon/sysdata/` for
+  encrypted dumps), launch it, and read `log/azahar_log.txt`, `log/boot.txt`
+  and `log/crash.txt`.
+- The port builds in CI; OunceVK supplies the Vulkan symbols at link time
+  (`vkGetInstanceProcAddr`, `VK_NN_vi_surface`).
+
+### Startup bugs fixed on the way (all confirmed on console)
+1. **Forced applet type.** dekopon forced `__nx_applet_type =
+   AppletType_Application` (title takeover); under a normal kaiHEN launch that
+   aborts in `appInit`. Now `AppletType_Default` on `__SWITCH2__`.
+2. **JIT unavailable -> `std::bad_alloc` in a global constructor.** dynarmic's
+   `spin_lock_arm64.cpp` has a static `oaknut::CodeBlock`; `jitCreate` failed
+   because libounce's `Jit` API needs kaiHEN's provider (`-lkaihen`), which
+   nothing linked. Fixed in `5edc01b` (see the JIT section below). Found with
+   the constructor tracer: `ctor.txt` = `RUNNING init 15/36 off=0x13c900`.
+3. **Self-inflicted:** the constructor tracer's frame was live across
+   `__stack_chk_init` (last constructor, sets the canary) -> stack-protector
+   abort right after the constructors. Fixed in `8a1d0d4`
+   (`no_stack_protector`). Keep in mind for any code running around ctors.
 
 ## JIT on Switch 2 (kaiHEN) — read before touching JIT code
 
@@ -170,7 +175,7 @@ For the current bug there is **no** `crash.txt` (not a CPU fault) — the
 `set_terminate`/signal handlers in diag5 write the reason into `boot.txt`
 instead, so no symbolication is needed; just read that line.
 
-## Open items beyond bug #2 (not yet reached)
+## Open items (none exercised yet - next is booting a game)
 
 - **Vulkan runtime surface:** `vk_platform.cpp` uses `VK_NN_vi_surface` +
   `NWindow*` on Switch 2. ounce-devkit's own `examples/vulkan-clear` does
@@ -184,6 +189,8 @@ instead, so no symbolication is needed; just read that line.
 ## Commits on this branch (newest first)
 
 ```
+8a1d0d4 switch2: no stack protector in the constructor tracer
+33a3531 docs: update SWITCH2_HANDOFF.md (ctor tracer result, kaiHEN JIT model, trimmed CI)
 5edc01b switch2: make the JIT work under kaiHEN (fixes the pre-main abort)
 91e426f ci: build only the Switch 2 NRO on the port branch, with ccache
 7d99b16 switch2: trace global constructors to find the pre-main abort (diag6)
