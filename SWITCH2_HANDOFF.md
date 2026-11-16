@@ -3,7 +3,7 @@
 Everything needed to continue the Switch 2 port on another machine. All code is
 pushed to GitHub (see below); clone the fork and read this file.
 
-Last updated: 2026-11-16.
+Last updated: 2026-11-16 (after diag6 / JIT fix).
 
 ## TL;DR status
 
@@ -16,21 +16,50 @@ Last updated: 2026-11-16.
   **before `main`** (no SD folders created). Changed to `AppletType_Default` on
   `__SWITCH2__`. The working references (mGBA, SW2NES, SW2SNES) force no applet
   type — launch is the normal hbmenu, **not** title takeover.
-- **Bug #2 — CURRENT BLOCKER:** after `appInit`, it dies in a **global C++
-  constructor**, before `main`. Breadcrumb log `boot.txt` reaches
-  `00b early ctor` but never `01 main entered`. It is **not a CPU fault** (the
-  custom exception handler never fires; no `crash.txt`), so it is an `abort()` /
-  assert / uncaught C++ exception. ~2 s delay = other ctors run, then one aborts.
-- **Next step (in flight):** build **diag5** (commit `b91cdb3`) installs
-  `std::set_terminate` + `SIGABRT/SIGSEGV/SIGILL` handlers in `userAppInit`
-  (runs before the constructors) to write the exception message into `boot.txt`.
-  Flash it, launch normally, and read the new line in
-  `sdmc:/switch/dekopon/log/boot.txt` — it should name the failing subsystem.
+- **Bug #2 — ROOT CAUSE FOUND, fix built, NOT yet confirmed on console:** the
+  abort before `main` was global constructor 15/36, dynarmic's
+  `spin_lock_arm64.cpp`. Its static `oaknut::CodeBlock` threw `std::bad_alloc`
+  because `jitCreate` failed: on Switch 2, libounce's `Jit` API only works with
+  kaiHEN's provider object linked (`-lkaihen`), and nothing linked it.
+  Found with the constructor tracer (diag6, commit `7d99b16`): `boot.txt` said
+  `TERMINATE: std::bad_alloc`, `ctor.txt` said `RUNNING init 15/36 off=0x13c900`.
+- **Fix (commit `5edc01b`):** link `-lkaihen`, and adapt to kaiHEN's JIT model
+  (see "JIT on Switch 2" below).
+- **Next step:** launch the build of `5edc01b` (or newer) from the normal
+  homebrew menu and read `boot.txt` / `ctor.txt`. Expect either `01 main
+  entered` and later stages, or a new failure line.
+
+## JIT on Switch 2 (kaiHEN) — read before touching JIT code
+
+Reference: `libkaihen/JIT.md` in https://github.com/ouncebrew/kaihen.
+
+- The game process may not use the code-mapping syscalls. kaiHEN's RO sysmodule
+  does the mapping; `kaihen-jit.o` (linked by `-lkaihen`) provides the weak
+  `__nx_jit_*` hooks libounce's `jit.c` looks for. Without it `jitCreate`
+  returns `LibnxError_JitUnavailable`.
+- **`jitGetRwAddr()` is a staging buffer, NOT an alias of RX.** Bytes written
+  there are not executable until published. This differs from Switch 1, where
+  dekopon relied on a live RW/RX dual mapping.
+- How the port handles it (`externals/switch_stubs/oaknut/horizon_jit.cpp`):
+  every JIT writer (dynarmic `AddressSpace`, dynarmic spin lock, PICA shader
+  JIT) already ends with `oaknut::CodeBlock::invalidate()`, which calls
+  `__builtin___clear_cache()` on the RW range. On `__SWITCH2__` the port
+  defines `__clear_cache` itself: a range inside a JIT staging buffer is
+  published with `kaihenPublishJitAlias` (+ icache invalidate of RX); any other
+  range gets normal cache maintenance. No submodule changes needed.
+- Consequences to keep in mind: each publish is an IPC round trip (possible
+  performance cost; `kaihenJitPublishRanges` can batch); staging doubles JIT
+  memory; code that writes to RW **without** calling `invalidate()` will not
+  take effect; do not modify a block another thread is executing.
+- Not yet looked at on Switch 2: the dynarmic fastmem arena
+  (`src/core/arm/dynarmic/horizon_arena.cpp`) uses `svcMapProcessCodeMemory`
+  directly, which the game policy does not allow. It checks syscall hints, so
+  it should just report unavailable (fastmem off) - unverified.
 
 ## Where everything lives
 
 - **Fork (ours):** https://github.com/Olmectron/dekopon
-- **Branch:** `switch2-ounce-devkit`  (remote HEAD: `b91cdb3`)
+- **Branch:** `switch2-ounce-devkit`
 - **PR (within the fork):** https://github.com/Olmectron/dekopon/pull/1
 - **Upstream dekopon:** https://github.com/PalindromicBreadLoaf/dekopon (3DS
   emulator for Switch 1, Azahar-based; Vulkan via NXVK)
@@ -65,24 +94,39 @@ either `libnx/switch.specs` or `libounce/switch.specs` — both work.
 All guarded by `#if defined(__SWITCH2__)` in
 `src/citra_switch/citra_switch.cpp`. **These are temporary; revert once it boots.**
 - `AppletType_Default` (was `AppletType_Application`).
-- `Switch2BootMark()` — rewrites `sdmc:/switch/dekopon/log/boot.txt` with staged
-  breadcrumbs. Stages: `00 userAppInit`, `00b early ctor`, `01 main entered`,
-  `02 socket+romfs`, `03 bootstrap done`, `04 input ready - entering menu loop`.
+- `Switch2BootMark()` — rewrites `sdmc:/switch/dekopon/log/boot.txt` with staged,
+  timestamped breadcrumbs. Stages: `00 userAppInit`, `env: ...` (applet type,
+  heap override size, memory, HOS version), `00a ctor trace`, `00c all global
+  constructors done`, `01 main entered`, `02 socket+romfs`, `03 bootstrap done`,
+  `04 input ready - entering menu loop`. The log is a plain char buffer on
+  purpose (it is written before this TU's own constructors run).
 - `userAppInit()` installs `std::set_terminate` + signal handlers that append the
-  abort reason to `boot.txt` (commit `b91cdb3`).
+  abort reason to `boot.txt` (including JIT failure count / last result code).
+- **Constructor tracer:** `__libc_init_array` is overridden to write, before each
+  global constructor, `RUNNING init i/N off=0x...` to
+  `sdmc:/switch/dekopon/log/ctor.txt` (single record, overwritten, flushed).
+  If startup dies in a constructor, that record names it: resolve the offset
+  against `.init_array` / the symbol table of the debug ELF from the same run.
+  It costs one SD write per constructor (36 of them, negligible).
 - The custom `__libnx_exception_entry` (`horizon_exception.cpp` +
-  `horizon_exception_entry.S`) is currently ENABLED (it writes `crash.txt` on a
-  CPU fault). It was briefly disabled (commit `ccbe73b`) then re-enabled
-  (`007d0f5`); it is **not** the cause and does not catch this abort.
+  `horizon_exception_entry.S`) is ENABLED. It has never fired on Switch 2;
+  whether user-mode exception delivery works under kaiHEN is unknown.
 
 ## CI build (no local devkitPro needed)
 
-Workflow: `.github/workflows/switch2.yml`. On every push to the branch it builds
-the `docker/switch2` image (devkitPro + ounce-devkit) and runs
+Workflow: `.github/workflows/switch2.yml`. Every push to the branch builds the
+`docker/switch2` image (devkitPro + ounce-devkit + ccache) and runs
 `docker/switch2/build.sh`, then uploads two artifacts per run:
 - `dekopon-switch2-nro` → `dekopon.nro` (flash this).
 - `dekopon-switch2-debug` → `citra_switch.elf` (unstripped, ~674 MB, for
   crash/offset symbolication — **match it to the SAME run** as the nro flashed).
+
+CI is trimmed for this branch (commit `91e426f`): the upstream `citra-build`,
+`citra-libretro` and `citra-format` workflows skip this branch and its PR; the
+Switch 2 workflow runs once per push (no `pull_request` trigger) and **a new
+push cancels the build in progress** - so do not push docs-only commits while a
+build you need is running. ccache is persisted with `actions/cache`
+(precompiled headers are off under ccache).
 
 Build flags (`docker/switch2/build.sh`): `Switch2.cmake` toolchain,
 `-DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENABLE_LSFG=OFF`.
@@ -126,22 +170,12 @@ For the current bug there is **no** `crash.txt` (not a CPU fault) — the
 `set_terminate`/signal handlers in diag5 write the reason into `boot.txt`
 instead, so no symbolication is needed; just read that line.
 
-## Suspects / ideas for bug #2 (ctor abort)
-
-- An uncaught C++ exception or assert in a global constructor (most likely).
-  diag5's `boot.txt` message should name it.
-- Ruled out as ctor-time: the dynarmic fastmem arena (4 GiB virtual reservation)
-  is created on game load (`core.cpp` `EnableFastmem`), not at static init.
-- If `set_terminate` doesn't fire (abort via `svcBreak`/`diagAbort`), bracket the
-  no-priority ctor batch by adding `Switch2BootMark` calls at the top of a few
-  key translation units (e.g. `core.cpp`, `memory.cpp`, settings/logging init)
-  to localize which module's ctors run last before the abort.
-
 ## Open items beyond bug #2 (not yet reached)
 
 - **Vulkan runtime surface:** `vk_platform.cpp` uses `VK_NN_vi_surface` +
-  `NWindow*` on Switch 2 (assumption). Unverified at runtime — only hit after
-  `main`, once a ROM boots. May need a different WSI if OunceVK differs.
+  `NWindow*` on Switch 2. ounce-devkit's own `examples/vulkan-clear` does
+  exactly this (`vkCreateViSurfaceNN` with `nwindowGetDefault()`), so the
+  approach is right; still unverified at runtime in dekopon.
 - **Custom exception handler** vs libounce: it never fires on Switch 2. Either
   make it libounce-compatible or drop it (dropping disables dynarmic fastmem
   fault recovery → run with fastmem off, slower).
@@ -150,6 +184,10 @@ instead, so no symbolication is needed; just read that line.
 ## Commits on this branch (newest first)
 
 ```
+5edc01b switch2: make the JIT work under kaiHEN (fixes the pre-main abort)
+91e426f ci: build only the Switch 2 NRO on the port branch, with ccache
+7d99b16 switch2: trace global constructors to find the pre-main abort (diag6)
+8a7bfe7 docs: SWITCH2_HANDOFF.md + crash symbolication script
 b91cdb3 switch2: capture ctor-phase abort via set_terminate + signal handlers
 63d7423 ci: robustly collect the debug ELF for crash symbolication
 007d0f5 switch2: re-enable custom exception handler to capture ctor crash
