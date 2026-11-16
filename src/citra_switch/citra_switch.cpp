@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <string>
 #include <utility>
 #include <switch.h>
@@ -66,8 +69,37 @@ void Switch2BootMark(const char* stage) {
 }
 // Runs during libnx/libounce __appInit, before global constructors and main.
 // (Writes only if sdmc is already mounted at that point; otherwise it no-ops.)
+// If a global constructor aborts (uncaught C++ exception, or abort()/assert
+// raising SIGABRT), capture the reason to boot.txt. Installed in userAppInit,
+// which runs before __libc_init_array, so it is armed during the ctor phase.
+[[noreturn]] void Switch2Terminate() {
+    std::string msg = "TERMINATE: ";
+    if (std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const std::exception& ex) {
+            msg += ex.what();
+        } catch (...) {
+            msg += "non-std exception";
+        }
+    } else {
+        msg += "(no active exception)";
+    }
+    Switch2BootMark(msg.c_str());
+    std::_Exit(42);
+}
+extern "C" void Switch2Signal(int sig) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "SIGNAL %d caught during startup", sig);
+    Switch2BootMark(buf);
+    std::_Exit(43);
+}
 extern "C" void userAppInit(void) {
     Switch2BootMark("00 userAppInit (appInit reached)");
+    std::set_terminate(&Switch2Terminate);
+    std::signal(SIGABRT, &Switch2Signal);
+    std::signal(SIGSEGV, &Switch2Signal);
+    std::signal(SIGILL, &Switch2Signal);
 }
 // Highest-priority global constructor: runs after appInit, before main.
 __attribute__((constructor(101))) void Switch2EarlyCtor() {
