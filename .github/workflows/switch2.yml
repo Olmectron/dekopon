@@ -10,14 +10,30 @@ on:
     branches: [switch2-ounce-devkit, switch2-async-shaders]
     # Docs-only pushes do not build (and so do not cancel a build in progress).
     paths-ignore: ['**.md']
+  # Manual run. Give it a release tag to also publish the build as a GitHub
+  # release: that is what the in-app updater (Check for Updates) installs.
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish as release with this tag (must be v + DEKOPON_VERSION, e.g. v0.9.0). Empty = build only.'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark the release as a prerelease (Prerelease update channel only)'
+        type: boolean
+        default: false
+      notes:
+        description: 'Release notes (shown in the app under Release Notes)'
+        required: false
+        default: ''
 
 concurrency:
   group: dekopon-switch2-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  # write: only used by the manual release step.
+  contents: write
 
 jobs:
   build:
@@ -59,6 +75,28 @@ jobs:
           name: dekopon-switch2-nro
           path: build/switch/src/citra_switch/dekopon.nro
           if-no-files-found: error
+
+      # The updater looks for a release asset named exactly dekopon.nro and checks
+      # the sha256 digest GitHub records for it, as upstream's releases have.
+      - name: Publish release
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          NOTES: ${{ inputs.notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          version=$(sed -n '/NINTENDO_SWITCH2/,/endif/s/.*set(DEKOPON_VERSION "\(.*\)").*/\1/p' CMakeLists.txt | head -n1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::release_tag '$TAG' does not match the built version 'v$version' (DEKOPON_VERSION in CMakeLists.txt)"
+            exit 1
+          fi
+          [ -n "$NOTES" ] || NOTES="Dekopon for Switch 2 $TAG"
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" build/switch/src/citra_switch/dekopon.nro \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Dekopon for Switch 2 $TAG" --notes "$NOTES" "${flags[@]}"
 
       # Collect the unstripped ELF wherever CMake/nx_create_nro left it, so a
       # crash.txt pc/lr offset can be resolved with aarch64-none-elf-addr2line.

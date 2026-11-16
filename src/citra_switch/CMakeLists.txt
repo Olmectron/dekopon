@@ -116,8 +116,15 @@ endif()
 # with the faulting pc. It was briefly disabled to rule it out; it was not the
 # cause (startup now reaches the constructor phase either way).
 
+# The title hbmenu shows. The Switch 2 port is told apart from upstream's Switch 1 build.
+if (NINTENDO_SWITCH2)
+    set(DEKOPON_NACP_NAME "Dekopon for SW2")
+else()
+    set(DEKOPON_NACP_NAME "Dekopon")
+endif()
+
 nx_generate_nacp(OUTPUT dekopon.nacp
-    NAME "Dekopon"
+    NAME "${DEKOPON_NACP_NAME}"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf"
     VERSION "${DEKOPON_VERSION}"
 )
