@@ -23,16 +23,33 @@ echo ">>> Sourcing switch2vars.sh ..."
 # shellcheck disable=SC1090,SC1091
 source "$DEVKITPRO/switch2vars.sh"
 
+# Compiler cache, when the image has ccache. Precompiled headers are turned off
+# with it, as in .ci/linux.sh: GCC's PCH files defeat the cache.
+CACHE_ARGS=()
+if command -v ccache >/dev/null 2>&1; then
+  export CCACHE_DIR="${CCACHE_DIR:-/src/.ccache}"
+  export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-3G}"
+  CACHE_ARGS=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+              -DCITRA_USE_PRECOMPILED_HEADERS=OFF)
+  ccache -z >/dev/null
+fi
+
 echo ">>> Configuring ($BUILD_DIR) ..."
 cmake -S . -B "$BUILD_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/libounce/cmake/Switch2.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DENABLE_LSFG=OFF \
+  ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} \
   "$@"
 
 echo ">>> Building citra_switch_nro ..."
 cmake --build "$BUILD_DIR" --target citra_switch_nro -j"$(nproc)"
+
+if command -v ccache >/dev/null 2>&1; then
+  echo ">>> ccache statistics ..."
+  ccache -s
+fi
 
 echo
 NRO="$BUILD_DIR/src/citra_switch/dekopon.nro"

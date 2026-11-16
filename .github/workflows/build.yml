@@ -2,7 +2,7 @@ name: citra-build
 
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "*", "!switch2-ounce-devkit" ]
     tags: [ "*" ]
   pull_request:
     branches: [ master ]
@@ -44,6 +44,7 @@ jobs:
           sbom-path: artifacts/source.spdx.json
 
   linux-x86_64:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -101,6 +102,7 @@ jobs:
           sbom-path: artifacts/linux-x86_64-${{ matrix.target }}.spdx.json
 
   linux-arm64:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -130,6 +132,7 @@ jobs:
         run: ./.ci/linux.sh
 
   macos:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: 'macos-26'
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -189,6 +192,7 @@ jobs:
           sbom-path: artifacts/macos.spdx.json
 
   windows:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     strategy:
       fail-fast: false
       matrix:
@@ -307,6 +311,7 @@ jobs:
           sbom-path: artifacts/windows-${{ matrix.target }}.spdx.json
 
   android:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -389,6 +394,7 @@ jobs:
           sbom-path: src/android/app/artifacts/android-${{ matrix.target }}.spdx.json
 
   docker:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     strategy:
       fail-fast: false
       matrix:

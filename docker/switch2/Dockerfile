@@ -11,9 +11,10 @@
 FROM docker.io/devkitpro/devkita64:20260219
 
 # glslang for Vulkan shader tooling, matching ounce-devkit's image.
+# ccache so CI (and local rebuilds) only recompile what changed.
 # cmake/git come with the base image.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends glslang-tools \
+ && apt-get install -y --no-install-recommends glslang-tools ccache \
  && rm -rf /var/lib/apt/lists/*
 
 # Switch 2 devkit: installs $DEVKITPRO/libounce, portlibs/switch2 (OunceVK),

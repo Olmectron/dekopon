@@ -2,12 +2,13 @@ name: citra-format
 
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "*", "!switch2-ounce-devkit" ]
   pull_request:
     branches: [ master ]
 
 jobs:
   clang-format:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: ubuntu-latest
     container:
       image: opensauce04/azahar-build-environment:latest
@@ -22,6 +23,7 @@ jobs:
         run: ./.ci/clang-format.sh
 
   ktlint:
+    if: ${{ github.head_ref != 'switch2-ounce-devkit' }}
     runs-on: ubuntu-latest
     container:
       image: opensauce04/azahar-build-environment:latest

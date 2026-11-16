@@ -3,11 +3,16 @@ name: dekopon-switch2
 # Builds the Switch 2 port (ounce-devkit / OunceVK) in CI so no local devkitPro
 # install is needed. The build log in the PR is the feedback loop for finishing
 # the port; the NRO is uploaded as an artifact once it compiles.
+# Only pushes to the port branch build (the pull_request trigger doubled every
+# build), and a newer push cancels the build of the one before it.
 on:
   push:
     branches: [switch2-ounce-devkit]
-  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: dekopon-switch2-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,8 +29,26 @@ jobs:
       - name: Build the Switch 2 toolchain image
         run: docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .
 
+      # Compiler cache (docker/switch2/build.sh points ccache at .ccache in the
+      # workspace). Compiling is ~20 of the ~23 minutes of a cold build.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: switch2-ccache-${{ github.sha }}
+          restore-keys: |
+            switch2-ccache-
+
       - name: Build dekopon.nro
         run: docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch2/build.sh
+
+      # Saved even when the build fails, so the next attempt reuses what compiled.
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: switch2-ccache-${{ github.sha }}
 
       - name: Upload NRO
         if: success()
