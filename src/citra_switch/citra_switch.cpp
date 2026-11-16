@@ -189,11 +189,16 @@ static void Switch2CtorRecord(const char* text) {
     fsFileWrite(&s_ctor_file, 0, rec, sizeof(rec), FsWriteOption_Flush);
 }
 
-void __libc_init_array(void) {
+// No stack protector here: the last constructor in the list is libounce's
+// __stack_chk_init, which sets the canary value. A protected frame that is live
+// across that call was set up with the old value and fails its check on return
+// (abort -> SIGABRT right after the last constructor). newlib's own
+// __libc_init_array has no protected frame for the same reason.
+__attribute__((no_stack_protector)) void __libc_init_array(void) {
     const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(&_start);
     const std::size_t npre = static_cast<std::size_t>(__preinit_array_end - __preinit_array_start);
     const std::size_t ninit = static_cast<std::size_t>(__init_array_end - __init_array_start);
-    char buf[96];
+    static char buf[96];
 
     if (FsFileSystem* sdmc = fsdevGetDeviceFileSystem("sdmc")) {
         const char* path = "/switch/dekopon/log/ctor.txt";
