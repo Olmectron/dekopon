@@ -401,6 +401,7 @@ void PipelineCache::LoadDriverPipelineDiskCache(
     cache_info.initialDataSize = cache_file_size;
     cache_info.pInitialData = cache_data.data();
     load_cache(true);
+    AsyncStats::driver_cache_dirty.store(false, std::memory_order_relaxed);
 }
 
 void PipelineCache::SaveDriverPipelineDiskCache() {
@@ -408,6 +409,15 @@ void PipelineCache::SaveDriverPipelineDiskCache() {
     if (!Settings::values.use_disk_shader_cache || !driver_pipeline_cache) {
         return;
     }
+
+    // This runs when a game is closed, on a black screen. The cache of a big game is
+    // around 100 MB, and it used to be rewritten in full on every exit even when nothing
+    // had been added to it. Only write it when the driver compiled something new.
+    if (!AsyncStats::driver_cache_dirty.exchange(false, std::memory_order_relaxed)) {
+        LOG_INFO(Render_Vulkan, "Driver pipeline cache unchanged, not rewriting it");
+        return;
+    }
+    const auto save_start = std::chrono::steady_clock::now();
 
     const auto cache_dir = GetPipelineCacheDir();
     const u32 vendor_id = instance.GetVendorID();
@@ -430,6 +440,11 @@ void PipelineCache::SaveDriverPipelineDiskCache() {
         LOG_ERROR(Render_Vulkan, "Error during pipeline cache write");
         return;
     }
+    LOG_INFO(Render_Vulkan, "Saved driver pipeline cache: {} KB in {} ms",
+             cache_data.size() / 1024,
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - save_start)
+                 .count());
 }
 
 void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading,

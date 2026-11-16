@@ -331,6 +331,10 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     auto result = instance.GetDevice().createGraphicsPipelineUnique(pipeline_cache, pipeline_info);
     if (result.result == vk::Result::eSuccess) {
         pipeline = std::move(result.value);
+        if (!fail_on_compile_required) {
+            // Possibly compiled just now (a fail-on-compile-required build never compiles).
+            AsyncStats::driver_cache_dirty.store(true, std::memory_order_relaxed);
+        }
     } else if (result.result == vk::Result::eErrorPipelineCompileRequiredEXT) {
         return false;
     } else {

@@ -30,6 +30,9 @@ inline Timed pipeline_build;
 inline Timed surface_download;
 /// Pipelines the driver served from its cache on the render thread, without a worker.
 inline std::atomic<u64> inline_pipeline_hits{};
+/// Set when the driver had to compile a pipeline, i.e. its cache holds something that the
+/// copy on the SD card does not. Cleared when the cache is loaded or saved.
+inline std::atomic<bool> driver_cache_dirty{};
 /// Draws dropped because their pipeline was not ready (asynchronous mode).
 inline std::atomic<u64> skipped_draws{};
 /// Draws sent through the CPU vertex path because their vertex shader was not ready.
