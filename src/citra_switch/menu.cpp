@@ -1241,7 +1241,8 @@ InfoCard BuildWelcomeCard() {
         "Settings",
         {"- Graphics chooses the renderer, the resolution and the shader options.",
 #if defined(__SWITCH2__)
-         "- Reset All Settings puts every setting back to its default.",
+         "- Reset All Settings puts every setting back to its default, with or without the "
+         "experimental async shader compilation.",
 #else
          "- Reset All Settings offers the Default, Performance and Ultra Performance presets."
          "Performance is recommended for most titles.",
@@ -2389,7 +2390,7 @@ private:
             preset_sel = (preset_sel + 1) % NumSettingsPresets;
         }
         if (down & HidNpadButton_A) {
-            OpenResetConfirm(static_cast<SettingsPreset>(preset_sel));
+            OpenResetConfirm(SettingsPresetAt(preset_sel));
         }
         if (down & HidNpadButton_B) {
             preset_picker_open = false;
@@ -2398,7 +2399,8 @@ private:
 
     void OpenResetConfirm(SettingsPreset preset) {
         const std::string name = SettingsPresetName(preset);
-        const bool risky = preset != SettingsPreset::Default;
+        const bool risky =
+            preset != SettingsPreset::Default && preset != SettingsPreset::DefaultNoAsync;
         confirm = ConfirmPrompt{
             "Reset to " + name + " settings?",
             risky ? std::vector<std::string>{"Every setting is reset, then the " + name,
@@ -4059,7 +4061,7 @@ private:
                 c.FillRoundRect(rx, ry, rw, row_h - 4, 8, kColSurfaceHi);
                 c.FillRoundRect(rx, ry + 8, 4, row_h - 20, 2, kColAccent);
             }
-            const auto preset = static_cast<SettingsPreset>(i);
+            const auto preset = SettingsPresetAt(i);
             g_font.Draw(c, rx + 20, ry + 24, SettingsPresetName(preset), 20, kColText);
             g_font.Draw(c, rx + 20, ry + 46, SettingsPresetSummary(preset), 16, kColTextDim);
         }

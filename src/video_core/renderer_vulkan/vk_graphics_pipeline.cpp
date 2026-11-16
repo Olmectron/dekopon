@@ -104,8 +104,12 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
         });
     };
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(__SWITCH2__)
     // Keep the driver's cache lookup off the render thread in asynchronous mode.
+    // Not on Switch 2: there the lookup below is quick, and skipping it meant every new
+    // pipeline dropped its draws for at least a frame even when the driver already had
+    // it cached. Games that keep producing new vertex shader configurations for the same
+    // shader (Kirby: Planet Robobot) flickered constantly because of it.
     if (!wait_built) {
         queue_build();
         return false;
@@ -121,6 +125,7 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
 
     // Ask the driver if it can give us the pipeline quickly.
     if (!shaders_pending && instance.IsPipelineCreationCacheControlSupported() && Build(true)) {
+        AsyncStats::inline_pipeline_hits.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 

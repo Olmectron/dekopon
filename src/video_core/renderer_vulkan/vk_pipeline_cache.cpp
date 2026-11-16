@@ -521,6 +521,16 @@ void PipelineCache::WaitPipelineBuilt(GraphicsPipeline& pipeline) {
     compile_stall_count = 0;
 }
 
+#if defined(__SWITCH2__)
+// Counters kept by externals/switch_stubs/oaknut/horizon_jit.cpp: under kaiHEN every piece
+// of JIT code has to be published through an IPC call before it can run.
+extern "C" {
+extern unsigned long long g_oaknut_horizon_jit_publish_count;
+extern unsigned long long g_oaknut_horizon_jit_publish_micros;
+extern unsigned long long g_oaknut_horizon_jit_publish_bytes;
+}
+#endif
+
 void PipelineCache::ReportAsyncStats() {
     const auto now = std::chrono::steady_clock::now();
     if (now - last_async_report < ASYNC_REPORT_INTERVAL) {
@@ -542,17 +552,36 @@ void PipelineCache::ReportAsyncStats() {
     const u64 skipped = AsyncStats::skipped_draws.exchange(0, std::memory_order_relaxed);
     const u64 software =
         AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
+    const u64 inline_hits =
+        AsyncStats::inline_pipeline_hits.exchange(0, std::memory_order_relaxed);
+#if defined(__SWITCH2__)
+    {
+        static unsigned long long last_count = 0, last_micros = 0, last_bytes = 0;
+        const unsigned long long count = g_oaknut_horizon_jit_publish_count;
+        const unsigned long long micros = g_oaknut_horizon_jit_publish_micros;
+        const unsigned long long bytes = g_oaknut_horizon_jit_publish_bytes;
+        if (count != last_count) {
+            LOG_INFO(Render_Vulkan, "JIT publishes (kaiHEN IPC): {}x {} ms, {} KiB",
+                     count - last_count, (micros - last_micros) / 1000,
+                     (bytes - last_bytes) / 1024);
+        }
+        last_count = count;
+        last_micros = micros;
+        last_bytes = bytes;
+    }
+#endif
     if (vs_gen.count == 0 && shaders.count == 0 && pipelines.count == 0 && skipped == 0 &&
         software == 0) {
         return;
     }
     LOG_INFO(Render_Vulkan,
              "Compile stats: VS generate (render thread) {}x {} ms max {} ms | shader "
-             "compiles {}x {} ms max {} ms | pipeline builds {}x {} ms max {} ms | draws "
-             "skipped {} | draws via software vertex path {}",
+             "compiles {}x {} ms max {} ms | pipeline builds {}x {} ms max {} ms (served "
+             "from driver cache on the render thread: {}) | draws skipped {} | draws via "
+             "software vertex path {}",
              vs_gen.count, vs_gen.total_ms, vs_gen.max_ms, shaders.count, shaders.total_ms,
-             shaders.max_ms, pipelines.count, pipelines.total_ms, pipelines.max_ms, skipped,
-             software);
+             shaders.max_ms, pipelines.count, pipelines.total_ms, pipelines.max_ms,
+             inline_hits, skipped, software);
 }
 
 bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {

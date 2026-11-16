@@ -640,7 +640,17 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
     std::unique_ptr<Pica::ShaderSetup> shader_setup;
     std::unique_ptr<CacheFile> regenerate_file;
 
+    // Regeneration compiles on the shader workers (below). Whatever way this function is
+    // left, no job may outlive the cache file and the maps it writes to.
+    struct WorkerDrain {
+        Common::ThreadWorker& workers;
+        ~WorkerDrain() {
+            workers.WaitForRequests();
+        }
+    } worker_drain{parent.shader_workers};
+
     auto cleanup_on_error = [&]() {
+        parent.shader_workers.WaitForRequests();
         programmable_vertex_cache.clear();
         programmable_vertex_map.clear();
         known_vertex_programs.clear();
@@ -908,15 +918,24 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
                 if (new_spirv) {
                     LOG_DEBUG(Render_Vulkan, "    compiling SPIRV.");
 
-                    auto spirv = CompileGLSL(program_glsl, vk::ShaderStageFlagBits::eVertex);
-
-                    iter_prog->second.module = CompileSPV(spirv, parent.instance.GetDevice());
-                    iter_prog->second.MarkDone();
-
-                    if (regenerate_file) {
-                        // If we are regenerating, save the new spirv to disk.
-                        AppendVSSPIRV(*regenerate_file, spirv, spirv_id);
-                    }
+                    // GLSL -> SPIR-V is the slow part of a regeneration (it used to run
+                    // here, one shader at a time: about a minute for a big cache). Hand
+                    // it to the shader workers; they are drained before the file is
+                    // finalised.
+                    parent.shader_workers.QueueWork(
+                        [this, shader = &iter_prog->second, glsl = std::move(program_glsl.value),
+                         spirv_id, file = regenerate_file.get(),
+                         device = parent.instance.GetDevice()] {
+                            AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
+                            const auto spirv =
+                                CompileGLSL(glsl, vk::ShaderStageFlagBits::eVertex);
+                            shader->module = CompileSPV(spirv, device);
+                            shader->MarkDone();
+                            if (file) {
+                                // If we are regenerating, save the new spirv to disk.
+                                AppendVSSPIRV(*file, spirv, spirv_id);
+                            }
+                        });
                 }
 
                 if (regenerate_file) {
@@ -937,6 +956,9 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
         }
     }
 
+    // Let the queued compiles finish (and append their SPIR-V) before the file is swapped.
+    parent.WaitForCompileWorkers(stop_loading, callback);
+
     if (regenerate_file) {
         // If we are regenerating, replace the old file with the new one.
         vs_cache.SwitchMode(CacheFile::CacheOpMode::DELETE);
@@ -953,7 +975,17 @@ bool ShaderDiskCache::InitFSCache(const std::atomic_bool& stop_loading,
     std::vector<std::pair<u64, size_t>> pending_configs;
     std::unique_ptr<CacheFile> regenerate_file;
 
+    // Regeneration compiles on the shader workers (below). Whatever way this function is
+    // left, no job may outlive the cache file and the maps it writes to.
+    struct WorkerDrain {
+        Common::ThreadWorker& workers;
+        ~WorkerDrain() {
+            workers.WaitForRequests();
+        }
+    } worker_drain{parent.shader_workers};
+
     auto cleanup_on_error = [&]() {
+        parent.shader_workers.WaitForRequests();
         fragment_shaders.clear();
         if (regenerate_file) {
             regenerate_file->SwitchMode(CacheFile::CacheOpMode::DELETE);
@@ -1120,39 +1152,41 @@ bool ShaderDiskCache::InitFSCache(const std::atomic_bool& stop_loading,
         const auto [it, new_shader] = fragment_shaders.try_emplace(fs_config_hash, parent.instance);
         auto& shader = it->second;
 
-        std::vector<u32> spirv;
-        if (parent.profile.vk_use_spirv_generator &&
-            !entry->fs_config.UsesSpirvIncompatibleConfig()) {
-            // Use SPIRV generator directly
+        if (!new_shader) {
+            // Already queued by an earlier entry with the same configuration.
+            continue;
+        }
 
-            spirv = SPIRV::GenerateFragmentShader(entry->fs_config, parent.profile);
-            shader.module = CompileSPV(spirv, parent.instance.GetDevice());
-        } else {
-            // Use GLSL generator then convert to SPIRV
-
-            UserConfig user{};
-            const std::string code_glsl =
-                GLSL::GenerateFragmentShader(entry->fs_config, user, parent.profile);
-
-            if (code_glsl.empty()) {
-                LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
-                fragment_shaders.erase(it);
-                continue;
+        // Generating and compiling is the slow part of a regeneration; do it on the shader
+        // workers (see InitVSCache). They are drained before the file is finalised.
+        parent.shader_workers.QueueWork([this, shader_ptr = &shader, entry_copy = *entry,
+                                         fs_config_hash, file = regenerate_file.get()] {
+            AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
+            std::vector<u32> spirv;
+            if (parent.profile.vk_use_spirv_generator &&
+                !entry_copy.fs_config.UsesSpirvIncompatibleConfig()) {
+                // Use SPIRV generator directly
+                spirv = SPIRV::GenerateFragmentShader(entry_copy.fs_config, parent.profile);
+            } else {
+                // Use GLSL generator then convert to SPIRV
+                UserConfig user{};
+                const std::string code_glsl =
+                    GLSL::GenerateFragmentShader(entry_copy.fs_config, user, parent.profile);
+                spirv = CompileGLSL(code_glsl, vk::ShaderStageFlagBits::eFragment);
             }
+            shader_ptr->module = CompileSPV(spirv, parent.instance.GetDevice());
+            shader_ptr->MarkDone();
 
-            spirv = CompileGLSL(code_glsl, vk::ShaderStageFlagBits::eFragment);
-            shader.module = CompileSPV(spirv, parent.instance.GetDevice());
-        }
-        shader.MarkDone();
-
-        if (regenerate_file) {
-            // Append the config and SPIRV to the new file.
-            AppendFSSPIRV(*regenerate_file, spirv, fs_config_hash);
-            AppendFSConfig(*regenerate_file, *entry, fs_config_hash);
-        }
-
-        LOG_DEBUG(Render_Vulkan, "    linked with new SPIRV.");
+            if (file) {
+                // Append the config and SPIRV to the new file.
+                AppendFSSPIRV(*file, spirv, fs_config_hash);
+                AppendFSConfig(*file, entry_copy, fs_config_hash);
+            }
+        });
     }
+
+    // Let the queued compiles finish (and append their SPIR-V) before the file is swapped.
+    parent.WaitForCompileWorkers(stop_loading, callback);
 
     if (regenerate_file) {
         // If we are regenerating, replace the old file with the new one.

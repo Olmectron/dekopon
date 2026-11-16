@@ -132,16 +132,27 @@ enum class SettingsPreset {
     Default,
     Performance,
     UltraPerformance,
+    // Default with the experimental asynchronous shader compilation turned off.
+    DefaultNoAsync,
 };
 
 #if defined(__SWITCH2__)
-// Switch 2: only Default is offered for now. Performance and Ultra Performance
-// glitch there (they were tuned for the Switch 1 GPU driver), so the picker stops
-// before them; the enum is unchanged.
-constexpr int NumSettingsPresets = 1;
+// Switch 2: Default, and Default without the experimental async shaders. Performance
+// and Ultra Performance glitch there (they were tuned for the Switch 1 GPU driver)
+// and are not offered; see SettingsPresetAt.
+constexpr int NumSettingsPresets = 2;
 #else
 constexpr int NumSettingsPresets = 3;
 #endif
+
+// The preset shown at `index` of the reset picker.
+constexpr SettingsPreset SettingsPresetAt(int index) {
+#if defined(__SWITCH2__)
+    return index == 1 ? SettingsPreset::DefaultNoAsync : SettingsPreset::Default;
+#else
+    return static_cast<SettingsPreset>(index);
+#endif
+}
 
 const char* SettingsPresetName(SettingsPreset preset);
 

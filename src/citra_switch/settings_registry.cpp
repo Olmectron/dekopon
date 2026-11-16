@@ -825,8 +825,14 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
     t << Toggle({"Shader JIT",
                  "Compiles CPU-side PICA shaders to native code instead of interpreting them."},
                 v.use_shader_jit);
+#if defined(__SWITCH2__)
+    t << Toggle({"Async Shader Compilation (Experimental)",
+                 "Builds shaders on spare cores while the game keeps running. Cuts hitching; objects "
+                 "can show up a moment late the first time."},
+#else
     t << Toggle({"Async Shader Compilation",
                  "Builds shaders on a background thread. Cuts hitching at the cost of one-time visual bugs."},
+#endif
                 v.async_shader_compilation);
     t << Toggle({"Disk Shader Cache",
                  "Keeps compiled shaders on the SD card so later runs hitch less."},

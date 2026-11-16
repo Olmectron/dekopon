@@ -322,6 +322,10 @@ void ApplyPreset(SwitchFrontend::SettingsPreset preset) {
     if (preset == SettingsPreset::Default) {
         return;
     }
+    if (preset == SettingsPreset::DefaultNoAsync) {
+        v.async_shader_compilation = false;
+        return;
+    }
 
     v.async_gpu_emulation = true;
     v.async_shader_compilation = true;
@@ -658,6 +662,8 @@ const char* SettingsPresetName(SettingsPreset preset) {
         return "Performance";
     case SettingsPreset::UltraPerformance:
         return "Ultra Performance";
+    case SettingsPreset::DefaultNoAsync:
+        return "Default, no experimental async";
     default:
         return "Default";
     }
@@ -669,6 +675,8 @@ const char* SettingsPresetSummary(SettingsPreset preset) {
         return "Faster, at the cost of accuracy. Recommend unless things break.";
     case SettingsPreset::UltraPerformance:
         return "Fastest by breaking things. Expect breakage.";
+    case SettingsPreset::DefaultNoAsync:
+        return "Default with Async Shader Compilation (Experimental) turned off.";
     default:
         return "Default stettins that are shipped with every build.";
     }

@@ -24,6 +24,10 @@
 extern "C" {
 unsigned int g_oaknut_horizon_jit_last_rc = 0;
 unsigned int g_oaknut_horizon_jit_failures = 0;
+// Publications of staged code to the executable mapping (Switch 2): calls, time, bytes.
+unsigned long long g_oaknut_horizon_jit_publish_count = 0;
+unsigned long long g_oaknut_horizon_jit_publish_micros = 0;
+unsigned long long g_oaknut_horizon_jit_publish_bytes = 0;
 }
 
 // Horizon only grants a process a handful of JIT objects, far fewer than there are PICA
@@ -209,7 +213,11 @@ bool PublishStagedIn(Jit& jit, std::uint8_t* begin, std::uint8_t* end) {
     }
     const std::size_t offset = static_cast<std::size_t>(begin - staging);
     const std::size_t size = static_cast<std::size_t>(end - begin);
+    const u64 tick = armGetSystemTick();
     const Result rc = kaihenPublishJitAlias(&jit, offset, begin, size);
+    ++g_oaknut_horizon_jit_publish_count;
+    g_oaknut_horizon_jit_publish_micros += armTicksToNs(armGetSystemTick() - tick) / 1000;
+    g_oaknut_horizon_jit_publish_bytes += size;
     if (R_FAILED(rc)) {
         NoteFailure(rc);
         return true;

@@ -25,6 +25,8 @@ inline Timed shader_compile;
 /// Driver pipeline builds. Run on the pipeline workers, or on the render thread when the
 /// driver can serve them from its cache.
 inline Timed pipeline_build;
+/// Pipelines the driver served from its cache on the render thread, without a worker.
+inline std::atomic<u64> inline_pipeline_hits{};
 /// Draws dropped because their pipeline was not ready (asynchronous mode).
 inline std::atomic<u64> skipped_draws{};
 /// Draws sent through the CPU vertex path because their vertex shader was not ready.
