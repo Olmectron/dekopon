@@ -349,6 +349,30 @@ void EmuThread(std::string path) {
         break;
     }
 
+    // Closing the game: write the driver's shader cache now, while a frame can still be
+    // presented, and say so. For a big game this takes several seconds, and on a black
+    // screen it looks like a hang - which invites force-closing mid-write.
+    {
+        auto last_update = std::chrono::steady_clock::time_point{};
+        system.GPU().Renderer().Rasterizer()->SaveDiskResources(
+            [&system, last_update](VideoCore::LoadCallbackStage, std::size_t current,
+                                   std::size_t total, const std::string&) mutable {
+                const auto now = std::chrono::steady_clock::now();
+                if (total > 0 && current < total &&
+                    now - last_update < std::chrono::milliseconds{150}) {
+                    return;
+                }
+                last_update = now;
+                std::string text = "Saving shader cache, please wait";
+                if (total > 0) {
+                    text += fmt::format(" {}%", current * 100 / total);
+                }
+                VideoCore::PostOverlayToast(text, 3000);
+                Core::PerfStats::game_frames_updated = true;
+                system.GPU().SwapBuffers();
+            });
+    }
+
     window->DoneCurrent();
     s_stop = true;
 }

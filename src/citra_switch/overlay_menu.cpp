@@ -120,7 +120,12 @@ constexpr int kAmiibosPerPage = 7;
 constexpr int kCameraImagesPerPage = 6;
 
 std::atomic<bool> s_open{false};
+#if defined(__SWITCH2__)
+// Switch 2: the game is frozen while the in-game menu is open, unless turned off.
+std::atomic<bool> s_pause_in_menu{true};
+#else
 std::atomic<bool> s_pause_in_menu{false};
+#endif
 int s_page = 0;
 int s_selected = 0;
 int s_cheat_page = 0;

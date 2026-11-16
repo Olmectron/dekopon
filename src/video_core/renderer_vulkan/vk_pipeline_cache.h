@@ -110,7 +110,7 @@ private:
                                      const VideoCore::DiskResourceLoadCallback& callback = {});
 
     /// Stores the generated pipeline cache
-    void SaveDriverPipelineDiskCache();
+    void SaveDriverPipelineDiskCache(const VideoCore::DiskResourceLoadCallback& callback = {});
 
     /// Loads the shader disk cache
     void LoadDiskCache(const std::atomic_bool& stop_loading = std::atomic_bool{false},

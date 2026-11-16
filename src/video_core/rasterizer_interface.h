@@ -82,6 +82,10 @@ public:
 
     virtual void SwitchDiskResources([[maybe_unused]] u64 title_id) {}
 
+    /// Writes out whatever the renderer keeps on disk between runs, reporting progress.
+    /// Meant to be called when a game is closed, while frames can still be presented.
+    virtual void SaveDiskResources([[maybe_unused]] const DiskResourceLoadCallback& callback) {}
+
     static void SetSwitchDiskResourcesCallback(const DiskResourceLoadCallback& callback) {
         switch_disk_resources_callback = callback;
     }

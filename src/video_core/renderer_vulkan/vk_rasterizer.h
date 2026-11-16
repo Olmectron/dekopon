@@ -47,6 +47,7 @@ public:
     void TickFrame();
     void LoadDefaultDiskResources(const std::atomic_bool& stop_loading,
                                   const VideoCore::DiskResourceLoadCallback& callback) override;
+    void SaveDiskResources(const VideoCore::DiskResourceLoadCallback& callback) override;
 
     void DrawTriangles() override;
     void FlushAll() override;

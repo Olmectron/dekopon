@@ -777,7 +777,11 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
     t << LocalBool("pause_in_quick_menu",
                    {"Pause In Quick Menu", "Freezes the game while the in-game menu is open.",
                     EntryFlag::None, QuickSection::System},
+#if defined(__SWITCH2__)
+                   IsPauseInQuickMenu, SetPauseInQuickMenu, true);
+#else
                    IsPauseInQuickMenu, SetPauseInQuickMenu, false);
+#endif
 
     t.Group("Updates");
     t << LocalChoice(

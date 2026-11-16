@@ -404,7 +404,8 @@ void PipelineCache::LoadDriverPipelineDiskCache(
     AsyncStats::driver_cache_dirty.store(false, std::memory_order_relaxed);
 }
 
-void PipelineCache::SaveDriverPipelineDiskCache() {
+void PipelineCache::SaveDriverPipelineDiskCache(
+    const VideoCore::DiskResourceLoadCallback& callback) {
     // Save Vulkan pipeline cache
     if (!Settings::values.use_disk_shader_cache || !driver_pipeline_cache) {
         return;
@@ -418,6 +419,9 @@ void PipelineCache::SaveDriverPipelineDiskCache() {
         return;
     }
     const auto save_start = std::chrono::steady_clock::now();
+    if (callback) {
+        callback(VideoCore::LoadCallbackStage::Prepare, 0, 0, "");
+    }
 
     const auto cache_dir = GetPipelineCacheDir();
     const u32 vendor_id = instance.GetVendorID();
@@ -436,9 +440,18 @@ void PipelineCache::SaveDriverPipelineDiskCache() {
 
     const vk::Device device = instance.GetDevice();
     const auto cache_data = device.getPipelineCacheData(*driver_pipeline_cache);
-    if (cache_file.WriteBytes(cache_data.data(), cache_data.size()) != cache_data.size()) {
-        LOG_ERROR(Render_Vulkan, "Error during pipeline cache write");
-        return;
+    // In pieces, so that progress can be shown: this is ~100 MB for a big game.
+    constexpr std::size_t CHUNK = 2 * 1024 * 1024;
+    for (std::size_t written = 0; written < cache_data.size();) {
+        const std::size_t size = std::min(CHUNK, cache_data.size() - written);
+        if (cache_file.WriteBytes(cache_data.data() + written, size) != size) {
+            LOG_ERROR(Render_Vulkan, "Error during pipeline cache write");
+            return;
+        }
+        written += size;
+        if (callback) {
+            callback(VideoCore::LoadCallbackStage::Build, written, cache_data.size(), "");
+        }
     }
     LOG_INFO(Render_Vulkan, "Saved driver pipeline cache: {} KB in {} ms",
              cache_data.size() / 1024,
