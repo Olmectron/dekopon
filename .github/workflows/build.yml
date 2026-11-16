@@ -2,7 +2,7 @@ name: citra-build
 
 on:
   push:
-    branches: [ "*", "!switch2-ounce-devkit" ]
+    branches: [ "*", "!master", "!switch2-ounce-devkit", "!switch2-async-shaders" ]
     tags: [ "*" ]
   pull_request:
     branches: [ master ]

@@ -7,7 +7,7 @@ name: dekopon-switch2
 # build), and a newer push cancels the build of the one before it.
 on:
   push:
-    branches: [switch2-ounce-devkit, switch2-async-shaders]
+    branches: [master, switch2-ounce-devkit, switch2-async-shaders]
     # Docs-only pushes do not build (and so do not cancel a build in progress).
     paths-ignore: ['**.md']
   # Manual run. Give it a release tag to also publish the build as a GitHub
