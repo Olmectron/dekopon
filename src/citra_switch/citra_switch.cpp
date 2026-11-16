@@ -118,6 +118,11 @@ void Switch2BootMark(const char* stage) {
 } // namespace
 
 extern "C" {
+// Breadcrumb for other translation units (the game shutdown path in emulation.cpp).
+void DekoponBootMark(const char* stage) {
+    Switch2BootMark(stage);
+}
+
 void Switch2Signal(int sig) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "SIGNAL %d caught during startup", sig);

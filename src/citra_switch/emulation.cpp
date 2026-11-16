@@ -34,6 +34,13 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
 
+#if defined(__SWITCH2__)
+extern "C" void DekoponBootMark(const char* stage);
+#define EXIT_MARK(stage) DekoponBootMark(stage)
+#else
+#define EXIT_MARK(stage) ((void)0)
+#endif
+
 namespace SwitchFrontend {
 
 namespace {
@@ -699,12 +706,17 @@ bool ArticDisconnected() {
 }
 
 void StopRom() {
+    // Switch 2 bring-up: closing a game has hung on a black screen at least once, with the
+    // normal log cut short. These go straight to log/boot.txt, so the next time it happens
+    // the last line says how far the shutdown got.
+    EXIT_MARK("X1 StopRom: stopping the emulation thread");
     s_stop = true;
     s_paused = false;
     CancelKeyboard();
     if (s_emu_thread.joinable()) {
         s_emu_thread.join();
     }
+    EXIT_MARK("X2 emulation thread joined (shader cache saved)");
     // Tear the core down after the window context current.
     auto* window = GetEmuWindow();
     if (window) {
@@ -713,10 +725,13 @@ void StopRom() {
     auto& system = Core::System::GetInstance();
     system.ResetMoviePlaybackState();
     if (system.IsPoweredOn()) {
+        EXIT_MARK("X3 system.Shutdown() begin");
         system.Shutdown();
+        EXIT_MARK("X4 system.Shutdown() done");
     }
     system.EjectCartridge();
     ClearPerGameConfig();
+    EXIT_MARK("X5 StopRom done - back to the library");
 }
 
 } // namespace SwitchFrontend
