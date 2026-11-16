@@ -17,6 +17,7 @@
 #include "citra_switch/applets/swkbd.h"
 #include "citra_switch/updater.h"
 #include "citra_switch/config.h"
+#include "citra_switch/game_share.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/overlay_menu.h"
@@ -462,6 +463,9 @@ void RunGame(PadState& pad, const std::string& rom) {
             }
 
             const bool menu_open = SwitchFrontend::IsQuickMenuOpen();
+
+            // GameShare prototype: a connected receiver plays too.
+            SwitchFrontend::GameShare::MergeRemoteInput(state);
 
             // While the menu is up the guest sees neutral input.
             SwitchFrontend::UpdateInput(menu_open || chord_edge ? SwitchFrontend::InputState{}

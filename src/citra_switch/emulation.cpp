@@ -16,6 +16,7 @@
 #include "citra_switch/applets/swkbd.h"
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
+#include "citra_switch/game_share.h"
 #include "common/file_util.h"
 #include "common/horizon_boost.h"
 #include "common/horizon_thread.h"
@@ -322,6 +323,7 @@ void EmuThread(std::string path) {
     }
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
+    GameShare::Start();
     while (!s_stop) {
         if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
             system.GPU().UpdateCurrentFramebufferLayout();
@@ -336,6 +338,7 @@ void EmuThread(std::string path) {
         }
 
         const Core::System::ResultStatus result = system.RunLoop();
+        GameShare::Tick(system);
         ReportSaveStateEvent(system);
         if (result == Core::System::ResultStatus::Success) {
             continue;
@@ -355,6 +358,9 @@ void EmuThread(std::string path) {
         }
         break;
     }
+
+    // No more screenshots are requested from here on; the renderer is about to go away.
+    GameShare::Stop();
 
     // Closing the game: write the driver's shader cache now, while a frame can still be
     // presented, and say so. For a big game this takes several seconds, and on a black
