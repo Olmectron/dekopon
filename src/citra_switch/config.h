@@ -134,7 +134,14 @@ enum class SettingsPreset {
     UltraPerformance,
 };
 
+#if defined(__SWITCH2__)
+// Switch 2: only Default is offered for now. Performance and Ultra Performance
+// glitch there (they were tuned for the Switch 1 GPU driver), so the picker stops
+// before them; the enum is unchanged.
+constexpr int NumSettingsPresets = 1;
+#else
 constexpr int NumSettingsPresets = 3;
+#endif
 
 const char* SettingsPresetName(SettingsPreset preset);
 

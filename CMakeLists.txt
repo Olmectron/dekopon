@@ -109,6 +109,13 @@ endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
     set(DEKOPON ON)
     set(DEKOPON_VERSION "3.0.0-RC1")
+    if (NINTENDO_SWITCH2)
+        # The Switch 2 port is its own release line (own repository, own update
+        # channel), so it has its own version; the upstream Dekopon version it is
+        # based on is kept for the About text.
+        set(DEKOPON_UPSTREAM_VERSION "${DEKOPON_VERSION}")
+        set(DEKOPON_VERSION "0.9.0")
+    endif()
     set(ARCHITECTURE "arm64")
     message(STATUS "Building for Nintendo Switch")
 endif()

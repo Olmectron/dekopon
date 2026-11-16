@@ -31,8 +31,15 @@
 namespace SwitchFrontend {
 namespace {
 
+#if defined(__SWITCH2__)
+// The Switch 2 port updates from its own repository: upstream's releases are
+// Switch 1 builds (NXVK) and must never be installed over this one.
+constexpr std::string_view kReleasesApi =
+    "https://api.github.com/repos/Olmectron/dekopon/releases?per_page=20";
+#else
 constexpr std::string_view kReleasesApi =
     "https://api.github.com/repos/PalindromicBreadLoaf/dekopon/releases?per_page=20";
+#endif
 constexpr std::string_view kUserAgent = "Dekopon-Updater/" DEKOPON_VERSION;
 constexpr long kConnectTimeoutSeconds = 15;
 constexpr long kRequestTimeoutSeconds = 30;

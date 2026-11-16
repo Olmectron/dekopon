@@ -731,6 +731,10 @@ void DrawRail(Canvas& canvas, Tab active, Tab cursor, bool rail_focused) {
 void DrawHeader(Canvas& canvas, std::string_view subtitle) {
     canvas.FillRect(kContentX, 0, ContentW(), kHeaderH, kColBg);
     g_font.Draw(canvas, kContentX + 24, CenterBaseline(0, kHeaderH, 28), "Dekopon", 28, kColText);
+#if defined(__SWITCH2__)
+    g_font.Draw(canvas, kContentX + 24 + g_font.Measure("Dekopon", 28) + 12,
+                CenterBaseline(0, kHeaderH, 18), "for Switch 2", 18, kColTextDim);
+#endif
     if (!subtitle.empty()) {
         const int sw = g_font.Measure(subtitle, 20);
         g_font.Draw(canvas, g_screen_w - 24 - sw, CenterBaseline(0, kHeaderH, 20), subtitle, 20,
@@ -1236,8 +1240,12 @@ InfoCard BuildWelcomeCard() {
     card.pages.push_back(MakeInfoPage(
         "Settings",
         {"- Graphics chooses the renderer, the resolution and the shader options.",
+#if defined(__SWITCH2__)
+         "- Reset All Settings puts every setting back to its default.",
+#else
          "- Reset All Settings offers the Default, Performance and Ultra Performance presets."
          "Performance is recommended for most titles.",
+#endif
          "- General holds the update channel, Check for Updates and the release notes.", "",
          "Press A to start."},
         max_w));
@@ -2595,7 +2603,12 @@ private:
 
     void OpenReleaseNotesCard(const std::string& notes) {
         InfoCard card;
+#if defined(__SWITCH2__) && defined(DEKOPON_UPSTREAM_VERSION)
+        card.title = "Dekopon for Switch 2 " + std::string{CurrentVersion()} +
+                     " (based on Dekopon " DEKOPON_UPSTREAM_VERSION ")";
+#else
         card.title = "Dekopon " + std::string{CurrentVersion()};
+#endif
         card.pages = PaginateNotes(notes, "Release notes", InfoCardTextW());
         if (card.pages.empty()) {
             ShowNotice("This release has no notes", false);
@@ -4051,8 +4064,10 @@ private:
             g_font.Draw(c, rx + 20, ry + 46, SettingsPresetSummary(preset), 16, kColTextDim);
         }
 
+#if !defined(__SWITCH2__)
         g_font.Draw(c, x + 24, y + h - 62,
                     "Performance and Ultra Performance can break some games.", 16, kColAccent);
+#endif
 
         int hx = x + 24;
         const int hy = y + h - 38;

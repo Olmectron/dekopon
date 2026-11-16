@@ -74,6 +74,10 @@ find_library(SWITCH_CURL curl REQUIRED)
 target_include_directories(citra_switch PRIVATE ${SWITCH_FREETYPE_INCLUDE_DIR})
 target_include_directories(citra_switch PRIVATE ${SWITCH_CURL_INCLUDE_DIR})
 target_compile_definitions(citra_switch PRIVATE CURL_STATICLIB DEKOPON_VERSION="${DEKOPON_VERSION}")
+if (DEFINED DEKOPON_UPSTREAM_VERSION)
+    target_compile_definitions(citra_switch PRIVATE
+        DEKOPON_UPSTREAM_VERSION="${DEKOPON_UPSTREAM_VERSION}")
+endif()
 # Order matters for the static newlib link: freetype -> png -> bz2 -> z.
 target_link_libraries(citra_switch PRIVATE
     ${SWITCH_FREETYPE} ${SWITCH_PNG} ${SWITCH_BZ2} ${SWITCH_ZLIB}
