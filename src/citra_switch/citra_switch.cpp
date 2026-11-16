@@ -5,7 +5,9 @@
 #include <array>
 #include <csignal>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <string>
 #include <utility>
@@ -44,10 +46,30 @@ namespace {
 // Switch 2 bring-up breadcrumb. A crash before Bootstrap() leaves no normal log,
 // so record how far startup got by rewriting sdmc:/switch/dekopon/log/boot.txt
 // (raw fs, like the exception handler). Absent file => died before main.
-std::string s_boot_log;
+//
+// The log lives in a plain char buffer on purpose: it is written from
+// userAppInit, i.e. BEFORE this translation unit's own static constructors run,
+// so it must not be an object with a constructor (a std::string here would be
+// reset to empty when its constructor finally ran, dropping the early lines).
+char s_boot_log[8192];
+std::size_t s_boot_log_len = 0;
+u64 s_boot_tick0 = 0;
 void Switch2BootMark(const char* stage) {
-    s_boot_log += stage;
-    s_boot_log += '\n';
+    const u64 now = armGetSystemTick();
+    if (s_boot_tick0 == 0) {
+        s_boot_tick0 = now;
+    }
+    const unsigned long long ms = armTicksToNs(now - s_boot_tick0) / 1000000ULL;
+    if (s_boot_log_len < sizeof(s_boot_log) - 1) {
+        const int n = std::snprintf(s_boot_log + s_boot_log_len, sizeof(s_boot_log) - s_boot_log_len,
+                                    "[%6llums] %s\n", ms, stage);
+        if (n > 0) {
+            s_boot_log_len += static_cast<std::size_t>(n);
+            if (s_boot_log_len > sizeof(s_boot_log) - 1) {
+                s_boot_log_len = sizeof(s_boot_log) - 1;
+            }
+        }
+    }
     FsFileSystem* sdmc = fsdevGetDeviceFileSystem("sdmc");
     if (sdmc == nullptr) {
         return;
@@ -57,54 +79,161 @@ void Switch2BootMark(const char* stage) {
     fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
     const char* path = "/switch/dekopon/log/boot.txt";
     fsFsDeleteFile(sdmc, path);
-    if (R_FAILED(fsFsCreateFile(sdmc, path, static_cast<s64>(s_boot_log.size()), 0))) {
+    if (R_FAILED(fsFsCreateFile(sdmc, path, static_cast<s64>(s_boot_log_len), 0))) {
         return;
     }
     FsFile file;
     if (R_FAILED(fsFsOpenFile(sdmc, path, FsOpenMode_Write, &file))) {
         return;
     }
-    fsFileWrite(&file, 0, s_boot_log.data(), s_boot_log.size(), FsWriteOption_Flush);
+    fsFileWrite(&file, 0, s_boot_log, s_boot_log_len, FsWriteOption_Flush);
     fsFileClose(&file);
 }
-// Runs during libnx/libounce __appInit, before global constructors and main.
-// (Writes only if sdmc is already mounted at that point; otherwise it no-ops.)
 // If a global constructor aborts (uncaught C++ exception, or abort()/assert
 // raising SIGABRT), capture the reason to boot.txt. Installed in userAppInit,
 // which runs before __libc_init_array, so it is armed during the ctor phase.
 [[noreturn]] void Switch2Terminate() {
-    std::string msg = "TERMINATE: ";
+    char msg[256];
+    const char* what = "(no active exception)";
     if (std::exception_ptr e = std::current_exception()) {
         try {
             std::rethrow_exception(e);
         } catch (const std::exception& ex) {
-            msg += ex.what();
+            std::snprintf(msg, sizeof(msg), "TERMINATE: %s", ex.what());
+            Switch2BootMark(msg);
+            std::_Exit(42);
         } catch (...) {
-            msg += "non-std exception";
+            what = "non-std exception";
         }
-    } else {
-        msg += "(no active exception)";
     }
-    Switch2BootMark(msg.c_str());
+    std::snprintf(msg, sizeof(msg), "TERMINATE: %s", what);
+    Switch2BootMark(msg);
     std::_Exit(42);
 }
-extern "C" void Switch2Signal(int sig) {
+} // namespace
+
+extern "C" {
+void Switch2Signal(int sig) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "SIGNAL %d caught during startup", sig);
     Switch2BootMark(buf);
     std::_Exit(43);
 }
-extern "C" void userAppInit(void) {
+
+extern char* fake_heap_start;
+extern char* fake_heap_end;
+
+// Runs during libnx/libounce __appInit, before global constructors and main.
+void userAppInit(void) {
     Switch2BootMark("00 userAppInit (appInit reached)");
     std::set_terminate(&Switch2Terminate);
     std::signal(SIGABRT, &Switch2Signal);
     std::signal(SIGSEGV, &Switch2Signal);
     std::signal(SIGILL, &Switch2Signal);
+
+    // Environment snapshot: memory budget and launch mode differ a lot between
+    // loaders, and a static constructor running out of heap looks like this bug.
+    u64 total = 0, used = 0;
+    svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+    const u32 hos = hosversionGet();
+    char buf[200];
+    std::snprintf(buf, sizeof(buf),
+                  "env: applet=%d nso=%d heapovr=%d heap=%lluMB total=%lluMB used=%lluMB hos=%u.%u.%u",
+                  static_cast<int>(appletGetAppletType()), envIsNso() ? 1 : 0,
+                  envHasHeapOverride() ? 1 : 0,
+                  static_cast<unsigned long long>((fake_heap_end - fake_heap_start) >> 20),
+                  static_cast<unsigned long long>(total >> 20),
+                  static_cast<unsigned long long>(used >> 20),
+                  static_cast<unsigned>(HOSVER_MAJOR(hos)), static_cast<unsigned>(HOSVER_MINOR(hos)),
+                  static_cast<unsigned>(HOSVER_MICRO(hos)));
+    Switch2BootMark(buf);
 }
-// Highest-priority global constructor: runs after appInit, before main.
-__attribute__((constructor(101))) void Switch2EarlyCtor() {
-    Switch2BootMark("00b early ctor");
+
+// --- Global-constructor tracer -------------------------------------------------
+// Replaces newlib's __libc_init_array (called at the end of __libnx_init) with a
+// copy that records, BEFORE calling each constructor, its index and its offset
+// from the module base into sdmc:/switch/dekopon/log/ctor.txt (one fixed-size
+// record, overwritten in place and flushed). If startup dies inside a global
+// constructor - by exception, abort, trap or CPU fault - the record left on the
+// SD names the culprit: resolve the offset with docker/switch2/symbolize.py and
+// the debug ELF from the same CI run.
+typedef void (*Switch2InitFn)(void);
+extern Switch2InitFn __preinit_array_start[] __attribute__((weak));
+extern Switch2InitFn __preinit_array_end[] __attribute__((weak));
+extern Switch2InitFn __init_array_start[] __attribute__((weak));
+extern Switch2InitFn __init_array_end[] __attribute__((weak));
+void _init(void) __attribute__((weak));
+void _start(void);
+
+static FsFile s_ctor_file;
+static bool s_ctor_file_open = false;
+#define SWITCH2_CTOR_RECORD_SIZE 64
+
+static void Switch2CtorRecord(const char* text) {
+    if (!s_ctor_file_open) {
+        return;
+    }
+    char rec[SWITCH2_CTOR_RECORD_SIZE];
+    std::memset(rec, ' ', sizeof(rec));
+    rec[sizeof(rec) - 1] = '\n';
+    const std::size_t len = std::strlen(text);
+    std::memcpy(rec, text, len < sizeof(rec) - 1 ? len : sizeof(rec) - 1);
+    fsFileWrite(&s_ctor_file, 0, rec, sizeof(rec), FsWriteOption_Flush);
 }
+
+void __libc_init_array(void) {
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(&_start);
+    const std::size_t npre = static_cast<std::size_t>(__preinit_array_end - __preinit_array_start);
+    const std::size_t ninit = static_cast<std::size_t>(__init_array_end - __init_array_start);
+    char buf[96];
+
+    if (FsFileSystem* sdmc = fsdevGetDeviceFileSystem("sdmc")) {
+        const char* path = "/switch/dekopon/log/ctor.txt";
+        fsFsCreateDirectory(sdmc, "/switch");
+        fsFsCreateDirectory(sdmc, "/switch/dekopon");
+        fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
+        fsFsDeleteFile(sdmc, path);
+        if (R_SUCCEEDED(fsFsCreateFile(sdmc, path, SWITCH2_CTOR_RECORD_SIZE, 0)) &&
+            R_SUCCEEDED(fsFsOpenFile(sdmc, path, FsOpenMode_Write, &s_ctor_file))) {
+            s_ctor_file_open = true;
+        }
+    }
+
+    std::snprintf(buf, sizeof(buf), "00a ctor trace: preinit=%zu init=%zu file=%d", npre, ninit,
+                  s_ctor_file_open ? 1 : 0);
+    Switch2BootMark(buf);
+
+    for (std::size_t i = 0; i < npre; i++) {
+        std::snprintf(buf, sizeof(buf), "RUNNING preinit %zu/%zu off=0x%llx", i, npre,
+                      static_cast<unsigned long long>(
+                          reinterpret_cast<std::uintptr_t>(__preinit_array_start[i]) - base));
+        Switch2CtorRecord(buf);
+        __preinit_array_start[i]();
+    }
+    if (_init) {
+        Switch2CtorRecord("RUNNING _init");
+        _init();
+    }
+    for (std::size_t i = 0; i < ninit; i++) {
+        std::snprintf(buf, sizeof(buf), "RUNNING init %zu/%zu off=0x%llx", i, ninit,
+                      static_cast<unsigned long long>(
+                          reinterpret_cast<std::uintptr_t>(__init_array_start[i]) - base));
+        Switch2CtorRecord(buf);
+        __init_array_start[i]();
+    }
+
+    std::snprintf(buf, sizeof(buf), "ALL DONE init=%zu", ninit);
+    Switch2CtorRecord(buf);
+    if (s_ctor_file_open) {
+        fsFileClose(&s_ctor_file);
+        s_ctor_file_open = false;
+    }
+    Switch2BootMark("00c all global constructors done");
+}
+} // extern "C"
+
+namespace {
 #define SWITCH2_BOOT_MARK(stage) Switch2BootMark(stage)
 #else
 #define SWITCH2_BOOT_MARK(stage) ((void)0)
