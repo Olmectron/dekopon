@@ -470,8 +470,16 @@ void ShaderDiskCache::CacheFile::Append(CacheEntryType type, u64 id, std::span<c
         memcpy(out_data.data() + sizeof(header) + data_final.size(), &footer, sizeof(footer));
 
         file.WriteBytes(out_data.data(), out_data.size());
-        if (file.IsGood()) {
+        // A flush is a commit to the SD card and costs milliseconds. During a cache
+        // regeneration tens of thousands of entries are appended back to back, and flushing
+        // each one was most of the load time (over a minute for a big cache). Flush when the
+        // queue runs dry - which is every entry during normal play, as before - and at least
+        // every MAX_UNFLUSHED_APPENDS entries.
+        ++unflushed_appends;
+        if (file.IsGood() &&
+            (append_worker.PendingWork() <= 1 || unflushed_appends >= MAX_UNFLUSHED_APPENDS)) {
             file.Flush();
+            unflushed_appends = 0;
         }
     });
 }

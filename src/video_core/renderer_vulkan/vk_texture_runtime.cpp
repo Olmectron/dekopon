@@ -13,6 +13,7 @@
 #include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/rasterizer_cache/pixel_format.h"
 #include "video_core/rasterizer_cache/surface_params.h"
+#include "video_core/renderer_vulkan/vk_async_stats.h"
 #include "video_core/renderer_vulkan/vk_blit_helper.h"
 #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_stream_buffer.h"
@@ -1037,6 +1038,8 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
 
 void Surface::Download(const VideoCore::BufferTextureCopy& download,
                        const VideoCore::StagingData& staging) {
+    // Declared first so that it also covers the scheduler.Finish() below.
+    AsyncStats::ScopedTimer download_timer{AsyncStats::surface_download};
     SCOPE_EXIT({
         scheduler.Finish();
         runtime.download_buffer.Commit(staging.size);

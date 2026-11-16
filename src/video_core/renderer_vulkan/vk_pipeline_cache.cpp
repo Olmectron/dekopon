@@ -552,6 +552,10 @@ void PipelineCache::ReportAsyncStats() {
     const u64 skipped = AsyncStats::skipped_draws.exchange(0, std::memory_order_relaxed);
     const u64 software =
         AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
+    if (const auto downloads = take(AsyncStats::surface_download); downloads.count > 0) {
+        LOG_INFO(Render_Vulkan, "GPU readbacks: {}x {} ms max {} ms", downloads.count,
+                 downloads.total_ms, downloads.max_ms);
+    }
     const u64 inline_hits =
         AsyncStats::inline_pipeline_hits.exchange(0, std::memory_order_relaxed);
 #if defined(__SWITCH2__)

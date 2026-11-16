@@ -306,6 +306,9 @@ private:
         size_t cached_file_data_start{};
         std::vector<u8> cached_file_data;
         std::atomic<size_t> next_entry_id = SIZE_MAX;
+        // Entries written since the last flush. Only touched by the append worker.
+        static constexpr u32 MAX_UNFLUSHED_APPENDS = 512;
+        u32 unflushed_appends = 0;
         // Compresses and writes to the SD card.
         Common::ThreadWorker append_worker{
             1, "Disk Shader Cache Append Worker", {}, {Common::Horizon::CoreFrontend}};
