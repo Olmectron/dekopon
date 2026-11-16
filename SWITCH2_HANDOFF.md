@@ -3,7 +3,7 @@
 Everything needed to continue the Switch 2 port on another machine. All code is
 pushed to GitHub (see below); clone the fork and read this file.
 
-Last updated: 2026-11-16 (boots to menu).
+Last updated: 2026-11-16 (v0.9.1: games run, async shaders).
 
 ## TL;DR status
 
@@ -33,6 +33,47 @@ Last updated: 2026-11-16 (boots to menu).
    `__stack_chk_init` (last constructor, sets the canary) -> stack-protector
    abort right after the constructors. Fixed in `8a1d0d4`
    (`no_stack_protector`). Keep in mind for any code running around ctors.
+
+## Shader compilation on Switch 2 (async, v0.9.1) - current focus
+
+Games run (OoT3D, MM3D, Kirby: Planet Robobot tested by the user). Work moved to
+shader stutter. Data comes from `log/azahar_log.txt`: every 5 s while active the
+renderer logs `Compile stats: ...` (render-thread VS generation, shader compiles,
+pipeline builds, pipelines served inline from the driver cache, skipped draws,
+software-vertex draws) and `JIT publishes (kaiHEN IPC): ...`.
+
+- Device: NVK 26.2.2 (OunceVK), Vulkan 1.4, extended dynamic state + dynamic
+  blend + pipeline creation cache control all available; core mask 0x3f.
+- **Async Shader Compilation (Experimental) is on by default** on Switch 2.
+  Compiles run on the spare cores (3-5), 3 workers per queue. Reset All Settings
+  offers "Default" and "Default, no experimental async". Performance / Ultra
+  Performance presets are hidden on Switch 2 (they glitch).
+- Async mode, pipeline not ready: the draw is skipped, except (a) vertex shader
+  still compiling -> software vertex path, (b) driver already has the pipeline
+  cached -> bound at once on the render thread (`TryBuild` -> `Build(true)`).
+  (b) fixed constant flicker in Kirby, which keeps creating new VS *configs*
+  for shaders that already exist (pipelines are keyed by config hash).
+- Cache regeneration (shader generator sources or settings changed; the
+  version is an MD5 of the files listed in `CMakeModules/GenerateSCMRev.cmake`,
+  which includes `vk_shader_disk_cache.*` and `vk_pipeline_cache.*`) used to be
+  serial: 89 s for Kirby's 9000-VS cache. Now compiled on the shader workers.
+  Loading always shows a "Loading shaders" toast with progress.
+- Known / next:
+  - Majora's Mask drops to ~18 fps on zone changes with `other` (CPU) at 26 ms
+    and GPU at 1 ms - not shaders. Suspect: one kaiHEN IPC per JIT block
+    publish (`kaihenPublishJitAlias`); check the `JIT publishes` log line, then
+    batch with `kaihenJitPublishRanges` or coalesce per `Emit`.
+  - Real glitch-free async needs a fallback for fragment shaders / pipelines
+    that are genuinely new: an ubershader. `renderer_deko3d/shaders/
+    ubershader_fsh.glsl` + `FSConfigUniformData` (dk_shader.h) are a starting
+    point; pair it with the software vertex path so only a handful of
+    pipelines need precompiling.
+  - Kirby creates thousands of VS configs / a 94 MB driver pipeline cache:
+    key pipelines by SPIR-V id instead of config hash.
+- Releases: run the `dekopon-switch2` workflow manually with `release_tag`
+  (must equal `v` + `DEKOPON_VERSION`); the in-app updater reads
+  github.com/Olmectron/dekopon releases and needs the asset `dekopon.nro`.
+- Experimental work goes on branch `switch2-async-shaders` (CI builds it too).
 
 ## JIT on Switch 2 (kaiHEN) — read before touching JIT code
 
