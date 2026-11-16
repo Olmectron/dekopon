@@ -143,7 +143,15 @@ private:
 
     void WaitForCompileWorkers();
 
+    /// Waits for the compile workers while reporting progress through the load callback.
+    void WaitForCompileWorkers(const std::atomic_bool& stop_loading,
+                               const VideoCore::DiskResourceLoadCallback& callback);
+
+    /// Logs the compilation counters every few seconds while there is activity.
+    void ReportAsyncStats();
+
 private:
+    static constexpr auto ASYNC_REPORT_INTERVAL = std::chrono::seconds{5};
     static constexpr auto STALL_REPORT_INTERVAL = std::chrono::seconds{1};
     static constexpr auto MIN_REPORTED_STALL = std::chrono::milliseconds{100};
 
@@ -168,6 +176,7 @@ private:
     std::chrono::steady_clock::duration compile_stall{};
     std::chrono::steady_clock::time_point last_stall_report{std::chrono::steady_clock::now()};
     u32 compile_stall_count{};
+    std::chrono::steady_clock::time_point last_async_report{std::chrono::steady_clock::now()};
 
     std::array<u64, MAX_SHADER_STAGES> shader_hashes;
     std::array<Shader*, MAX_SHADER_STAGES> current_shaders;

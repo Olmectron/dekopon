@@ -140,6 +140,13 @@ public:
         });
     }
 
+    /// Number of queued or running tasks.
+    std::size_t PendingWork() const noexcept {
+        const std::size_t scheduled = work_scheduled.load();
+        const std::size_t done = work_done.load();
+        return scheduled > done ? scheduled - done : 0;
+    }
+
     const std::size_t NumWorkers() const noexcept {
         return threads.size();
     }

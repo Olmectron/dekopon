@@ -34,6 +34,9 @@ bool PinAsyncGpuThread();
 // Pins a Vulkan support thread.
 bool PinGraphicsSupportThread();
 
+// Returns the mask of cores the process may run on (bit i = core i), or 0 on failure.
+std::uint64_t GetAllowedCoreMask();
+
 // Returns the core the calling thread is pinned to, or -1 when it is not pinned.
 std::int32_t GetCurrentThreadCore();
 

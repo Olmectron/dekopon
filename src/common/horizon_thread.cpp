@@ -65,6 +65,14 @@ bool PinCurrentThreadAffinity(std::int32_t preferred_core, std::uint64_t affinit
     return R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, preferred_core, mask));
 }
 
+std::uint64_t GetAllowedCoreMask() {
+    u64 allowed_cores{};
+    if (R_FAILED(svcGetInfo(&allowed_cores, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0))) {
+        return 0;
+    }
+    return allowed_cores;
+}
+
 bool PinAsyncGpuThread() {
     return PinCurrentThread(CoreFrontend);
 }
@@ -91,6 +99,10 @@ std::uint64_t GetTotalMemorySize() {
 }
 
 #else
+
+std::uint64_t GetAllowedCoreMask() {
+    return 0;
+}
 
 bool PinCurrentThread(std::uint32_t) {
     return false;

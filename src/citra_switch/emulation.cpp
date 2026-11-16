@@ -285,9 +285,33 @@ void EmuThread(std::string path) {
         system.GPU().ApplyPerProgramSettings(program_id);
 
         // Load any cached disk shaders
+        // Always say so on screen: with a populated cache this can take many seconds, and
+        // until now it passed on a black screen. The message rides on the overlay toast,
+        // which is only drawn as part of a present, so present a frame for each update.
+        auto last_update = std::chrono::steady_clock::time_point{};
         system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
-            s_stop,
-            [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
+            s_stop, [&system, last_update](VideoCore::LoadCallbackStage stage,
+                                           std::size_t current, std::size_t total,
+                                           const std::string& name) mutable {
+                if (stage == VideoCore::LoadCallbackStage::Complete) {
+                    return;
+                }
+                const auto now = std::chrono::steady_clock::now();
+                if (now - last_update < std::chrono::milliseconds{100}) {
+                    return;
+                }
+                last_update = now;
+                std::string text = "Loading shaders";
+                if (!name.empty()) {
+                    text += ": " + name;
+                }
+                if (total > 0) {
+                    text += fmt::format(" {}/{}", current, total);
+                }
+                VideoCore::PostOverlayToast(text, 1500);
+                Core::PerfStats::game_frames_updated = true;
+                system.GPU().SwapBuffers();
+            });
     }
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);

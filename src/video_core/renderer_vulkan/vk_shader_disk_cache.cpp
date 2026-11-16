@@ -9,6 +9,7 @@
 #include "common/static_lru_cache.h"
 #include "common/zstd_compression.h"
 #include "video_core/overlay.h"
+#include "video_core/renderer_vulkan/vk_async_stats.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_disk_cache.h"
@@ -104,8 +105,12 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
 
         ExtraVSConfig extra_config = parent.CalcExtraConfig(config);
 
-        auto program =
-            Common::HashableString(GLSL::GenerateVertexShader(setup, config, extra_config));
+        Common::HashableString<> program;
+        {
+            AsyncStats::ScopedTimer timer{AsyncStats::vs_generate};
+            program = Common::HashableString(
+                GLSL::GenerateVertexShader(setup, config, extra_config));
+        }
 
         if (program.empty()) {
             LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
@@ -126,6 +131,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
             const vk::Device device = parent.instance.GetDevice();
             VideoCore::NotifyShaderCompileBegin();
             parent.shader_workers.QueueWork([device, &shader, this, spirv_id] {
+                AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
                 auto spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
                 AppendVSSPIRV(vs_cache, spirv, spirv_id);
                 shader.program.clear();
@@ -163,6 +169,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
 
         VideoCore::NotifyShaderCompileBegin();
         parent.shader_workers.QueueWork([fs_config, user, this, &shader, fs_config_hash]() {
+            AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
             std::vector<u32> spirv;
             const bool use_spirv = parent.profile.vk_use_spirv_generator;
             if (use_spirv && !fs_config.UsesSpirvIncompatibleConfig()) {
@@ -220,6 +227,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
 
             VideoCore::NotifyShaderCompileBegin();
             parent.shader_workers.QueueWork([gs_config, this, &shader, gs_config_hash]() {
+                AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
                 ExtraFixedGSConfig extra;
                 extra.use_clip_planes = parent.profile.has_clip_planes;
                 extra.separable_shader = true;

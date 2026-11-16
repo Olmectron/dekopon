@@ -9,6 +9,7 @@
 #include "common/microprofile.h"
 #include "video_core/overlay.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
+#include "video_core/renderer_vulkan/vk_async_stats.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_render_manager.h"
@@ -130,6 +131,7 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
 
 bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     MICROPROFILE_SCOPE(Vulkan_Pipeline);
+    AsyncStats::ScopedTimer timer{AsyncStats::pipeline_build};
 
     const u32 stride_alignment = instance.GetMinVertexStrideAlignment();
     std::array<vk::VertexInputBindingDescription, MAX_VERTEX_BINDINGS> bindings;

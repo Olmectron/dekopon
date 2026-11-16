@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <thread>
 #include <boost/container/static_vector.hpp>
 
 #include "common/common_paths.h"
@@ -15,6 +16,7 @@
 #include "core/loader/loader.h"
 #include "video_core/pica/shader_setup.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
+#include "video_core/renderer_vulkan/vk_async_stats.h"
 #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -57,7 +59,60 @@ AttribLoadFlags MakeAttribLoadFlag(Pica::PipelineRegs::VertexAttributeFormat for
     }
 }
 
+#if defined(__SWITCH2__)
+// Switch 2 leaves the process more cores than the three that the frontend, audio and the
+// guest JIT are pinned to. Shader and pipeline compiles go to those spare cores, several
+// at a time: compile latency is what turns into stutter (synchronous mode) or into
+// missing geometry (asynchronous mode).
+std::vector<std::uint32_t> GetSpareCores() {
+    const std::uint64_t allowed = Common::Horizon::GetAllowedCoreMask();
+    std::vector<std::uint32_t> cores;
+    for (std::uint32_t core = Common::Horizon::CoreEmu + 1; core < 64; ++core) {
+        if (allowed & (1ULL << core)) {
+            cores.push_back(core);
+        }
+    }
+    return cores;
+}
+
+constexpr std::size_t MAX_COMPILE_WORKERS = 4;
+#endif
+
+std::vector<std::uint32_t> GetShaderWorkerCores() {
+#if defined(__SWITCH2__)
+    if (auto cores = GetSpareCores(); !cores.empty()) {
+        return cores;
+    }
+#endif
+#ifdef __SWITCH__
+    return {Common::Horizon::CoreFrontend};
+#else
+    return {};
+#endif
+}
+
+std::vector<std::uint32_t> GetPipelineWorkerCores() {
+#if defined(__SWITCH2__)
+    if (auto cores = GetSpareCores(); !cores.empty()) {
+        // Start from the other end so one shader and one pipeline job land on different
+        // cores first.
+        std::reverse(cores.begin(), cores.end());
+        return cores;
+    }
+#endif
+#ifdef __SWITCH__
+    return {Common::Horizon::CoreAudio};
+#else
+    return {};
+#endif
+}
+
 std::size_t GetCompileWorkerCount() {
+#if defined(__SWITCH2__)
+    if (const std::size_t spare = GetSpareCores().size(); spare > 0) {
+        return std::min(spare, MAX_COMPILE_WORKERS);
+    }
+#endif
 #ifdef __SWITCH__
     // Horizon only grants cores 0-2, of which core 1 is audio and core 2 is the guest JIT.
     return 1;
@@ -106,12 +161,12 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
       pipeline_workers{num_worker_threads,
                        "Pipeline workers",
                        {},
-                       {Common::Horizon::CoreAudio},
+                       GetPipelineWorkerCores(),
                        GetCompileWorkerPriority(async_shader_compilation)},
       shader_workers{num_worker_threads,
                      "Shader workers",
                      {},
-                     {Common::Horizon::CoreFrontend},
+                     GetShaderWorkerCores(),
                      GetCompileWorkerPriority(async_shader_compilation)},
 #else
       pipeline_workers{num_worker_threads, "Pipeline workers"},
@@ -157,6 +212,16 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     }
 
     BuildLayout();
+
+#ifdef __SWITCH__
+    LOG_INFO(Render_Vulkan,
+             "Shader compilation: async={} workers={} per queue, allowed core mask={:#x}, "
+             "extended dynamic state={} dynamic blend={} pipeline cache control={}",
+             async_shader_compilation, num_worker_threads,
+             Common::Horizon::GetAllowedCoreMask(), instance.IsExtendedDynamicStateSupported(),
+             instance.IsDynamicBlendSupported(),
+             instance.IsPipelineCreationCacheControlSupported());
+#endif
 }
 
 void PipelineCache::BuildLayout() {
@@ -184,13 +249,39 @@ void PipelineCache::WaitForCompileWorkers() {
     pipeline_workers.WaitForRequests();
 }
 
+void PipelineCache::WaitForCompileWorkers(const std::atomic_bool& stop_loading,
+                                          const VideoCore::DiskResourceLoadCallback& callback) {
+    // Same wait, but reporting progress: building everything the disk cache queued is by
+    // far the longest part of a load, and it used to pass with nothing on screen.
+    const auto pending = [this] {
+        return shader_workers.PendingWork() + pipeline_workers.PendingWork();
+    };
+    const std::size_t total = pending();
+    const auto start = std::chrono::steady_clock::now();
+    if (callback && total > 0) {
+        for (std::size_t left = pending(); left > 0 && !stop_loading.load(); left = pending()) {
+            // Pipelines are queued as their shaders finish, so the count can grow.
+            const std::size_t shown_total = std::max(total, left);
+            callback(VideoCore::LoadCallbackStage::Build, shown_total - left, shown_total,
+                     "Building shaders");
+            std::this_thread::sleep_for(std::chrono::milliseconds{30});
+        }
+    }
+    WaitForCompileWorkers();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+    LOG_INFO(Render_Vulkan, "Waited {} ms for {} queued shader/pipeline builds ({} workers)",
+             ms, total, num_worker_threads);
+}
+
 void PipelineCache::LoadCache(const std::atomic_bool& stop_loading,
                               const VideoCore::DiskResourceLoadCallback& callback) {
     WaitForCompileWorkers();
     LoadDriverPipelineDiskCache(stop_loading, callback);
     LoadDiskCache(stop_loading, callback);
     if (!async_shader_compilation && !stop_loading.load()) {
-        WaitForCompileWorkers();
+        WaitForCompileWorkers(stop_loading, callback);
     }
 }
 
@@ -229,7 +320,7 @@ void PipelineCache::SwitchCache(u64 title_id, const std::atomic_bool& stop_loadi
     // Switch the disk shader cache after driver cache is switched
     SwitchDiskCache(title_id, stop_loading, callback);
     if (!async_shader_compilation && !stop_loading.load()) {
-        WaitForCompileWorkers();
+        WaitForCompileWorkers(stop_loading, callback);
     }
 }
 
@@ -430,8 +521,43 @@ void PipelineCache::WaitPipelineBuilt(GraphicsPipeline& pipeline) {
     compile_stall_count = 0;
 }
 
+void PipelineCache::ReportAsyncStats() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_async_report < ASYNC_REPORT_INTERVAL) {
+        return;
+    }
+    last_async_report = now;
+
+    const auto take = [](AsyncStats::Timed& timed) {
+        struct Sample {
+            u64 count, total_ms, max_ms;
+        };
+        return Sample{timed.count.exchange(0, std::memory_order_relaxed),
+                      timed.micros.exchange(0, std::memory_order_relaxed) / 1000,
+                      timed.max_micros.exchange(0, std::memory_order_relaxed) / 1000};
+    };
+    const auto vs_gen = take(AsyncStats::vs_generate);
+    const auto shaders = take(AsyncStats::shader_compile);
+    const auto pipelines = take(AsyncStats::pipeline_build);
+    const u64 skipped = AsyncStats::skipped_draws.exchange(0, std::memory_order_relaxed);
+    const u64 software =
+        AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
+    if (vs_gen.count == 0 && shaders.count == 0 && pipelines.count == 0 && skipped == 0 &&
+        software == 0) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Compile stats: VS generate (render thread) {}x {} ms max {} ms | shader "
+             "compiles {}x {} ms max {} ms | pipeline builds {}x {} ms max {} ms | draws "
+             "skipped {} | draws via software vertex path {}",
+             vs_gen.count, vs_gen.total_ms, vs_gen.max_ms, shaders.count, shaders.total_ms,
+             shaders.max_ms, pipelines.count, pipelines.total_ms, pipelines.max_ms, skipped,
+             software);
+}
+
 bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {
     MICROPROFILE_SCOPE(Vulkan_Bind);
+    ReportAsyncStats();
 
     for (u32 i = 0; i < MAX_SHADER_STAGES; i++) {
         info.state.shader_ids[i] = shader_hashes[i];
@@ -440,6 +566,7 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {
     GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
     if (!pipeline->IsDone()) {
         if (!pipeline->TryBuild(wait_built)) {
+            AsyncStats::skipped_draws.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
         WaitPipelineBuilt(*pipeline);
@@ -628,6 +755,17 @@ bool PipelineCache::UseProgrammableVertexShader(const Pica::RegsInternal& regs,
                                                 const VertexLayout& layout) {
 
     auto res = curr_disk_cache->UseProgrammableVertexShader(regs, setup, layout);
+
+#if defined(__SWITCH2__)
+    // Asynchronous mode: while this vertex shader is still compiling, decline the
+    // accelerated draw. The caller then runs the vertex shader on the CPU and draws the
+    // result with the trivial vertex shader, so the geometry is still drawn (correctly)
+    // instead of being dropped until the compile finishes.
+    if (async_shader_compilation && res.has_value() && !(*res).second->IsDone()) {
+        AsyncStats::software_vertex_draws.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+#endif
 
     if (res.has_value()) {
         current_shaders[ProgramType::VS] = (*res).second;
