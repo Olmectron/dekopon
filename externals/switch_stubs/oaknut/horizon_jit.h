@@ -22,4 +22,11 @@ JitAllocation JitAllocate(std::size_t size);
 // Releases an allocation previously returned by JitAllocate.
 void JitFree(void* handle);
 
+#if defined(__SWITCH2__)
+// Switch 2 (kaiHEN): `rw` is a staging buffer, not an alias of `rx`. Copies the staged
+// bytes in [begin, end) to the executable mapping and invalidates its instruction cache.
+// Returns false if the range is not inside a JIT staging buffer.
+bool PublishStaged(void* begin, void* end);
+#endif
+
 } // namespace oaknut::horizon

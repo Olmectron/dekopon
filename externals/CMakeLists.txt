@@ -129,6 +129,15 @@ if ("arm64" IN_LIST ARCHITECTURE)
             switch_stubs/oaknut/horizon_jit.h
         )
         target_include_directories(oaknut_horizon_jit PUBLIC switch_stubs)
+        if (NINTENDO_SWITCH2)
+            # Switch 2: libounce's Jit API only works with kaiHEN's provider linked in
+            # (-lkaihen names the object kaihen-jit.o; see kaihen/libkaihen/JIT.md).
+            # Without it jitCreate fails and the first oaknut::CodeBlock - a static in
+            # dynarmic's spin_lock_arm64.cpp - throws std::bad_alloc before main.
+            target_include_directories(oaknut_horizon_jit PRIVATE "${OUNCE_PORTLIBS}/include")
+            target_link_directories(oaknut_horizon_jit PUBLIC "${OUNCE_PORTLIBS}/lib")
+            target_link_libraries(oaknut_horizon_jit PUBLIC kaihen)
+        endif()
         target_include_directories(oaknut INTERFACE
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/switch_stubs>)
         # Since LTO is disabled, we need to propagate the libnx JIT shim to every oaknut consumer

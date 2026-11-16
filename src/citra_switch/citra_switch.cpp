@@ -34,6 +34,9 @@ extern "C" {
 // before main, before any SD folder is created — when the loader did not grant
 // it, which matches dekopon exiting instantly under kaiHEN/OunceShell.
 u32 __nx_applet_type = AppletType_Default;
+// Defined by externals/switch_stubs/oaknut/horizon_jit.cpp.
+extern unsigned int g_oaknut_horizon_jit_last_rc;
+extern unsigned int g_oaknut_horizon_jit_failures;
 #else
 u32 __nx_applet_type = AppletType_Application;
 #endif
@@ -99,7 +102,9 @@ void Switch2BootMark(const char* stage) {
         try {
             std::rethrow_exception(e);
         } catch (const std::exception& ex) {
-            std::snprintf(msg, sizeof(msg), "TERMINATE: %s", ex.what());
+            std::snprintf(msg, sizeof(msg), "TERMINATE: %s (jit failures=%u last rc=0x%x)",
+                          ex.what(), g_oaknut_horizon_jit_failures,
+                          g_oaknut_horizon_jit_last_rc);
             Switch2BootMark(msg);
             std::_Exit(42);
         } catch (...) {
@@ -139,9 +144,11 @@ void userAppInit(void) {
     const u32 hos = hosversionGet();
     char buf[200];
     std::snprintf(buf, sizeof(buf),
-                  "env: applet=%d nso=%d heapovr=%d heap=%lluMB total=%lluMB used=%lluMB hos=%u.%u.%u",
+                  "env: applet=%d nso=%d heapovr=%lluMB heapleft=%lluMB total=%lluMB used=%lluMB "
+                  "hos=%u.%u.%u",
                   static_cast<int>(appletGetAppletType()), envIsNso() ? 1 : 0,
-                  envHasHeapOverride() ? 1 : 0,
+                  static_cast<unsigned long long>(
+                      envHasHeapOverride() ? envGetHeapOverrideSize() >> 20 : 0),
                   static_cast<unsigned long long>((fake_heap_end - fake_heap_start) >> 20),
                   static_cast<unsigned long long>(total >> 20),
                   static_cast<unsigned long long>(used >> 20),

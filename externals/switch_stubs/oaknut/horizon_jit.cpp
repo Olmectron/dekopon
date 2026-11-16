@@ -14,12 +14,29 @@
 
 #include <oaknut/horizon_jit.h>
 
+#if defined(__SWITCH2__)
+// kaiHEN's JIT provider for libounce's Jit API (linked with -lkaihen).
+#include <kaihen.h>
+#endif
+
+// Last failing result code and number of failures of the JIT calls below, for
+// the frontend's startup diagnostics (stderr goes nowhere on the console).
+extern "C" {
+unsigned int g_oaknut_horizon_jit_last_rc = 0;
+unsigned int g_oaknut_horizon_jit_failures = 0;
+}
+
 // Horizon only grants a process a handful of JIT objects, far fewer than there are PICA
 // shaders in a game. This leads to crashes when objects are exhausted. Instead of giving
 // each shader their own object, make them each share larger objects.
 
 namespace oaknut::horizon {
 namespace {
+
+void NoteFailure(Result rc) {
+    g_oaknut_horizon_jit_last_rc = rc;
+    ++g_oaknut_horizon_jit_failures;
+}
 
 // Allocations at or above this get a dedicated Jit.
 constexpr std::size_t DEDICATED_THRESHOLD = 1024 * 1024;
@@ -78,14 +95,24 @@ Pool& GetPool() {
 }
 
 bool CreateJit(Jit* jit, std::size_t size) {
-    if (R_FAILED(jitCreate(jit, size))) {
+    if (const Result rc = jitCreate(jit, size); R_FAILED(rc)) {
+        NoteFailure(rc);
         // Most likely opened in applet mode.
         std::fprintf(stderr,
                      "oaknut: jitCreate(%zu) failed.\n",
                      size);
         return false;
     }
-    if (R_FAILED(jitTransitionToExecutable(jit))) {
+#if defined(__SWITCH2__)
+    // kaiHEN's persistent alias backend: RX is already mapped by jitCreate and
+    // stays mapped; rw_addr is a staging buffer, not an alias of RX. Nothing to
+    // transition - staged bytes are published per range (see PublishStaged).
+    if (jit->rw_addr != jit->src_addr) {
+        return true;
+    }
+#endif
+    if (const Result rc = jitTransitionToExecutable(jit); R_FAILED(rc)) {
+        NoteFailure(rc);
         std::fprintf(stderr, "oaknut: jitTransitionToExecutable failed.\n");
         jitClose(jit);
         return false;
@@ -172,7 +199,52 @@ void CloseRemainingJits() {
     std::atexit(CloseRemainingJits);
 }
 
+#if defined(__SWITCH2__)
+/// If [begin, end) lies in the staging buffer of `jit`, copies it to the
+/// executable mapping through kaiHEN and returns true.
+bool PublishStagedIn(Jit& jit, std::uint8_t* begin, std::uint8_t* end) {
+    auto* const staging = static_cast<std::uint8_t*>(jit.rw_addr);
+    if (jit.rw_addr == jit.src_addr || begin < staging || end > staging + jit.size) {
+        return false;
+    }
+    const std::size_t offset = static_cast<std::size_t>(begin - staging);
+    const std::size_t size = static_cast<std::size_t>(end - begin);
+    const Result rc = kaihenPublishJitAlias(&jit, offset, begin, size);
+    if (R_FAILED(rc)) {
+        NoteFailure(rc);
+        return true;
+    }
+    armICacheInvalidate(static_cast<std::uint8_t*>(jit.rx_addr) + offset, size);
+    return true;
+}
+#endif
+
 } // Anonymous namespace
+
+#if defined(__SWITCH2__)
+bool PublishStaged(void* begin, void* end) {
+    if (live_pool == nullptr) {
+        return false;
+    }
+    auto* const b = static_cast<std::uint8_t*>(begin);
+    auto* const e = static_cast<std::uint8_t*>(end);
+    std::lock_guard lock{live_pool->mutex};
+    if (live_pool->closed) {
+        return false;
+    }
+    for (auto& chunk : live_pool->chunks) {
+        if (PublishStagedIn(chunk->jit, b, e)) {
+            return true;
+        }
+    }
+    for (auto& jit : live_pool->dedicated) {
+        if (PublishStagedIn(*jit, b, e)) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 JitAllocation JitAllocate(std::size_t size) {
     if (size == 0) {
@@ -244,3 +316,26 @@ void JitFree(void* handle) {
 }
 
 } // namespace oaknut::horizon
+
+#if defined(__SWITCH2__)
+// Switch 2 / kaiHEN: generated code is written to a staging buffer and only
+// reaches the executable mapping when it is published (libkaihen/JIT.md), unlike
+// Switch 1 where RW and RX alias the same pages. Every writer already ends with
+// oaknut::CodeBlock::invalidate(), which calls __builtin___clear_cache() on the
+// RW range and then on the RX range, so the publication point is hooked here by
+// replacing libgcc's __clear_cache (what the builtin calls on aarch64): a range
+// inside a JIT staging buffer is published; anything else gets the usual cache
+// maintenance. This keeps the oaknut and dynarmic submodules unmodified.
+extern "C" void __clear_cache(void* begin, void* end) {
+    if (end <= begin) {
+        return;
+    }
+    if (oaknut::horizon::PublishStaged(begin, end)) {
+        return;
+    }
+    const std::size_t size =
+        static_cast<std::size_t>(static_cast<char*>(end) - static_cast<char*>(begin));
+    armDCacheFlush(begin, size);
+    armICacheInvalidate(begin, size);
+}
+#endif
