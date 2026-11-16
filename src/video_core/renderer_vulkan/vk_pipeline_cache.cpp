@@ -285,6 +285,14 @@ void PipelineCache::LoadCache(const std::atomic_bool& stop_loading,
     }
 }
 
+void PipelineCache::SaveCache(const VideoCore::DiskResourceLoadCallback& callback) {
+    // Let running compiles land in the driver cache first, then write it out. The destructor
+    // saves too, but by then nothing can be shown on screen; after this it finds the cache
+    // unchanged and skips the write.
+    WaitForCompileWorkers();
+    SaveDriverPipelineDiskCache(callback);
+}
+
 void PipelineCache::SwitchCache(u64 title_id, const std::atomic_bool& stop_loading,
                                 const VideoCore::DiskResourceLoadCallback& callback) {
     if (GetProgramID() == title_id) {

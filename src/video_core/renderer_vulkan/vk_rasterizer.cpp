@@ -170,11 +170,7 @@ void RasterizerVulkan::TickFrame() {
 }
 
 void RasterizerVulkan::SaveDiskResources(const VideoCore::DiskResourceLoadCallback& callback) {
-    // Let running compiles land in the driver cache first, then write it out. The
-    // PipelineCache destructor saves too, but by then nothing can be shown on screen;
-    // after this call it finds the cache unchanged and skips the write.
-    pipeline_cache.WaitForCompileWorkers();
-    pipeline_cache.SaveDriverPipelineDiskCache(callback);
+    pipeline_cache.SaveCache(callback);
 }
 
 void RasterizerVulkan::LoadDefaultDiskResources(

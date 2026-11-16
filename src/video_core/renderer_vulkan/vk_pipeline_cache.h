@@ -63,6 +63,10 @@ public:
     void LoadCache(const std::atomic_bool& stop_loading = std::atomic_bool{false},
                    const VideoCore::DiskResourceLoadCallback& callback = {});
 
+    /// Waits for the compiles in flight and writes the driver pipeline cache to disk,
+    /// reporting progress. Called when a game is closed, while frames can still be shown.
+    void SaveCache(const VideoCore::DiskResourceLoadCallback& callback = {});
+
     /// Switches the driver pipeline cache and the shader disk cache to the specified title
     void SwitchCache(u64 title_id, const std::atomic_bool& stop_loading = std::atomic_bool{false},
                      const VideoCore::DiskResourceLoadCallback& callback = {});
