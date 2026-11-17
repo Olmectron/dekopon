@@ -3,7 +3,7 @@
 Everything needed to continue the Switch 2 port on another machine. All code is
 pushed to GitHub (see below); clone the fork and read this file.
 
-Last updated: 2026-11-16 (v0.9.1: games run, async shaders).
+Last updated: 2026-11-17 (0.9.3 wip: GPU read-backs fixed, GameShare prototype).
 
 ## TL;DR status
 
@@ -74,6 +74,59 @@ software-vertex draws) and `JIT publishes (kaiHEN IPC): ...`.
   (must equal `v` + `DEKOPON_VERSION`); the in-app updater reads
   github.com/Olmectron/dekopon releases and needs the asset `dekopon.nro`.
 - Experimental work goes on branch `switch2-async-shaders` (CI builds it too).
+
+## GPU read-backs on Switch 2 (the Majora's Mask "sun" slowdown) - FIXED, confirmed on console
+
+**Symptom.** Majora's Mask 3D dropped from 30 to ~18 fps whenever the sun existed in the
+scene and the camera faced where it is (visible or not, even below the horizon at night),
+and during day/night transitions in Clock Town. Never in rain or on the final day (no sun).
+Independent of resolution. Same on Switch 1.
+
+**What the game does.** While the sun exists it reads the depth buffer back every frame (its
+occlusion test for the sun / lens flare): one read-back per frame.
+
+**Root cause.** Switch 2's driver (NVK / OunceVK) exposes **no host-visible memory type that is
+also CPU-cached**. The download `StreamBuffer` asks for `HostVisible | HostCoherent |
+HostCached`, falls back to `DeviceLocal | HostVisible | HostCoherent`, and ends up on an
+uncached mapping. Reading from it is extremely slow: the `memcpy` of one depth buffer from the
+download buffer into guest memory (`EncodeTexture` -> `LinearCopy`) took **~37 ms**.
+
+**Fix (commit `6bec86e`, `vk_stream_buffer.cpp`).** When the download buffer cannot get a cached
+memory type, back it with ordinary memory: `aligned_alloc` + import through
+`VK_EXT_external_memory_host` (`StreamBuffer::TryCreateHostBacked`), the same technique the
+screenshot path already used (`TryRenderScreenshotWithHostMemory`). The GPU then writes
+straight into normal RAM and the copy costs nothing measurable. Log line to look for at
+start-up: `Created Download buffer with size 16384 KiB (imported host memory)`.
+Falls back to the old behaviour if the extension is missing or the import fails.
+
+**How it was found (keep this method).** Three fixes were written from deduction and all three
+missed. What worked was timing the pieces: `VideoCore::CacheStats` (`cache_stats.h`) and the
+`Guest reads of GPU-cached memory ... flushes that reached the rasterizer: N ms total = wait +
+download + encode + rest` log line (every 5 s, from `PipelineCache::ReportAsyncStats`). In 5 s
+looking at the sun: 95 flushes, 3497 ms total, wait 0, download 0, **encode 3496 ms**.
+Measure before changing anything in this path.
+
+**Also in the tree from that investigation, and still active:**
+
+- *Read-backs served one frame late* (`RasterizerCache::DownloadSurface`, `__SWITCH2__`): when
+  the guest reads the same region on 3 consecutive frames, it gets the copy recorded on the
+  previous frame and a new copy is recorded, instead of `scheduler.Finish()` (6-10 ms on this
+  driver). Only for plain guest reads (`FlushRegion` without a target surface). **Trade-off:
+  the guest sees that region one frame late.** Not the fix for the sun (the sun was the slow
+  memcpy); it saves the Finish wait. If a game misbehaves with per-frame read-backs, this is
+  the first thing to disable (`STREAK_TO_DELAY`), at a cost of ~6-10 ms per such frame.
+- *Clean-range fast path* (`GPU::FlushRegion`, sync GPU only): every guest read of a
+  rasterizer-cached page calls into the cache even when nothing is dirty; the range the last
+  flush left clean is remembered together with the cache's dirty generation and those reads
+  return at once. MM3D does ~180,000 such reads per second all the time. No accuracy trade-off.
+- The user's configuration has **Async GPU off** (`Renderer_AsyncGPU: false`); anything that
+  only acts on the GPU-thread path does not run for them. A queued-flush variant for async
+  GPU was written, never ran, and was reverted.
+
+**Dead ends, so nobody repeats them:** small CPU writes / "Skip CPU Write" (counted: zero in
+the slow periods); the GPU wait in `Surface::Download` (removed, no change); syncing with the
+GPU thread (Async GPU is off); the number of guest reads (same when fast); JIT recompilation
+(no publishes in the slow periods).
 
 ## JIT on Switch 2 (kaiHEN) — read before touching JIT code
 
