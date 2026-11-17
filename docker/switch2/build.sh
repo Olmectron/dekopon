@@ -19,6 +19,16 @@ echo ">>> Submodules (the Switch 2 build does not use nxvk) ..."
 git config --global --add safe.directory /src 2>/dev/null || true
 git submodule update --init --recursive
 
+# Local changes to submodules we do not own, applied once (skipped when already applied).
+for patch in docker/switch2/patches/dynarmic-*.patch; do
+  if git -C externals/dynarmic apply --reverse --check "/src/$patch" 2>/dev/null; then
+    echo ">>> $patch already applied"
+  else
+    echo ">>> Applying $patch"
+    git -C externals/dynarmic apply "/src/$patch"
+  fi
+done
+
 echo ">>> Sourcing switch2vars.sh ..."
 # shellcheck disable=SC1090,SC1091
 source "$DEVKITPRO/switch2vars.sh"

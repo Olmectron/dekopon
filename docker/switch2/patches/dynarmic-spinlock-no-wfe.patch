@@ -1,0 +1,34 @@
+diff --git a/src/dynarmic/common/spin_lock_arm64.cpp b/src/dynarmic/common/spin_lock_arm64.cpp
+index 817ec51..0598793 100644
+--- a/src/dynarmic/common/spin_lock_arm64.cpp
++++ b/src/dynarmic/common/spin_lock_arm64.cpp
+@@ -18,6 +18,21 @@ using Backend::Arm64::Wscratch1;
+ using namespace oaknut::util;
+ 
+ void EmitSpinLockLock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
++#if defined(__SWITCH2__)
++    // No SEVL/WFE here: on Switch 2 a WFE from userland costs on the order of 200 ns (it
++    // appears to trap), and every guest LDREX/STREX takes this lock twice. A game that leans
++    // on atomics (Majora's Mask 3D in the Sheikah stone's visions list: ~170 000 pairs per
++    // frame) dropped to 30% speed because of it. The lock is held for a few instructions,
++    // so spinning is the right wait anyway.
++    oaknut::Label loop;
++
++    code.MOV(Wscratch1, 1);
++    code.l(loop);
++    code.LDAXR(Wscratch0, ptr);
++    code.CBNZ(Wscratch0, loop);
++    code.STXR(Wscratch0, Wscratch1, ptr);
++    code.CBNZ(Wscratch0, loop);
++#else
+     oaknut::Label start, loop;
+ 
+     code.MOV(Wscratch1, 1);
+@@ -29,6 +44,7 @@ void EmitSpinLockLock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
+     code.CBNZ(Wscratch0, start);
+     code.STXR(Wscratch0, Wscratch1, ptr);
+     code.CBNZ(Wscratch0, loop);
++#endif
+ }
+ 
+ void EmitSpinLockUnlock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
