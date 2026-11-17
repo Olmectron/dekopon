@@ -184,36 +184,7 @@ void GPU::SetInterruptHandler(Service::GSP::InterruptHandler handler) {
 }
 
 // The CPU is about to read what the GPU produced, so the queue has to drain either way.
-//
-// Switch 2: except when the guest does this every frame. Majora's Mask 3D reads the depth
-// buffer at the sun's position on every frame the sun exists (its occlusion test), and each
-// read stops the emulation thread until the GPU thread has caught up with the whole frame:
-// about 22 ms, which turns 30 fps into 18. Once a region has been read on several frames in
-// a row, queue the flush behind the commands already submitted and let the guest carry on;
-// it reads what the flush queued on the previous frame left in memory, i.e. the picture
-// one frame late.
 void GPU::FlushRegion(PAddr addr, u32 size) {
-#if defined(__SWITCH2__)
-    if (ShouldUseAsync()) {
-        constexpr u32 STREAK_TO_QUEUE = 3;
-        auto& hot = impl->hot_readbacks[addr >> 20];
-        const u64 frame = impl->frame_counter;
-        if (hot.last_frame == frame) {
-            if (hot.queued_this_frame) {
-                return;
-            }
-        } else {
-            const bool consecutive = hot.last_frame != 0 && frame - hot.last_frame <= 2;
-            hot.streak = consecutive ? hot.streak + 1 : 0;
-            hot.last_frame = frame;
-            hot.queued_this_frame = hot.streak >= STREAK_TO_QUEUE;
-            if (hot.queued_this_frame) {
-                QueueAsync(FlushRegionCommand{addr, size});
-                return;
-            }
-        }
-    }
-#endif
     SyncGpuThread();
     impl->rasterizer->FlushRegion(addr, size);
 }
@@ -266,7 +237,6 @@ void GPU::WaitIdle() {
 }
 
 void GPU::SwapBuffers() {
-    ++impl->frame_counter;
     if (ShouldUseAsync()) {
         // Cap the pipeline at one frame in flight so input latency and queue depth stay bounded.
         impl->gpu_thread->WaitForFence(impl->last_swap_fence);
@@ -973,8 +943,6 @@ void GPU::ProcessCommand(const GPUCommand& command, std::span<const u8> payload)
                 impl->pica.regs_lcd.color_fill_bottom = data.fill;
             } else if constexpr (std::is_same_v<T, InvalidateRegionCommand>) {
                 impl->rasterizer->InvalidateRegion(data.address, data.size);
-            } else if constexpr (std::is_same_v<T, FlushRegionCommand>) {
-                impl->rasterizer->FlushRegion(data.address, data.size);
             } else if constexpr (std::is_same_v<T, AccurateMulCommand>) {
                 impl->rasterizer->SetAccurateMul(data.enabled);
             } else if constexpr (std::is_same_v<T, RightEyeCommand>) {
