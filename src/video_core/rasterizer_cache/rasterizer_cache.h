@@ -1212,7 +1212,7 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
         write_to_guest(staging.mapped);
     };
 
-#if defined(__SWITCH2__)
+#if defined(__SWITCH__)
     // A download waits for the GPU to finish everything submitted so far: about 10 ms on
     // Switch 2 whatever the size. A game that reads a surface back every frame - Majora's
     // Mask 3D tests the depth buffer at the sun's position whenever the sun is up - then
