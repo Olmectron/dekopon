@@ -129,6 +129,8 @@ struct Quad {
 /// Library options: the reflections in the floor, and the hovering of the games.
 inline bool g_shelf_reflections = true;
 inline bool g_shelf_floating = true;
+/// Covers stand as cases, with a side to them.
+inline bool g_shelf_cases = true;
 
 /// Draws the part of `img` between `u0` and `u1` (0..1 across the picture) into `q`.
 /// `shade` moves the picture towards `shade_to` (0 = as is, 1 = that colour). With `mirror`
@@ -558,6 +560,47 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
             DrawTextBack(c, font, item, static_cast<int>(q.x0), static_cast<int>(q.top0),
                          static_cast<int>(q.x1 - q.x0), static_cast<int>(q.h0));
             return;
+        }
+        if (g_shelf_cases && turn <= 0.0f) {
+            // A case, not a picture: the side that the angle shows. The tall edge is the
+            // one nearer the eye, so the side beyond it is in view; seen square on, a sliver
+            // of the spine keeps it a box.
+            static Image plastic;
+            if (plastic.Empty()) {
+                plastic.w = plastic.h = 2;
+                plastic.px.assign(4, MakeColor(226, 229, 234) | 0xFF000000u);
+            }
+            const float depth = case_h * 0.085f;
+            const float tall = std::max(q.h0, q.h1);
+            const float tilt = tall > 1.0f ? std::abs(q.h0 - q.h1) / tall : 0.0f;
+            const float turned = std::min(1.0f, tilt * 5.0f);
+            const bool right_near = q.h1 > q.h0;
+            const float left_w = depth * (right_near ? 0.3f * (1.0f - std::min(1.0f, tilt * 12.0f))
+                                                     : std::max(0.3f, turned));
+            const float right_w = right_near ? depth * turned : 0.0f;
+            const float side_shade = std::min(1.0f, p.shade + 0.22f);
+            const auto side = [&](float x_outer, float x_inner, float h_inner, bool spine) {
+                Quad s;
+                const bool outer_left = x_outer < x_inner;
+                const float h_outer = h_inner * (1.0f - 0.07f * std::abs(x_outer - x_inner) / depth);
+                s.x0 = outer_left ? x_outer : x_inner;
+                s.x1 = outer_left ? x_inner : x_outer;
+                s.h0 = outer_left ? h_outer : h_inner;
+                s.h1 = outer_left ? h_inner : h_outer;
+                s.top0 = floor - gap - s.h0;
+                s.top1 = floor - gap - s.h1;
+                const bool art = spine && item.full_wrap;
+                const Image& img = art ? *item.cover : plastic;
+                const float su0 = art ? kWrapFace : 0.0f, su1 = art ? 1.0f - kWrapFace : 1.0f;
+                BlitQuad(c, img, s, su0, su1, side_shade, shade_to, true, false, gap);
+                BlitQuad(c, img, s, su0, su1, side_shade, shade_to, false, false);
+            };
+            if (left_w >= 1.0f) {
+                side(q.x0 - left_w, q.x0, q.h0, true);
+            }
+            if (right_w >= 1.0f) {
+                side(q.x1 + right_w, q.x1, q.h1, false);
+            }
         }
         BlitQuad(c, *item.cover, q, u0, u1, p.shade, shade_to, true, false, gap);
         BlitQuad(c, *item.cover, q, u0, u1, p.shade, shade_to, false, selected);

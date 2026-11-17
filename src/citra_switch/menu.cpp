@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "citra_switch/config.h"
+#include "citra_switch/cover_share.h"
 #include "citra_switch/covers.h"
 #include "citra_switch/game_share.h"
 #include "citra_switch/input.h"
@@ -904,6 +905,11 @@ public:
             held = padGetButtons(&pad);
             PumpUpdater();
 
+            if (const int serial = CoverShare::Serial(); serial != cover_share_serial) {
+                cover_share_serial = serial;
+                ShowNotice(CoverShare::Detail(), CoverShare::Failed());
+            }
+
             if (!install_active && ConsumeUsbStorageChange()) {
                 HandleUsbStorageChange();
             }
@@ -1064,6 +1070,7 @@ public:
         }
         // Not while a game runs: it would compete for the network and the SD card.
         StopCoverDownload();
+        CoverShare::Stop();
         // The emulator takes the audio output from here.
         UiSound::Exit();
         if (fb_ready) {
@@ -1245,14 +1252,23 @@ private:
     }
 
     // Asks for the covers the library is missing. Quietly does nothing without internet access.
-    void RequestCovers(bool manual = false) {
+    void RequestCovers(bool manual = false, bool overwrite = false) {
+        StartCoverDownload(CoverRequests(), manual, overwrite);
+        if (manual) {
+            cover_download_seen = IsCoverDownloadActive();
+            ShowNotice(IsCoverDownloadActive() ? "Downloading covers..." : CoverDownloadDetail(),
+                       false);
+        }
+    }
+
+    std::vector<CoverRequest> CoverRequests() const {
         std::vector<CoverRequest> requests;
         for (const GameEntry& game : games) {
             if (!game.game_code.empty()) {
                 requests.push_back({game.game_code});
             }
         }
-        StartCoverDownload(std::move(requests), manual);
+        return requests;
     }
 
     bool HandleShelf(u64 down, u32 nav, MenuResult& result) {
@@ -1463,7 +1479,9 @@ private:
         const auto get = [&](int i) {
             const GameEntry& game = games[filtered[i]];
             ShelfItem item;
-            if (auto art = GetCover(game.game_code, game.program_id, budget)) {
+            auto art = IsCoversShown() ? GetCover(game.game_code, game.program_id, budget)
+                                       : nullptr;
+            if (art) {
                 item.cover = &art->image;
                 item.full_wrap = art->full_wrap;
                 frame_covers.push_back(std::move(art));
@@ -1594,6 +1612,8 @@ private:
     // Settings tab.
     Category settings_page{Category::General};
     bool cover_download_seen{}; // A cover download was running the last time we looked.
+    int cover_share_serial{};   // The last cover transfer news that was shown.
+    bool usb_volume_seen{};     // A USB drive has been mounted during this run.
     std::vector<SettingsRow> settings_rows;
     // Kept per page so switching back lands where the cursor was left.
     std::array<int, NumCategories> settings_sel{};
@@ -1724,10 +1744,18 @@ private:
 
         const std::vector<UsbVolume> volumes = GetUsbVolumes();
         if (volumes.empty()) {
-            ShowNotice("USB storage disconnected", false);
+            // Only worth saying when a drive was in use: one was mounted earlier and a
+            // games folder on it is set up (Folders). The first check after start-up
+            // reports "no drive" too, which is not news.
+            if (usb_volume_seen && !paths.roms_dir_2.empty()) {
+                ShowNotice("USB storage disconnected", false);
+            }
+            usb_volume_seen = false;
         } else if (volumes.size() == 1) {
+            usb_volume_seen = true;
             ShowNotice(volumes.front().label + " mounted as " + volumes.front().root, false);
         } else {
+            usb_volume_seen = true;
             ShowNotice(std::to_string(volumes.size()) + " USB volumes mounted", false);
         }
 
@@ -2277,6 +2305,82 @@ private:
         }
     }
 
+    // Download Covers Now. Covers already on the card are only fetched again when asked:
+    // after a change of quality, or when nothing is missing and the button is pressed anyway.
+    void OpenCoverDownload() {
+        const std::vector<CoverRequest> requests = CoverRequests();
+        const int present = CountCoversPresent(requests);
+        const int missing = CountCoversMissing(requests);
+        const int stored = CoverStoredQuality();
+        const bool other_quality = stored >= 0 && stored != GetCoverQuality();
+        if (present == 0 || (missing > 0 && !other_quality)) {
+            RequestCovers(true);
+            return;
+        }
+        const char* quality = GetCoverQuality() != 0 ? "High" : "Standard";
+        ConfirmPrompt prompt{
+            "Download the covers again?",
+            {other_quality ? std::string{"The covers on the card were downloaded in "} +
+                                 (stored != 0 ? "High" : "Standard") + " quality; the setting is now " +
+                                 quality + "."
+                           : std::string{"Every game already has a cover."},
+             std::to_string(present) + (present == 1 ? " cover" : " covers") +
+                 " on the card will be overwritten with " + quality + " quality ones.",
+             "Covers GameTDB does not have are left as they are."},
+            "",
+            "Overwrite",
+            [this] { RequestCovers(true, true); },
+            {},
+        };
+        if (missing > 0) {
+            prompt.on_cancel = [this] { RequestCovers(true); };
+            prompt.cancel_label = "Only the missing";
+        }
+        confirm = std::move(prompt);
+    }
+
+    // Send Covers / Receive Covers: says what is about to happen, or offers to stop.
+    void OpenCoverShare(bool send) {
+        if (CoverShare::IsActive()) {
+            confirm = ConfirmPrompt{
+                "Stop the cover transfer?",
+                {CoverShare::IsSending() ? "This console is sending covers."
+                                         : "This console is waiting for covers.",
+                 "Covers that have already arrived are kept."},
+                "",
+                "Stop",
+                [] { CoverShare::Stop(); },
+                {},
+            };
+            return;
+        }
+        if (send) {
+            confirm = ConfirmPrompt{
+                "Send covers to another console",
+                {"On the other console, choose Receive Covers first.",
+                 "If both consoles are on the same network they meet there. Otherwise this",
+                 "console joins a direct wireless link the other one opens; its Wi-Fi",
+                 "connection drops until the transfer ends."},
+                "",
+                "Send",
+                [] { CoverShare::StartSend(); },
+                {},
+            };
+        } else {
+            confirm = ConfirmPrompt{
+                "Receive covers from another console",
+                {"Start here, then choose Send Covers on the other console.",
+                 "This console waits a few seconds on its network, then opens a direct",
+                 "wireless link for up to three minutes. Covers of the same name are",
+                 "replaced."},
+                "",
+                "Receive",
+                [] { CoverShare::StartReceive(); },
+                {},
+            };
+        }
+    }
+
     void OpenSettingsModal(SettingsModal modal) {
         switch (modal) {
         case SettingsModal::LayoutCycle:
@@ -2308,12 +2412,14 @@ private:
             if (IsCoverDownloadActive()) {
                 ShowNotice("Covers are already being downloaded", false);
             } else {
-                RequestCovers(true);
-                cover_download_seen = IsCoverDownloadActive();
-                ShowNotice(IsCoverDownloadActive() ? "Downloading covers..."
-                                                   : CoverDownloadDetail(),
-                           false);
+                OpenCoverDownload();
             }
+            break;
+        case SettingsModal::SendCovers:
+            OpenCoverShare(true);
+            break;
+        case SettingsModal::ReceiveCovers:
+            OpenCoverShare(false);
             break;
         case SettingsModal::Username:
             if (const auto text = PromptSettingText("Username", "Name shown to other consoles",

@@ -14,6 +14,7 @@
 
 #include "citra_switch/camera/image_decode.h"
 #include "citra_switch/config.h"
+#include "citra_switch/cover_share_hooks.h"
 #include "citra_switch/covers.h"
 #include "common/logging/log.h"
 
@@ -39,7 +40,14 @@ std::atomic<bool> s_active{false};
 std::atomic<bool> s_cancel{false};
 std::atomic<int> s_done{0};
 std::atomic<int> s_total{0};
+#if defined(__SWITCH2__)
 std::atomic<int> s_quality{1};
+#else
+std::atomic<int> s_quality{0}; // Switch 1: less memory and a slower card.
+#endif
+std::atomic<bool> s_flush_all{false}; // Covers were replaced: reload the loaded ones too.
+std::atomic<bool> s_overwrite{false};
+std::atomic<bool> s_covers_shown{true};
 std::mutex s_status_mutex;
 std::string s_status_brief;
 std::string s_status_detail;
@@ -258,6 +266,9 @@ void DownloadThread(std::vector<CoverRequest> requests) {
         }
         if (got) {
             ++got_count;
+            if (s_overwrite.load()) {
+                s_flush_all = true;
+            }
             ++s_generation;
         }
         ++s_done;
@@ -280,6 +291,12 @@ void DownloadThread(std::vector<CoverRequest> requests) {
                            ? "; GameTDB has none for the other " +
                                  std::to_string(total - got_count) + "."
                            : "."));
+    }
+    if (got_count > 0) {
+        if (std::FILE* file = std::fopen((dir + "/quality.txt").c_str(), "w")) {
+            std::fputs(large ? "1\n" : "0\n", file);
+            std::fclose(file);
+        }
     }
     LOG_INFO(Frontend, "Covers: {} of {} downloaded{}{}", got_count, total,
              failure.empty() ? "" : ", stopped by: ", failure);
@@ -334,6 +351,9 @@ std::shared_ptr<const CoverArt> GetCover(const std::string& game_code, std::uint
     if (s_seen_generation != s_generation.load()) {
         // New files arrived: forget the "nothing here" answers.
         s_seen_generation = s_generation.load();
+        if (s_flush_all.exchange(false)) {
+            s_cache.clear(); // Files were replaced: what is loaded may be the old picture.
+        }
         for (auto it = s_cache.begin(); it != s_cache.end();) {
             it = it->second.art ? std::next(it) : s_cache.erase(it);
         }
@@ -420,7 +440,44 @@ void SetCoverSource(int source) {
     s_source.store(std::clamp(source, 0, static_cast<int>(CoverSource::Count) - 1));
 }
 
-void StartCoverDownload(std::vector<CoverRequest> requests, bool manual) {
+namespace {
+/// The games GameTDB can know, once each.
+std::vector<std::string> CodesOf(const std::vector<CoverRequest>& requests) {
+    std::vector<std::string> codes;
+    for (const CoverRequest& request : requests) {
+        if (request.game_code.size() == 4 &&
+            std::find(codes.begin(), codes.end(), request.game_code) == codes.end()) {
+            codes.push_back(request.game_code);
+        }
+    }
+    return codes;
+}
+} // namespace
+
+int CountCoversPresent(const std::vector<CoverRequest>& requests) {
+    int present = 0;
+    for (const std::string& code : CodesOf(requests)) {
+        bool full = false;
+        present += FindCoverFile(code, full).empty() ? 0 : 1;
+    }
+    return present;
+}
+
+int CountCoversMissing(const std::vector<CoverRequest>& requests) {
+    return static_cast<int>(CodesOf(requests).size()) - CountCoversPresent(requests);
+}
+
+int CoverStoredQuality() {
+    std::FILE* file = std::fopen((CoversDir() + "/quality.txt").c_str(), "r");
+    if (file == nullptr) {
+        return -1;
+    }
+    const int ch = std::fgetc(file);
+    std::fclose(file);
+    return ch == '0' ? 0 : ch == '1' ? 1 : -1;
+}
+
+void StartCoverDownload(std::vector<CoverRequest> requests, bool manual, bool overwrite) {
     if (s_active.load() ||
         (!manual && s_source.load() == static_cast<int>(CoverSource::Off))) {
         return;
@@ -429,7 +486,8 @@ void StartCoverDownload(std::vector<CoverRequest> requests, bool manual) {
     std::vector<CoverRequest> missing;
     for (CoverRequest& request : requests) {
         bool full = false;
-        if (request.game_code.size() == 4 && FindCoverFile(request.game_code, full).empty() &&
+        if (request.game_code.size() == 4 &&
+            (overwrite || FindCoverFile(request.game_code, full).empty()) &&
             std::none_of(missing.begin(), missing.end(), [&](const CoverRequest& other) {
                 return other.game_code == request.game_code;
             })) {
@@ -452,6 +510,7 @@ void StartCoverDownload(std::vector<CoverRequest> requests, bool manual) {
         return;
     }
     s_cancel = false;
+    s_overwrite = overwrite;
     s_done = 0;
     s_total = static_cast<int>(missing.size());
     SetStatus("0 / " + std::to_string(missing.size()), "Downloading covers");
@@ -487,6 +546,39 @@ std::string CoverDownloadStatus() {
 std::string CoverDownloadDetail() {
     std::lock_guard lock{s_status_mutex};
     return s_status_detail;
+}
+
+bool IsCoversShown() {
+    return s_covers_shown.load();
+}
+
+void SetCoversShown(bool shown) {
+    s_covers_shown.store(shown);
+}
+
+bool IsShelfCasesOn() {
+    return Ui::g_shelf_cases;
+}
+
+void SetShelfCasesOn(bool on) {
+    Ui::g_shelf_cases = on;
+}
+
+std::string CoverShareFolder() {
+    return CoversDir();
+}
+
+void CoverShareLog(const std::string& text) {
+    LOG_INFO(Frontend, "Cover share: {}", text);
+}
+
+void CoverShareArrived() {
+    ++s_generation;
+}
+
+void CoverShareFinished() {
+    s_flush_all = true;
+    ++s_generation;
 }
 
 int GetCoverQuality() {

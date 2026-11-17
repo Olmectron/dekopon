@@ -47,6 +47,13 @@ void ResetCoverCache();
 int GetLibraryStyle();
 void SetLibraryStyle(int style);
 
+/// Covers on the shelf at all; off, every game shows its icon as if it had none.
+bool IsCoversShown();
+void SetCoversShown(bool shown);
+/// Covers stand as cases with a side to them, not as flat pictures.
+bool IsShelfCasesOn();
+void SetShelfCasesOn(bool on);
+
 /// What the library shows around the shelf.
 bool IsShelfArrowsShown();
 void SetShelfArrowsShown(bool shown);
@@ -81,7 +88,15 @@ void SetCoverQuality(int quality);
 /// Downloads the covers that are missing, in the background. Does nothing when a download
 /// is already running, or when the source is Off and nobody asked (`manual`). What came of
 /// it is in CoverDownloadStatus / CoverDownloadDetail.
-void StartCoverDownload(std::vector<CoverRequest> requests, bool manual = false);
+/// With `overwrite`, covers already on the card are fetched again (in the quality now
+/// chosen) and replaced.
+void StartCoverDownload(std::vector<CoverRequest> requests, bool manual = false,
+                        bool overwrite = false);
+/// How many of these games have a cover on the card, and how many have none.
+int CountCoversPresent(const std::vector<CoverRequest>& requests);
+int CountCoversMissing(const std::vector<CoverRequest>& requests);
+/// The quality the last download that stored something ran at; -1 when unknown.
+int CoverStoredQuality();
 /// A few words on the current / last download ("2 / 5", "3 new", "No connection"); empty
 /// when none has run. The detail is a whole sentence, with the reason for a failure.
 std::string CoverDownloadStatus();

@@ -12,6 +12,7 @@
 
 #include "audio_core/dsp_interface.h"
 #include "citra_switch/config.h"
+#include "citra_switch/cover_share.h"
 #include "citra_switch/covers.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu_data.h"
@@ -834,6 +835,11 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
          "library."},
         [] { return GetLibraryStyle(); }, [](int value) { SetLibraryStyle(value); }, 0,
         kLibraryStyleNames);
+    t << LocalBool("shelf_cases",
+                   {"3D Cases",
+                    "Covers stand as game cases with a side and a spine, rather than as "
+                    "flat pictures."},
+                   IsShelfCasesOn, SetShelfCasesOn, true);
     t << LocalBool("shelf_arrows",
                    {"Show Arrows", "The two round arrows either side of the game's name."},
                    IsShelfArrowsShown, SetShelfArrowsShown, true);
@@ -856,6 +862,11 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
 
     t.Group("Covers");
     t.Ini("Switch");
+    t << LocalBool("show_covers",
+                   {"Show Covers",
+                    "Off, every game shows its icon even when a cover is on the card. "
+                    "Nothing is deleted."},
+                   IsCoversShown, SetCoversShown, true);
     t << LocalChoice(
         "cover_source",
         {"Download Automatically",
@@ -868,9 +879,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
         "cover_quality",
         {"Cover Quality",
          "High asks GameTDB for its large pictures first (about half a megabyte each). "
-         "Covers already on the card are kept; delete them from the covers folder to "
-         "fetch them again."},
-        [] { return GetCoverQuality(); }, [](int value) { SetCoverQuality(value); }, 1,
+         "After changing this, Download Covers Now offers to fetch the covers again "
+         "and replace the ones on the card."},
+        [] { return GetCoverQuality(); }, [](int value) { SetCoverQuality(value); },
+#if defined(__SWITCH2__)
+        1,
+#else
+        0, // Switch 1: less memory to hold them and a slower card to read them from.
+#endif
         kCoverQualityNames);
     t << Modal({"Download Covers Now",
                 "Fetches the box art that is missing, from GameTDB. Needs an internet "
@@ -878,6 +894,26 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                SettingsModal::DownloadCovers, [] {
                    const std::string status = CoverDownloadStatus();
                    return status.empty() ? std::string{"Start"} : status;
+               });
+
+    t.Group("Share Covers With Another Console");
+    t << Modal({"Send Covers",
+                "Sends every cover on this console to another one running Toronja, for "
+                "a console kept off the internet. Choose Receive Covers there first. "
+                "They meet on the network both are on, or over a direct wireless link."},
+               SettingsModal::SendCovers, [] {
+                   const bool mine = CoverShare::IsSending();
+                   const std::string status = CoverShare::Brief();
+                   return !mine || status.empty() ? std::string{"Start"} : status;
+               });
+    t << Modal({"Receive Covers",
+                "Waits for another console to send its covers. Start this first, then "
+                "choose Send Covers on the other console. Covers of the same name are "
+                "replaced."},
+               SettingsModal::ReceiveCovers, [] {
+                   const bool mine = !CoverShare::IsSending();
+                   const std::string status = CoverShare::Brief();
+                   return !mine || status.empty() ? std::string{"Start"} : status;
                });
 
     t.Page(Category::General);
