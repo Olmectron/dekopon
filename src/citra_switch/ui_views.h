@@ -749,9 +749,9 @@ inline float ShelfJitter(int index, int salt) {
 inline BoxPose ForwardPose(const ShelfView& v, BoxPose pose) {
     if (v.zoom > 0.0f) {
         const float t = v.zoom * v.zoom * (3.0f - 2.0f * v.zoom);
-        const float big = std::min(v.h * 0.80f, pose.h * 1.42f);
+        const float big = std::min(v.h * 0.74f, pose.h * 1.34f);
         pose.cx += (v.x + v.w / 2.0f - pose.cx) * t;
-        pose.cy += (v.y + v.h * 0.50f - pose.cy) * t;
+        pose.cy += (v.y + v.h * 0.47f - pose.cy) * t;
         pose.h += (big - pose.h) * t;
         pose.shade *= 1.0f - t;
         pose.roll *= 1.0f - t;
@@ -774,8 +774,8 @@ inline void DimShelf(Canvas& c, const ShelfView& v, u32 towards) {
     const u32 tr = (towards & 0xFF) * lose, tg = ((towards >> 8) & 0xFF) * lose,
               tb = ((towards >> 16) & 0xFF) * lose;
     u32* const pixels = c.Data();
-    const int y1 = std::min(c.Height(), v.y + v.h + 40);
-    for (int y = std::max(0, v.y); y < y1; ++y) {
+    const int y1 = c.Height(); // The whole screen: a band would show its edges.
+    for (int y = 0; y < y1; ++y) {
         u32* row = pixels + static_cast<std::size_t>(y) * c.Width();
         for (int x = 0; x < c.Width(); ++x) {
             const u32 p = row[x];
