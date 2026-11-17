@@ -9,6 +9,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/zone_profiler.h"
 #ifdef __SWITCH__
 #include "common/horizon_meminfo.h"
 #endif
