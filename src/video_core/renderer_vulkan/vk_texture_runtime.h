@@ -135,6 +135,13 @@ public:
     /// Submits and waits for current GPU work.
     void Finish();
 
+    /// The tick that the commands recorded right now will be submitted under.
+    u64 CurrentTick() const;
+
+    /// Waits until the GPU has executed everything submitted under `tick`. Returns at
+    /// once when it already has.
+    void WaitTick(u64 tick);
+
     /// Maps an internal staging buffer of the provided size for pixel uploads/downloads
     VideoCore::StagingData FindStaging(u32 size, bool upload);
 
@@ -253,8 +260,10 @@ public:
     void UploadCustom(const VideoCore::Material* material, u32 level);
 
     /// Downloads pixel data to staging from a rectangle region of the surface texture
+    /// With `wait` false the copy is only recorded: the pixels reach `staging` once the
+    /// GPU has executed it (see TextureRuntime::WaitTick).
     void Download(const VideoCore::BufferTextureCopy& download,
-                  const VideoCore::StagingData& staging);
+                  const VideoCore::StagingData& staging, bool wait = true);
 
     /// Scales up the surface to match the new resolution scale.
     void ScaleUp(u32 new_scale);

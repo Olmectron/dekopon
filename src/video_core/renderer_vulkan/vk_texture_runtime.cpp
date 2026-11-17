@@ -322,6 +322,14 @@ u64 TextureRuntime::GetResourceFreeTick() {
     return scheduler.GetMasterSemaphore()->KnownGpuTick();
 }
 
+u64 TextureRuntime::CurrentTick() const {
+    return scheduler.CurrentTick();
+}
+
+void TextureRuntime::WaitTick(u64 tick) {
+    scheduler.Wait(tick);
+}
+
 void TextureRuntime::Finish() {
     scheduler.Flush();
 }
@@ -1037,11 +1045,14 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
 }
 
 void Surface::Download(const VideoCore::BufferTextureCopy& download,
-                       const VideoCore::StagingData& staging) {
+                       const VideoCore::StagingData& staging, bool wait) {
     // Declared first so that it also covers the scheduler.Finish() below.
-    AsyncStats::ScopedTimer download_timer{AsyncStats::surface_download};
+    AsyncStats::ScopedTimer download_timer{wait ? AsyncStats::surface_download
+                                                : AsyncStats::surface_download_async};
     SCOPE_EXIT({
-        scheduler.Finish();
+        if (wait) {
+            scheduler.Finish();
+        }
         runtime.download_buffer.Commit(staging.size);
     });
 

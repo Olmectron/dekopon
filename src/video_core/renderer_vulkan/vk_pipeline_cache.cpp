@@ -591,16 +591,17 @@ void PipelineCache::ReportAsyncStats() {
         AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
     {
         const auto downloads = take(AsyncStats::surface_download);
+        const auto delayed = take(AsyncStats::surface_download_async);
         const u64 small_writes = VideoCore::CacheStats::small_write_flushes.exchange(
             0, std::memory_order_relaxed);
         const u64 small_write_bytes = VideoCore::CacheStats::small_write_flush_bytes.exchange(
             0, std::memory_order_relaxed);
-        if (downloads.count > 0 || small_writes > 0) {
+        if (downloads.count > 0 || small_writes > 0 || delayed.count > 0) {
             LOG_INFO(Render_Vulkan,
-                     "GPU readbacks: {}x {} ms max {} ms | surface flushes forced by small CPU "
-                     "writes: {}x, {} KiB",
-                     downloads.count, downloads.total_ms, downloads.max_ms, small_writes,
-                     small_write_bytes / 1024);
+                     "GPU readbacks: {}x {} ms max {} ms waited | {}x served a frame late "
+                     "without waiting | surface flushes forced by small CPU writes: {}x, {} KiB",
+                     downloads.count, downloads.total_ms, downloads.max_ms, delayed.count,
+                     small_writes, small_write_bytes / 1024);
         }
     }
     const u64 inline_hits =
