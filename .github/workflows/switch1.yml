@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /tmp/nxvk-archives.tar
-          key: nxvk-archives-${{ steps.nxvk.outputs.sha }}
+          key: nxvk-archives-v2-${{ steps.nxvk.outputs.sha }}
 
       - name: Build NXVK
         if: steps.archives.outputs.cache-hit != 'true'
@@ -49,8 +49,9 @@ jobs:
           # devkitA64 on the host, and the build links the archives directly anyway.
           sudo make CONTAINER=docker image
           sudo make CONTAINER=docker driver
-          # Only the static archives are needed afterwards.
-          find switch/build/cross -name '*.a' -print0 | sudo tar --null -T - -cf /tmp/nxvk-archives.tar
+          # The archives and the objects behind them: meson makes thin archives, which
+          # only point at the object files.
+          find switch/build/cross \( -name '*.a' -o -name '*.o' \) -print0 | sudo tar --null -T - -cf /tmp/nxvk-archives.tar
           sudo chmod a+r /tmp/nxvk-archives.tar
           ls -la /tmp/nxvk-archives.tar
 
@@ -59,7 +60,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /tmp/nxvk-archives.tar
-          key: nxvk-archives-${{ steps.nxvk.outputs.sha }}
+          key: nxvk-archives-v2-${{ steps.nxvk.outputs.sha }}
 
       - name: Unpack the NXVK driver archives
         if: steps.archives.outputs.cache-hit == 'true'
