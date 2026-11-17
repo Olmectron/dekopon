@@ -840,16 +840,21 @@ inline void DrawShelfCases(Canvas& c, Font& font, const ShelfView& v,
             // selected one is lifted out of its slot, towards the room, and turned to show
             // its front; choosing another slides it back in while the next comes out.
             BoxPose slot;
-            slot.h = case_h * 0.80f;
-            const float thick = slot.h * kCaseDepth;
+            // A spine is the near end of a case seen end-on, so perspective draws it
+            // larger than the case's nominal height: size the case for the spine wanted.
+            const float seen = case_h * 0.80f;
+            const float nearer = 3.4f / (3.4f - kCaseAspect / 2);
+            slot.h = seen / nearer;
+            const float thick = seen * kCaseDepth;
             slot.cx = cx + d * (thick + 3.0f);
-            slot.cy = floor - slot.h / 2;
+            slot.cy = floor - seen / 2;
             slot.yaw = -half_pi;
             slot.shade = std::min(0.42f, 0.04f + 0.012f * ad);
             BoxPose out;
-            out.h = case_h * 1.04f;
+            out.h = case_h * 0.92f;
             out.cx = slot.cx;
-            out.cy = floor - out.h / 2 - case_h * 0.13f - wobble_on * case_h * 0.006f * (1.0f + sway);
+            // Held above the row, which stays in view under it.
+            out.cy = floor - out.h / 2 - seen * 0.42f - wobble_on * case_h * 0.006f * (1.0f + sway);
             out.yaw = 0.0f;
             p = MixPose(slot, out, 1.0f - ease);
             (void)sign;
