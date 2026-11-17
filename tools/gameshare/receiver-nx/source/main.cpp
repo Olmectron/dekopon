@@ -11,7 +11,7 @@
 // host's address in sdmc:/switch/dekopon-link.txt, one IPv4 address per line.
 //
 // Controls:  everything is sent to the game, except
-//   Right stick click      switch between the bottom and the top screen
+//   Both stick clicks      switch between the bottom and the top screen
 //   Plus + Minus (hold)    quit
 
 #include <algorithm>
@@ -210,7 +210,7 @@ int main(int, char**) {
     std::printf("Dekopon Link\n\n");
     std::printf("Looking for a Dekopon host on this network...\n");
     std::printf("(open a game in Dekopon on the other console)\n\n");
-    std::printf("Right stick click: bottom / top screen\n");
+    std::printf("Both stick clicks: bottom / top screen\n");
     std::printf("Hold Plus + Minus: quit\n");
     consoleUpdate(nullptr);
     bool console_active = true;
@@ -263,7 +263,9 @@ int main(int, char**) {
             quit_since_ns = 0;
         }
 
-        if (pressed & HidNpadButton_StickR) {
+        // Both sticks pressed in: the right stick alone belongs to the game.
+        constexpr u64 both_sticks = HidNpadButton_StickL | HidNpadButton_StickR;
+        if ((held & both_sticks) == both_sticks && (pressed & both_sticks) != 0) {
             screen = screen == 1 ? 0 : 1;
             last_hello_ns = 0; // ask for the other screen right away
         }
@@ -299,6 +301,7 @@ int main(int, char**) {
                     }
                 }
                 const HidAnalogStickState stick = padGetStickPos(&pad, 0);
+                const HidAnalogStickState right = padGetStickPos(&pad, 1);
                 u8 touching = 0;
                 u16 touch_x = 0, touch_y = 0;
                 HidTouchScreenState touch{};
@@ -317,7 +320,7 @@ int main(int, char**) {
                     }
                 }
 
-                u8 packet[HEADER + 17];
+                u8 packet[HEADER + 21];
                 std::memcpy(packet, MAGIC, sizeof(MAGIC));
                 packet[4] = PacketType::Input;
                 WriteU32(packet + HEADER, ++input_seq);
@@ -327,6 +330,8 @@ int main(int, char**) {
                 packet[HEADER + 12] = touching;
                 WriteU16(packet + HEADER + 13, touch_x);
                 WriteU16(packet + HEADER + 15, touch_y);
+                WriteU16(packet + HEADER + 17, static_cast<u16>(static_cast<s16>(right.x)));
+                WriteU16(packet + HEADER + 19, static_cast<u16>(static_cast<s16>(right.y)));
                 sendto(sock, packet, sizeof(packet), 0, reinterpret_cast<const sockaddr*>(&host),
                        sizeof(host));
             }
@@ -409,7 +414,7 @@ int main(int, char**) {
                 host_known = false;
                 host.sin_addr.s_addr = htonl(INADDR_BROADCAST);
             }
-            svcSleepThread(2'000'000);
+            svcSleepThread(1'000'000);
         }
     }
 

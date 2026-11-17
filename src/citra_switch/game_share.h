@@ -19,7 +19,8 @@ struct InputState;
 //                                 Sent once per second; it is also the keep-alive.
 //   2 INPUT   receiver -> host   u32 seq, u32 buttons (bit = SwitchFrontend::InputButton),
 //                                 s16 stick x, s16 stick y, u8 touching, u16 touch x, u16 touch y
-//                                 (touch in bottom-screen pixels, 320x240)
+//                                 (touch in bottom-screen pixels, 320x240), then optionally
+//                                 s16 right stick x, s16 right stick y
 //   3 FRAME   host -> receiver   u32 frame id, u16 chunk index, u16 chunk count, u32 jpeg size,
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)

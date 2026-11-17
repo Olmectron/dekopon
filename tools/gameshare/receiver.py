@@ -82,8 +82,8 @@ class Receiver:
         x = sum(STICK[k][0] for k in self.stick_keys) * 32000
         y = sum(STICK[k][1] for k in self.stick_keys) * 32000
         self.seq += 1
-        self.sock.sendto(MAGIC + struct.pack("<BIIhhBHH", INPUT, self.seq, self.buttons, x, y,
-                                             1 if self.touching else 0, *self.touch), self.host)
+        self.sock.sendto(MAGIC + struct.pack("<BIIhhBHHhh", INPUT, self.seq, self.buttons, x, y,
+                                             1 if self.touching else 0, *self.touch, 0, 0), self.host)
 
     def show(self, jpeg):
         try:

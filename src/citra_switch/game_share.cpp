@@ -54,6 +54,8 @@ struct RemoteInput {
     u32 buttons{};
     s16 stick_x{};
     s16 stick_y{};
+    s16 right_x{};
+    s16 right_y{};
     bool touching{};
     u16 touch_x{};
     u16 touch_y{};
@@ -198,6 +200,13 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
         s.input.touching = body[12] != 0;
         s.input.touch_x = ReadU16(body + 13);
         s.input.touch_y = ReadU16(body + 15);
+        // Newer receivers append the right stick.
+        if (body_size >= 21) {
+            s.input.right_x = static_cast<s16>(ReadU16(body + 17));
+            s.input.right_y = static_cast<s16>(ReadU16(body + 19));
+        } else {
+            s.input.right_x = s.input.right_y = 0;
+        }
         s.input.when = now;
     }
 }
@@ -232,7 +241,7 @@ void NetworkThread() {
 
     while (s_running.load(std::memory_order_relaxed)) {
         pollfd pfd{.fd = sock, .events = POLLIN, .revents = 0};
-        if (poll(&pfd, 1, 2) > 0 && (pfd.revents & POLLIN) != 0) {
+        if (poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN) != 0) {
             sockaddr_in from{};
             socklen_t from_len = sizeof(from);
             const ssize_t got = recvfrom(sock, recv_buffer, sizeof(recv_buffer), 0,
@@ -364,7 +373,10 @@ void Tick(Core::System& system) {
             return;
         }
         const auto interval = std::chrono::microseconds{1'000'000 / std::max<u32>(s.max_fps, 1)};
-        if (now - s.last_capture < interval) {
+        // The capture is taken at the next presented frame. Asking a quarter of an
+        // interval early makes it the frame that is due, not the one after it, which
+        // used to add about half a frame of latency.
+        if (now - s.last_capture < interval - interval / 4) {
             return;
         }
         screen = s.screen;
@@ -429,6 +441,11 @@ void MergeRemoteInput(InputState& state) {
         (std::abs(input.stick_x) >= DEADZONE || std::abs(input.stick_y) >= DEADZONE)) {
         state.left_x = input.stick_x;
         state.left_y = input.stick_y;
+    }
+    if (std::abs(state.right_x) < DEADZONE && std::abs(state.right_y) < DEADZONE &&
+        (std::abs(input.right_x) >= DEADZONE || std::abs(input.right_y) >= DEADZONE)) {
+        state.right_x = input.right_x;
+        state.right_y = input.right_y;
     }
 
     // Touch arrives in bottom-screen pixels; the emulator window wants window coordinates, so
