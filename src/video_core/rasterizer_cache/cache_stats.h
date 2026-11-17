@@ -16,4 +16,9 @@ inline std::atomic<u64> small_write_flushes{};
 /// Bytes of surface data those flushes covered.
 inline std::atomic<u64> small_write_flush_bytes{};
 
+/// Guest reads of rasterizer-cached memory that asked for a flush, and how many of them were
+/// answered from the remembered clean range without reaching the rasterizer.
+inline std::atomic<u64> read_flush_requests{};
+inline std::atomic<u64> read_flush_skipped{};
+
 } // namespace VideoCore::CacheStats

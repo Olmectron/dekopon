@@ -46,6 +46,17 @@ public:
     /// Notify rasterizer that any caches of the specified region should be flushed to 3DS memory
     virtual void FlushRegion(PAddr addr, u32 size) = 0;
 
+    /// Lets the caller skip FlushRegion for reads it already knows have nothing to flush.
+    /// `generation` changes whenever any region becomes dirty; [lower, upper) is the widest
+    /// range around `addr` with nothing dirty. Returns false when not supported.
+    virtual bool GetCleanRange([[maybe_unused]] PAddr addr, [[maybe_unused]] PAddr& lower,
+                               [[maybe_unused]] PAddr& upper, [[maybe_unused]] u64& generation) {
+        return false;
+    }
+    virtual u64 DirtyGeneration() {
+        return 0;
+    }
+
     /// Notify rasterizer that any caches of the specified region should be invalidated
     virtual void InvalidateRegion(PAddr addr, u32 size) = 0;
 

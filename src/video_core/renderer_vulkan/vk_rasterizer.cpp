@@ -888,6 +888,18 @@ void RasterizerVulkan::FlushRegion(PAddr addr, u32 size) {
     res_cache.FlushRegion(addr, size);
 }
 
+bool RasterizerVulkan::GetCleanRange(PAddr addr, PAddr& lower, PAddr& upper, u64& generation) {
+    const auto range = res_cache.CleanRangeAround(addr);
+    lower = range.first;
+    upper = range.second;
+    generation = res_cache.DirtyGeneration();
+    return true;
+}
+
+u64 RasterizerVulkan::DirtyGeneration() {
+    return res_cache.DirtyGeneration();
+}
+
 void RasterizerVulkan::InvalidateRegion(PAddr addr, u32 size) {
     res_cache.InvalidateRegion(addr, size);
 }

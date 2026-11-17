@@ -7,6 +7,7 @@
 #include <limits>
 #include <type_traits>
 
+#include "video_core/rasterizer_cache/cache_stats.h"
 #include "common/archives.h"
 #include "common/hacks/hack_manager.h"
 #include "common/microprofile.h"
@@ -184,7 +185,33 @@ void GPU::SetInterruptHandler(Service::GSP::InterruptHandler handler) {
 }
 
 // The CPU is about to read what the GPU produced, so the queue has to drain either way.
+//
+// A page stays "cached" for as long as a surface covers it, so every guest read of it comes
+// through here, flushed or not. Majora's Mask 3D reads tens of thousands of depth-buffer
+// texels per frame while the sun exists (its occlusion test): one of them flushes the buffer,
+// the rest only find that nothing is dirty - at ~200 ns each, about 20 ms per frame, which
+// took the game from 30 fps to 18. Remember the range the last flush left clean and answer
+// those reads without going to the rasterizer, until something becomes dirty again.
 void GPU::FlushRegion(PAddr addr, u32 size) {
+    if (!impl->use_async) {
+        VideoCore::CacheStats::read_flush_requests.fetch_add(1, std::memory_order_relaxed);
+        if (addr >= impl->clean_lower && addr + size <= impl->clean_upper &&
+            impl->rasterizer->DirtyGeneration() == impl->clean_generation) {
+            VideoCore::CacheStats::read_flush_skipped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        impl->rasterizer->FlushRegion(addr, size);
+        PAddr lower{}, upper{};
+        u64 generation{};
+        if (impl->rasterizer->GetCleanRange(addr, lower, upper, generation)) {
+            impl->clean_lower = lower;
+            impl->clean_upper = upper;
+            impl->clean_generation = generation;
+        } else {
+            impl->clean_lower = impl->clean_upper = 0;
+        }
+        return;
+    }
     SyncGpuThread();
     impl->rasterizer->FlushRegion(addr, size);
 }

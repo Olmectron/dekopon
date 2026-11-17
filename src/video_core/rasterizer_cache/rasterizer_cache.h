@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <limits>
 #include <type_traits>
 #include <boost/container/small_vector.hpp>
 #include <boost/range/iterator_range.hpp>
@@ -1345,6 +1346,24 @@ void RasterizerCache<T>::ClearAll(bool flush) {
 }
 
 template <class T>
+std::pair<PAddr, PAddr> RasterizerCache<T>::CleanRangeAround(PAddr addr) const {
+    PAddr lower = 0;
+    PAddr upper = std::numeric_limits<PAddr>::max();
+    // First dirty region that does not end before `addr`.
+    const auto it = dirty_regions.lower_bound(SurfaceInterval{addr, addr + 1});
+    if (it != dirty_regions.end()) {
+        if (it->first.lower() <= addr) {
+            return {addr, addr};
+        }
+        upper = it->first.lower();
+    }
+    if (it != dirty_regions.begin()) {
+        lower = std::prev(it)->first.upper();
+    }
+    return {lower, upper};
+}
+
+template <class T>
 void RasterizerCache<T>::FlushRegion(PAddr addr, u32 size, SurfaceId flush_surface_id) {
     if (size == 0) [[unlikely]] {
         return;
@@ -1441,6 +1460,7 @@ void RasterizerCache<T>::InvalidateRegion(PAddr addr, u32 size, SurfaceId region
 
     if (region_owner_id) {
         dirty_regions.set({invalid_interval, region_owner_id});
+        ++dirty_generation;
     } else {
         dirty_regions.erase(invalid_interval);
     }

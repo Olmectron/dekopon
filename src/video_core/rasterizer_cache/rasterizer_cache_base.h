@@ -129,6 +129,14 @@ public:
     /// Write any cached resources overlapping the region back to memory (if dirty)
     void FlushRegion(PAddr addr, u32 size, SurfaceId flush_surface = {});
 
+    /// Changes whenever a region becomes dirty (the GPU holds something newer than memory).
+    u64 DirtyGeneration() const noexcept {
+        return dirty_generation;
+    }
+
+    /// The widest range around `addr` that holds no dirty region; empty when `addr` is dirty.
+    std::pair<PAddr, PAddr> CleanRangeAround(PAddr addr) const;
+
     /// Mark region as being invalidated by region_owner (nullptr if 3DS memory)
     void InvalidateRegion(PAddr addr, u32 size, SurfaceId region_owner = {});
 
@@ -225,6 +233,9 @@ private:
     Common::SlotVector<Sampler> slot_samplers;
     Common::SlotVector<Framebuffer> slot_framebuffers;
     SurfaceMap dirty_regions;
+    // Starts at a value no other cache instance has used, so a stale copy never matches.
+    static inline u64 dirty_generation_base{};
+    u64 dirty_generation{dirty_generation_base += (u64{1} << 32)};
 
     /// A region the guest reads back every frame (see DownloadSurface).
     struct DelayedDownload {
