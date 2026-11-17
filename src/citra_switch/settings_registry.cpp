@@ -1202,6 +1202,14 @@ void BuildStorage(std::vector<SettingEntry>& out) {
                 v.compress_cia_installs);
 }
 
+bool IsDelayedReadbackEnabled() {
+    return VideoCore::CacheStats::delayed_readback_enabled.load();
+}
+
+void SetDelayedReadbackEnabled(bool enabled) {
+    VideoCore::CacheStats::delayed_readback_enabled.store(enabled);
+}
+
 void BuildAdvanced(std::vector<SettingEntry>& out) {
     auto& v = Settings::values;
     Table t{out, Category::Advanced};
@@ -1265,14 +1273,6 @@ void BuildAdvanced(std::vector<SettingEntry>& out) {
 
 constexpr std::array<const char*, 2> kGameShareModeNames{"Wi-Fi / LAN",
                                                          "Local wireless (direct)"};
-
-bool IsDelayedReadbackEnabled() {
-    return VideoCore::CacheStats::delayed_readback_enabled.load();
-}
-
-void SetDelayedReadbackEnabled(bool enabled) {
-    VideoCore::CacheStats::delayed_readback_enabled.store(enabled);
-}
 
 void BuildGameShare(std::vector<SettingEntry>& out) {
     Table t{out, Category::GameShare};

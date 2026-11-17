@@ -18,10 +18,10 @@
 #include <unistd.h>
 
 #include <jpeglib.h>
-#include <switch.h>
 
 #include "citra_switch/emu_window.h"
 #include "citra_switch/game_share.h"
+#include "citra_switch/game_share_ldn.h"
 #include "citra_switch/input.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
@@ -91,64 +91,6 @@ std::atomic<bool> s_running{false};
 std::thread s_thread;
 std::atomic<bool> s_enabled{true};
 std::atomic<int> s_mode{static_cast<int>(Mode::Network)};
-
-// Local wireless (LDN). Both ends must use the same values.
-constexpr u16 LDN_SCENE_ID = 0x4453; // "DS"
-constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0x47,
-                                     0x61, 0x6d, 0x65, 0x53, 0x68, 0x61, 0x72, 0x65};
-
-/// Creates the local network the receiver joins. Every step is logged with its result
-/// code: whether the loader grants ldn at all, and whether a Switch 1 can see a network
-/// made by a Switch 2, are both unknown until tried on hardware.
-bool StartLocalWirelessHost() {
-    // Plain u32 result codes here: core/hle/result.h redefines Result and R_FAILED for the
-    // emulated 3DS, which shadows libnx's in this file.
-    u32 rc = ldnInitialize(LdnServiceType_User);
-    LOG_INFO(Frontend, "GameShare/LDN: ldnInitialize(User) = {:#x}", rc);
-    if (rc != 0) {
-        return false;
-    }
-    // Mixed Switch 1 / Switch 2 networks appear to need this protocol; harmless if refused.
-    rc = ldnSetProtocol(LdnProtocol_Unknown3);
-    LOG_INFO(Frontend, "GameShare/LDN: ldnSetProtocol(NX+Ounce) = {:#x}", rc);
-
-    rc = ldnOpenAccessPoint();
-    LOG_INFO(Frontend, "GameShare/LDN: ldnOpenAccessPoint = {:#x}", rc);
-    if (rc != 0) {
-        ldnExit();
-        return false;
-    }
-
-    LdnSecurityConfig security{};
-    security.security_mode = LdnSecurityMode_Product;
-    security.passphrase_size = sizeof(LDN_PASSPHRASE);
-    std::memcpy(security.passphrase, LDN_PASSPHRASE, sizeof(LDN_PASSPHRASE));
-    LdnUserConfig user{};
-    std::strncpy(user.user_name, "Dekopon", sizeof(user.user_name) - 1);
-    LdnNetworkConfig network{};
-    // -1: the local communication id of the title the homebrew runs as. Both consoles
-    // have to resolve to the same id, i.e. be launched through the same title.
-    network.intent_id.local_communication_id = -1;
-    network.intent_id.scene_id = LDN_SCENE_ID;
-    network.channel = 0;
-    network.node_count_max = 2;
-    network.local_communication_version = 0;
-
-    rc = ldnCreateNetwork(&security, &user, &network);
-    LOG_INFO(Frontend, "GameShare/LDN: ldnCreateNetwork = {:#x}", rc);
-    if (rc != 0) {
-        ldnExit();
-        return false;
-    }
-
-    LdnIpv4Address address{};
-    LdnSubnetMask mask{};
-    rc = ldnGetIpv4Address(&address, &mask);
-    LOG_INFO(Frontend, "GameShare/LDN: network up, address {}.{}.{}.{} (rc {:#x})",
-             (address.addr >> 24) & 0xFF, (address.addr >> 16) & 0xFF,
-             (address.addr >> 8) & 0xFF, address.addr & 0xFF, rc);
-    return true;
-}
 
 u16 ReadU16(const u8* p) {
     return static_cast<u16>(p[0] | (p[1] << 8));
@@ -276,8 +218,13 @@ void NetworkThread() {
     Common::SetCurrentThreadName("GameShare");
 
     // The socket is created after the local network exists, so it lives on it.
-    const bool local_wireless = s_mode.load() == static_cast<int>(Mode::LocalWireless) &&
-                                StartLocalWirelessHost();
+    bool local_wireless = false;
+    if (s_mode.load() == static_cast<int>(Mode::LocalWireless)) {
+        char ldn_log[256];
+        local_wireless = StartLocalWirelessHost(ldn_log, sizeof(ldn_log));
+        LOG_INFO(Frontend, "GameShare/LDN: {} -> {}", ldn_log,
+                 local_wireless ? "network created" : "failed");
+    }
     if (s_mode.load() == static_cast<int>(Mode::LocalWireless) && !local_wireless) {
         LOG_ERROR(Frontend, "GameShare: local wireless is not available; not sharing");
         return;
@@ -296,7 +243,7 @@ void NetworkThread() {
         LOG_ERROR(Frontend, "GameShare: could not bind UDP port {}", PORT);
         close(sock);
         if (local_wireless) {
-            ldnExit();
+            StopLocalWirelessHost();
         }
         return;
     }
@@ -404,7 +351,7 @@ void NetworkThread() {
 
     close(sock);
     if (local_wireless) {
-        ldnExit();
+        StopLocalWirelessHost();
     }
 }
 
