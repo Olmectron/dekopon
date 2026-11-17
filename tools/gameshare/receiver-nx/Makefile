@@ -28,13 +28,15 @@ DEFINES  := -D__SWITCH__
 LIBDIRS  := $(PORTLIBS) $(LIBNX)
 endif
 
-INCLUDES := $(foreach dir,$(LIBDIRS),-I$(dir)/include)
+# The launcher's canvas and views (and its Amiibo reader) are shared with this app.
+INCLUDES := $(foreach dir,$(LIBDIRS),-I$(dir)/include -I$(dir)/include/freetype2) \
+            -I../../../src
 LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 CXXFLAGS := -g -O2 -Wall -ffunction-sections $(ARCH) $(DEFINES) $(INCLUDES) \
             -std=gnu++20 -fno-rtti -fno-exceptions
 LDFLAGS  := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(OUT)/$(TARGET).map
-LIBS     := -ljpeg -lnx
+LIBS     := -ljpeg -lfreetype -lharfbuzz -lfreetype -lpng -lbz2 -lz -lnx
 
 TOOLS    := $(DEVKITPRO)/tools/bin
 
@@ -51,7 +53,13 @@ $(OUT)/main.o: source/main.cpp | $(OUT)
 $(OUT)/game_share_usb.o: ../../../src/citra_switch/game_share_usb.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(OUT)/$(TARGET).elf: $(OUT)/main.o $(OUT)/game_share_usb.o
+$(OUT)/amiibo_reader.o: ../../../src/citra_switch/amiibo_reader.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OUT)/main.o: source/link_ui.h ../../../src/citra_switch/ui_views.h \
+               ../../../src/citra_switch/ui_canvas.h
+
+$(OUT)/$(TARGET).elf: $(OUT)/main.o $(OUT)/game_share_usb.o $(OUT)/amiibo_reader.o
 	$(CXX) $(LDFLAGS) $^ $(LIBPATHS) $(LIBS) -o $@
 
 $(OUT)/$(TARGET).nacp: | $(OUT)

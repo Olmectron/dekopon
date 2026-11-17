@@ -7,6 +7,10 @@ on:
     branches: [switch2-gameshare]
     paths:
       - 'tools/gameshare/receiver-nx/**'
+      - 'src/citra_switch/ui_canvas.h'
+      - 'src/citra_switch/ui_views.h'
+      - 'src/citra_switch/amiibo_reader.*'
+      - 'src/citra_switch/game_share_usb.*'
       - '.github/workflows/gameshare-receiver.yml'
   workflow_dispatch:
 

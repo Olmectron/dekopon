@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -31,7 +32,10 @@
 
 #include <switch.h>
 
-#include "../../../../src/citra_switch/game_share_usb.h"
+#include "citra_switch/amiibo_reader.h"
+#include "citra_switch/game_share_usb.h"
+
+#include "link_ui.h"
 
 #include <jpeglib.h>
 
@@ -40,7 +44,16 @@ namespace {
 constexpr u16 PORT = 28300;
 constexpr char MAGIC[4] = {'D', 'K', 'G', 'S'};
 constexpr std::size_t HEADER = 5;
-enum PacketType : u8 { Hello = 1, Input = 2, Frame = 3, Welcome = 4 };
+enum PacketType : u8 {
+    Hello = 1,
+    Input = 2,
+    Frame = 3,
+    Welcome = 4,
+    Command = 5,
+    Audio = 6,
+    Status = 7,
+    Amiibo = 8,
+};
 
 constexpr u32 FB_WIDTH = 1280;
 constexpr u32 FB_HEIGHT = 720;
@@ -123,47 +136,6 @@ bool DecodeJpeg(const std::vector<u8>& data, Picture& out) {
 }
 
 // ------------------------------------------------------------------------- on screen
-struct Placement {
-    u32 scale{1};
-    u32 left{};
-    u32 top{};
-};
-
-Placement Place(u32 width, u32 height) {
-    Placement p;
-    p.scale = std::max<u32>(1, std::min(FB_WIDTH / std::max<u32>(width, 1),
-                                        FB_HEIGHT / std::max<u32>(height, 1)));
-    p.left = (FB_WIDTH - width * p.scale) / 2;
-    p.top = (FB_HEIGHT - height * p.scale) / 2;
-    return p;
-}
-
-void Draw(Framebuffer& fb, const Picture& picture) {
-    u32 stride = 0;
-    u32* pixels = static_cast<u32*>(framebufferBegin(&fb, &stride));
-    const u32 row_pixels = stride / sizeof(u32);
-    std::memset(pixels, 0, static_cast<std::size_t>(stride) * FB_HEIGHT);
-    if (picture.width != 0) {
-        const Placement p = Place(picture.width, picture.height);
-        for (u32 y = 0; y < picture.height; ++y) {
-            const u8* src = picture.rgb.data() + static_cast<std::size_t>(y) * picture.width * 3;
-            u32* first_row = pixels + static_cast<std::size_t>(p.top + y * p.scale) * row_pixels + p.left;
-            u32* dst = first_row;
-            for (u32 x = 0; x < picture.width; ++x, src += 3) {
-                const u32 color = RGBA8_MAXALPHA(src[0], src[1], src[2]);
-                for (u32 k = 0; k < p.scale; ++k) {
-                    *dst++ = color;
-                }
-            }
-            for (u32 k = 1; k < p.scale; ++k) {
-                std::memcpy(first_row + static_cast<std::size_t>(k) * row_pixels, first_row,
-                            static_cast<std::size_t>(picture.width) * p.scale * sizeof(u32));
-            }
-        }
-    }
-    framebufferEnd(&fb);
-}
-
 // Local wireless (LDN). Must match src/citra_switch/game_share.cpp.
 constexpr u16 LDN_SCENE_ID = 0x4453; // "DS"
 constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0x47,
@@ -497,7 +469,14 @@ int main(int, char**) {
     }
     const std::vector<in_addr> extra_hosts = LoadHosts();
 
-    u8 screen = 1; // bottom
+    Link::Screen ui;
+    ui.Init();
+    Link::AudioPlayer audio;
+    bool amiibo_scanning = false;
+    bool amiibo_sent = false;
+    bool amiibo_refused = false;
+    u64 last_amiibo_poll_ns = 0;
+    bool touch_was_ours = false;
     u32 input_seq = 0;
     u64 last_hello_ns = 0;
     u64 last_input_ns = 0;
@@ -531,8 +510,10 @@ int main(int, char**) {
         if ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus)) {
             if (quit_since_ns == 0) {
                 quit_since_ns = now;
-            } else if (now - quit_since_ns > 500'000'000ULL) {
+            } else if (now - quit_since_ns > 3'000'000'000ULL) {
                 break;
+            } else if (now - quit_since_ns > 400'000'000ULL && !ui.IsOpen() && !console_active) {
+                ui.Open();
             }
         } else {
             quit_since_ns = 0;
@@ -541,8 +522,14 @@ int main(int, char**) {
         // Both sticks pressed in: the right stick alone belongs to the game.
         constexpr u64 both_sticks = HidNpadButton_StickL | HidNpadButton_StickR;
         if ((held & both_sticks) == both_sticks && (pressed & both_sticks) != 0) {
-            screen = screen == 1 ? 0 : 1;
-            last_hello_ns = 0; // ask for the other screen right away
+            ui.ToggleView();
+        }
+        ui.HandlePad(pressed);
+        if (ui.WantsQuit()) {
+            break;
+        }
+        if (ui.TakeHelloDue()) {
+            last_hello_ns = 0; // say what changed right away
         }
 
         if (usb_mode && console_active &&
@@ -567,12 +554,13 @@ int main(int, char**) {
             // HELLO once a second: finds the host (broadcast) and keeps the stream alive.
             if (now - last_hello_ns >= 1'000'000'000ULL) {
                 last_hello_ns = now;
-                u8 hello[HEADER + 3];
+                u8 hello[HEADER + 4];
                 std::memcpy(hello, MAGIC, sizeof(MAGIC));
                 hello[4] = PacketType::Hello;
-                hello[5] = screen;
+                hello[5] = ui.RequestedScreen();
                 hello[6] = 80; // JPEG quality
                 hello[7] = 30; // frames per second
+                hello[8] = ui.settings.audio ? 1 : 0; // the sound too
                 if (usb_mode) {
                     GameShareUsb::Send(hello, sizeof(hello));
                 } else {
@@ -596,28 +584,33 @@ int main(int, char**) {
                 last_input_ns = now;
                 u32 buttons = 0;
                 for (const ButtonMap& map : BUTTONS) {
-                    if (held & map.pad) {
+                    if (!ui.IsOpen() && (held & map.pad)) {
                         buttons |= 1U << map.bit;
                     }
                 }
-                const HidAnalogStickState stick = padGetStickPos(&pad, 0);
-                const HidAnalogStickState right = padGetStickPos(&pad, 1);
+                HidAnalogStickState stick = padGetStickPos(&pad, 0);
+                HidAnalogStickState right = padGetStickPos(&pad, 1);
+                if (ui.IsOpen()) {
+                    stick = {};
+                    right = {};
+                }
                 u8 touching = 0;
                 u16 touch_x = 0, touch_y = 0;
                 HidTouchScreenState touch{};
-                if (screen == 1 && picture.width != 0 &&
-                    hidGetTouchScreenStates(&touch, 1) != 0 && touch.count > 0) {
-                    const Placement p = Place(picture.width, picture.height);
-                    const s32 x = (static_cast<s32>(touch.touches[0].x) - static_cast<s32>(p.left)) /
-                                  static_cast<s32>(p.scale);
-                    const s32 y = (static_cast<s32>(touch.touches[0].y) - static_cast<s32>(p.top)) /
-                                  static_cast<s32>(p.scale);
-                    if (x >= 0 && y >= 0 && x < static_cast<s32>(picture.width) &&
-                        y < static_cast<s32>(picture.height)) {
-                        touching = 1;
-                        touch_x = static_cast<u16>(x);
-                        touch_y = static_cast<u16>(y);
-                    }
+                const bool finger = hidGetTouchScreenStates(&touch, 1) != 0 && touch.count > 0;
+                const int finger_x = finger ? static_cast<int>(touch.touches[0].x) : 0;
+                const int finger_y = finger ? static_cast<int>(touch.touches[0].y) : 0;
+                // The tab and the menu get the touch first.
+                const bool ours = !console_active && ui.HandleTouch(finger, finger_x, finger_y);
+                touch_was_ours = finger ? (touch_was_ours || ours) : false;
+                Link::Rect bottom_rect{};
+                if (finger && !touch_was_ours && !ui.IsOpen() && picture.width != 0 &&
+                    ui.BottomScreenRect(static_cast<int>(picture.width),
+                                        static_cast<int>(picture.height), bottom_rect) &&
+                    bottom_rect.Contains(finger_x, finger_y)) {
+                    touching = 1;
+                    touch_x = static_cast<u16>((finger_x - bottom_rect.x) * 320 / bottom_rect.w);
+                    touch_y = static_cast<u16>((finger_y - bottom_rect.y) * 240 / bottom_rect.h);
                 }
 
                 u8 packet[HEADER + 50];
@@ -675,8 +668,20 @@ int main(int, char**) {
                 }
                 const u8 type = recv_buffer[4];
                 const u8* body = recv_buffer + HEADER;
-                if (type == PacketType::Welcome) {
+                if (type == PacketType::Status && size >= HEADER + 2) {
+                    ui.OnStatus(body[0]);
+                } else if (type == PacketType::Audio && size >= HEADER + 6 + 4) {
+                    const std::size_t frames = ReadU16(body + 4);
+                    if (ui.settings.audio && size >= HEADER + 6 + frames * 4 && audio.Start()) {
+                        // The samples sit unaligned in the packet.
+                        static s16 pcm[512];
+                        const std::size_t count = std::min<std::size_t>(frames * 2, 512);
+                        std::memcpy(pcm, body + 6, count * sizeof(s16));
+                        audio.Push(pcm, count / 2);
+                    }
+                } else if (type == PacketType::Welcome) {
                     if (!host_known) {
+                        ui.QueueHostState(); // a host just appeared: tell it how we are set up
                         host.sin_addr = from.sin_addr;
                         host_known = true;
                         if (console_active) {
@@ -715,6 +720,7 @@ int main(int, char**) {
                             if (DecodeJpeg(jpeg, picture)) {
                                 picture_dirty = true;
                                 last_frame_ns = now;
+                                ui.CountFrame(now);
                             }
                         }
                     }
@@ -722,6 +728,96 @@ int main(int, char**) {
             }
         }
 
+        // What the menu asked the host for. Twice: these are datagrams.
+        if (host_known) {
+            for (const Link::Command& command : ui.TakeCommands()) {
+                u8 out[HEADER + 2];
+                std::memcpy(out, MAGIC, sizeof(MAGIC));
+                out[4] = PacketType::Command;
+                out[5] = command.what;
+                out[6] = command.value;
+                for (int i = 0; i < 2; ++i) {
+                    if (usb_mode) {
+                        GameShareUsb::Send(out, sizeof(out));
+                    } else if (sock >= 0) {
+                        sendto(sock, out, sizeof(out), 0, reinterpret_cast<const sockaddr*>(&host),
+                               sizeof(host));
+                    }
+                }
+            }
+        }
+        if (!ui.settings.audio) {
+            audio.Stop();
+        }
+        audio.Pump();
+
+        // The game on the other console is asking for an Amiibo: offer this console's
+        // reader. Every step can fail (no reader, Joy-Con detached, figure pulled away);
+        // a failure ends the attempt with a notice and nothing else.
+        if (host_known && !console_active && now - last_amiibo_poll_ns >= 250'000'000ULL) {
+            last_amiibo_poll_ns = now;
+            const bool wanted = ui.AmiiboWanted();
+            if (!wanted) {
+                if (amiibo_scanning) {
+                    SwitchFrontend::ReleaseAmiibo();
+                    amiibo_scanning = false;
+                }
+                amiibo_sent = false;
+                amiibo_refused = false;
+            } else if (!amiibo_scanning && !amiibo_sent && !amiibo_refused) {
+                std::string error;
+                if (SwitchFrontend::IsAmiiboReaderAvailable() &&
+                    SwitchFrontend::StartAmiiboScan(error)) {
+                    amiibo_scanning = true;
+                    ui.Notify("The game wants an Amiibo: hold it against the right stick", now,
+                              5'000'000'000ULL);
+                } else {
+                    amiibo_refused = true; // Once per request, not every quarter second.
+                    ui.Notify(error.empty() ? "No NFC reader here: scan the Amiibo on the other console"
+                                            : "Amiibo reader: " + error,
+                              now, 4'000'000'000ULL);
+                }
+            } else if (amiibo_scanning && !amiibo_sent) {
+                SwitchFrontend::AmiiboCapture capture;
+                std::string error;
+                if (SwitchFrontend::PollAmiiboScan(capture, error)) {
+                    constexpr std::size_t NFP = 0x298;
+                    u8 out[HEADER + NFP + 14]{};
+                    std::memcpy(out, MAGIC, sizeof(MAGIC));
+                    out[4] = PacketType::Amiibo;
+                    std::memcpy(out + HEADER, capture.nfp_data.data(), NFP);
+                    std::memcpy(out + HEADER + NFP, capture.uid.data(), 7);
+                    WriteU16(out + HEADER + NFP + 7, capture.character_id);
+                    out[HEADER + NFP + 9] = capture.character_variant;
+                    out[HEADER + NFP + 10] = capture.amiibo_type;
+                    WriteU16(out + HEADER + NFP + 11, capture.model_number);
+                    out[HEADER + NFP + 13] = capture.series;
+                    for (int i = 0; i < 3; ++i) {
+                        if (usb_mode) {
+                            GameShareUsb::Send(out, sizeof(out));
+                        } else if (sock >= 0) {
+                            sendto(sock, out, sizeof(out), 0,
+                                   reinterpret_cast<const sockaddr*>(&host), sizeof(host));
+                        }
+                    }
+                    amiibo_sent = true;
+                    SwitchFrontend::ReleaseAmiibo();
+                    amiibo_scanning = false;
+                    ui.Notify(capture.name.empty() ? "Amiibo sent to the game"
+                                                   : capture.name + " sent to the game",
+                              now);
+                } else if (!error.empty()) {
+                    SwitchFrontend::ReleaseAmiibo();
+                    amiibo_scanning = false;
+                    amiibo_refused = true;
+                    ui.Notify("Amiibo read failed: " + error, now, 4'000'000'000ULL);
+                }
+            }
+        }
+
+        if (!console_active && !picture_dirty && ui.NeedsRedraw(now)) {
+            picture_dirty = true; // The menu, the tab or a notice changed.
+        }
         if (picture_dirty) {
             if (console_active) {
                 consoleExit(nullptr);
@@ -731,7 +827,12 @@ int main(int, char**) {
                 framebufferMakeLinear(&fb);
             }
             picture_dirty = false;
-            Draw(fb, picture);
+            u32 stride = 0;
+            u32* pixels = static_cast<u32*>(framebufferBegin(&fb, &stride));
+            ui.Compose(pixels, stride / sizeof(u32),
+                       picture.width != 0 ? picture.rgb.data() : nullptr,
+                       static_cast<int>(picture.width), static_cast<int>(picture.height));
+            framebufferEnd(&fb);
         } else if (console_active) {
             consoleUpdate(nullptr);
         } else {
@@ -745,6 +846,11 @@ int main(int, char**) {
         }
     }
 
+    if (amiibo_scanning) {
+        SwitchFrontend::ReleaseAmiibo();
+    }
+    audio.Stop();
+    ui.settings.Save();
     if (sock >= 0) {
         close(sock);
     }
