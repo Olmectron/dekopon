@@ -103,6 +103,14 @@ RasterizerCache<T>::~RasterizerCache() {
 
 template <class T>
 void RasterizerCache<T>::TickFrame() {
+    ++frame_counter;
+    if ((frame_counter & 0x3FF) == 0) {
+        // Forget regions the guest stopped reading back.
+        std::erase_if(delayed_downloads, [this](const auto& entry) {
+            return frame_counter - entry.second.last_frame > 600;
+        });
+    }
+
     custom_tex_manager.TickFrame();
     RunGarbageCollector();
 
@@ -1151,7 +1159,8 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
 }
 
 template <class T>
-void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval interval) {
+void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval interval,
+                                         bool allow_delayed) {
     MICROPROFILE_SCOPE(RasterizerCache_DownloadSurface);
 
     const SurfaceParams flush_info = surface.FromInterval(interval);
@@ -1159,25 +1168,81 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
     const u32 flush_end = boost::icl::last_next(interval);
     ASSERT(flush_start >= surface.addr && flush_end <= surface.end);
 
-    const auto staging = runtime.FindStaging(
-        flush_info.width * flush_info.height * surface.GetInternalBytesPerPixel(), false);
+    const u32 staging_size =
+        flush_info.width * flush_info.height * surface.GetInternalBytesPerPixel();
 
-    const BufferTextureCopy download = {
-        .buffer_offset = staging.offset,
-        .buffer_size = staging.size,
-        .texture_rect = surface.GetSubRect(flush_info),
-        .texture_level = surface.LevelOf(flush_start),
+    const auto make_copy = [&](const StagingData& staging) {
+        return BufferTextureCopy{
+            .buffer_offset = staging.offset,
+            .buffer_size = staging.size,
+            .texture_rect = surface.GetSubRect(flush_info),
+            .texture_level = surface.LevelOf(flush_start),
+        };
     };
-    surface.Download(download, staging);
+    const auto write_to_guest = [&](std::span<u8> source) {
+        MemoryRef dest_ptr = memory.GetPhysicalRef(flush_start);
+        if (!dest_ptr) [[unlikely]] {
+            return;
+        }
+        const auto download_dest = dest_ptr.GetWriteBytes(flush_end - flush_start);
+        EncodeTexture(flush_info, flush_start, flush_end, source, download_dest,
+                      runtime.NeedsConversion(surface));
+    };
+    const auto download_now = [&] {
+        const auto staging = runtime.FindStaging(staging_size, false);
+        surface.Download(make_copy(staging), staging);
+        write_to_guest(staging.mapped);
+    };
 
-    MemoryRef dest_ptr = memory.GetPhysicalRef(flush_start);
-    if (!dest_ptr) [[unlikely]] {
-        return;
+#if defined(__SWITCH2__)
+    // A download waits for the GPU to finish everything submitted so far: about 10 ms on
+    // Switch 2 whatever the size. A game that reads a surface back every frame - Majora's
+    // Mask 3D tests the depth buffer at the sun's position whenever the sun is up - then
+    // drops from 30 to 15 fps. Once a region has been read on several frames in a row, hand
+    // back the copy that was requested on the previous frame (it has long finished) and
+    // request the next one, instead of waiting. The guest sees that region one frame late.
+    if constexpr (requires { runtime.WaitTick(u64{}); }) {
+        if (allow_delayed) {
+            constexpr u32 STREAK_TO_DELAY = 3;
+            const u64 key = (u64{flush_start} << 32) | flush_end;
+            DelayedDownload& state = delayed_downloads[key];
+            if (state.last_frame == frame_counter) {
+                // A second read of the same region within a frame gets the real thing.
+                download_now();
+                return;
+            }
+            const bool consecutive = state.last_frame != 0 && frame_counter - state.last_frame <= 2;
+            state.streak = consecutive ? state.streak + 1 : 0;
+            state.last_frame = frame_counter;
+
+            const u32 format = static_cast<u32>(surface.pixel_format);
+            const bool usable = state.pending && state.staging.size == staging_size &&
+                                state.width == flush_info.width &&
+                                state.height == flush_info.height && state.format == format;
+            if (state.streak >= STREAK_TO_DELAY && usable) {
+                runtime.WaitTick(state.tick);
+                write_to_guest(state.staging.mapped);
+            } else {
+                download_now();
+            }
+
+            state.pending = false;
+            if (state.streak + 1 >= STREAK_TO_DELAY) {
+                const auto staging = runtime.FindStaging(staging_size, false);
+                surface.Download(make_copy(staging), staging, false);
+                state.pending = true;
+                state.tick = runtime.CurrentTick();
+                state.staging = staging;
+                state.width = flush_info.width;
+                state.height = flush_info.height;
+                state.format = format;
+            }
+            return;
+        }
     }
+#endif
 
-    const auto download_dest = dest_ptr.GetWriteBytes(flush_end - flush_start);
-    EncodeTexture(flush_info, flush_start, flush_end, staging.mapped, download_dest,
-                  runtime.NeedsConversion(surface));
+    download_now();
 }
 
 template <class T>
@@ -1317,7 +1382,9 @@ void RasterizerCache<T>::FlushRegion(PAddr addr, u32 size, SurfaceId flush_surfa
             if (boost::icl::is_empty(download_interval)) {
                 continue;
             }
-            DownloadSurface(surface, download_interval);
+            // Only plain reads by the guest may be served a frame late; a flush aimed
+            // at one surface means that surface is about to be replaced.
+            DownloadSurface(surface, download_interval, !flush_surface_id);
         }
     }
 

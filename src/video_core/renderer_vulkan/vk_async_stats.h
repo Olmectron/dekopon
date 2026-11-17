@@ -28,6 +28,8 @@ inline Timed pipeline_build;
 /// Surface downloads (the game reading back what the GPU drew). Each one waits for the GPU
 /// to finish everything submitted so far.
 inline Timed surface_download;
+/// Surface downloads that were only recorded, to be read a frame later without waiting.
+inline Timed surface_download_async;
 /// Pipelines the driver served from its cache on the render thread, without a worker.
 inline std::atomic<u64> inline_pipeline_hits{};
 /// Set when the driver had to compile a pipeline, i.e. its cache holds something that the

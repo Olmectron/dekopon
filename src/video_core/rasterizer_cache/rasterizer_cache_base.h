@@ -186,7 +186,7 @@ private:
     bool UploadCustomSurface(SurfaceId surface_id, SurfaceInterval interval);
 
     /// Copies pixel data in interval from the host GPU surface to the guest VRAM
-    void DownloadSurface(Surface& surface, SurfaceInterval interval);
+    void DownloadSurface(Surface& surface, SurfaceInterval interval, bool allow_delayed = false);
 
     /// Downloads a fill surface to guest VRAM
     void DownloadFillSurface(Surface& surface, SurfaceInterval interval);
@@ -225,6 +225,20 @@ private:
     Common::SlotVector<Sampler> slot_samplers;
     Common::SlotVector<Framebuffer> slot_framebuffers;
     SurfaceMap dirty_regions;
+
+    /// A region the guest reads back every frame (see DownloadSurface).
+    struct DelayedDownload {
+        u64 last_frame{};
+        u32 streak{};
+        bool pending{};
+        u64 tick{};
+        StagingData staging{};
+        u32 width{};
+        u32 height{};
+        u32 format{};
+    };
+    std::unordered_map<u64, DelayedDownload> delayed_downloads;
+    u64 frame_counter{1};
     PageMap cached_pages;
     u32 resolution_scale_factor;
     FramebufferParams fb_params;
