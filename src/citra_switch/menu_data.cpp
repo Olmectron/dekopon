@@ -25,6 +25,7 @@
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/loader/loader.h"
+#include "citra_switch/covers.h"
 #include "core/loader/smdh.h"
 
 namespace SwitchFrontend {
@@ -137,6 +138,7 @@ bool TryLoad(const std::string& path, const std::string& fallback_title, GameEnt
     entry.file_type = Loader::GetFileTypeString(loader->GetFileType(), loader->IsFileCompressed());
     entry.insertable = loader->GetFileType() == Loader::FileType::CCI;
     loader->ReadProgramId(entry.program_id);
+    entry.game_code = ReadGameCode(path);
 
     std::vector<u8> smdh_buffer;
     const Loader::ResultStatus icon_result = loader->ReadIcon(smdh_buffer);

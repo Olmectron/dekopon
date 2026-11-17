@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include "citra_switch/config.h"
+#include "citra_switch/covers.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
@@ -28,6 +30,7 @@
 #include "citra_switch/save_manager.h"
 #include "citra_switch/settings_menu.h"
 #include "citra_switch/ui_canvas.h"
+#include "citra_switch/ui_views.h"
 #include "citra_switch/updater.h"
 #include "citra_switch/usb_storage.h"
 #include "common/horizon_boost.h"
@@ -112,42 +115,85 @@ enum class Tab { Library, Install, Settings, Paths, Artic };
 // Which pane the cursor lives in.
 enum class Focus { Rail, Content };
 
-// Indexed by Tab, so the order has to match the enum.
-constexpr std::array<std::pair<Tab, const char*>, 5> kRailItems{{{Tab::Library, "Library"},
-                                                                 {Tab::Install, "Install"},
-                                                                 {Tab::Settings, "Settings"},
-                                                                 {Tab::Paths, "Paths"},
-                                                                 {Tab::Artic, "Artic"}}};
+// The options drawer: every page of the options screen, in sections. It takes the place the
+// five-item rail and the row of settings tabs used to share.
+enum class DrawerKind { Home, Header, Page, Settings };
 
-constexpr bool RailItemsMatchTabs() {
-    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
-        if (static_cast<int>(kRailItems[i].first) != i) {
-            return false;
+struct DrawerEntry {
+    const char* label;
+    DrawerKind kind;
+    Tab tab;
+    Category category;
+    bool advanced;
+};
+
+const std::vector<DrawerEntry>& DrawerEntries() {
+    static const std::vector<DrawerEntry> entries = [] {
+        std::vector<DrawerEntry> list;
+        list.push_back({"Games", DrawerKind::Home, Tab::Library, Category::Count, false});
+        list.push_back({"SETTINGS", DrawerKind::Header, Tab::Settings, Category::Count, false});
+        for (int i = 0; i < NumCategories; ++i) {
+            const auto page = static_cast<Category>(i);
+            if (!IsAdvancedCategory(page)) {
+                list.push_back({CategoryName(page), DrawerKind::Settings, Tab::Settings, page, false});
+            }
+        }
+        list.push_back({"TOOLS", DrawerKind::Header, Tab::Settings, Category::Count, false});
+        list.push_back({"Install Titles", DrawerKind::Page, Tab::Install, Category::Count, false});
+        list.push_back({"Folders", DrawerKind::Page, Tab::Paths, Category::Count, false});
+        list.push_back({"Artic Base", DrawerKind::Page, Tab::Artic, Category::Count, false});
+        list.push_back({"ADVANCED", DrawerKind::Header, Tab::Settings, Category::Count, true});
+        for (int i = 0; i < NumCategories; ++i) {
+            const auto page = static_cast<Category>(i);
+            if (IsAdvancedCategory(page)) {
+                list.push_back({CategoryName(page), DrawerKind::Settings, Tab::Settings, page, true});
+            }
+        }
+        return list;
+    }();
+    return entries;
+}
+
+std::vector<DrawerItem> DrawerItems() {
+    std::vector<DrawerItem> items;
+    for (const DrawerEntry& entry : DrawerEntries()) {
+        items.push_back({entry.label, entry.kind == DrawerKind::Header, entry.advanced});
+    }
+    return items;
+}
+
+// The drawer entry that stands for what is on screen.
+int DrawerIndexFor(Tab tab, Category page) {
+    const auto& entries = DrawerEntries();
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        const DrawerEntry& entry = entries[i];
+        if (entry.kind == DrawerKind::Header || entry.tab != tab) {
+            continue;
+        }
+        if (tab != Tab::Settings || entry.category == page) {
+            return i;
         }
     }
-    return true;
-}
-static_assert(RailItemsMatchTabs(), "kRailItems must be indexable by Tab");
-
-constexpr int kRailFirstY = 96;
-constexpr int kRailItemH = 84;
-constexpr int kRailItemStep = 108;
-
-int RailItemTop(int index) {
-    return kRailFirstY + index * kRailItemStep;
+    return 0;
 }
 
-std::optional<Tab> RailHitTest(int y) {
-    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
-        const int top = RailItemTop(i);
-        if (y >= top && y < top + kRailItemH) {
-            return kRailItems[i].first;
+constexpr int kDrawerListTop = 84; // Matches Ui::DrawDrawer.
+
+// The entry under a touch at `y`, or -1.
+int DrawerHitTest(int y, int scroll) {
+    const std::vector<DrawerItem> items = DrawerItems();
+    int top = kDrawerListTop - scroll;
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        const int h = DrawerItemHeight(items[i]);
+        if (y >= top && y < top + h && y >= kDrawerListTop) {
+            return items[i].header ? -1 : i;
         }
+        top += h;
     }
-    return std::nullopt;
+    return -1;
 }
 
-constexpr int kRailW = 148;
+constexpr int kRailW = kDrawerW;
 constexpr int kHeaderH = 64;
 constexpr int kHintH = 44;
 constexpr int kContentX = kRailW;
@@ -193,70 +239,6 @@ std::string ToLowerAscii(std::string_view s) {
 constexpr int kTabStripTop = kContentTop + 10;
 constexpr int kTabStripH = 34;
 constexpr int kTabPadX = 14;
-constexpr int kTabPadMin = 4;
-constexpr int kTabGap = 6;
-
-struct TabRect {
-    int x{};
-    int w{};
-};
-
-// Lays the page chips out as one centred row, tightening the padding rather than overflowing the
-// content area if the shared font measures wider than the nominal padding allows for.
-std::array<TabRect, NumCategories> SettingsTabRects() {
-    std::array<TabRect, NumCategories> rects{};
-    int text = 0;
-    for (int i = 0; i < NumCategories; ++i) {
-        rects[i].w = g_font.Measure(CategoryName(static_cast<Category>(i)), 18);
-        text += rects[i].w;
-    }
-    const int available = ContentW() - 48 - (NumCategories - 1) * kTabGap;
-    const int pad = std::clamp((available - text) / (2 * NumCategories), kTabPadMin, kTabPadX);
-
-    int total = 0;
-    for (int i = 0; i < NumCategories; ++i) {
-        rects[i].w += pad * 2;
-        total += rects[i].w + (i > 0 ? kTabGap : 0);
-    }
-    int x = kContentX + std::max(24, (ContentW() - total) / 2);
-    for (int i = 0; i < NumCategories; ++i) {
-        rects[i].x = x;
-        x += rects[i].w + kTabGap;
-    }
-    return rects;
-}
-
-// Where the label sits inside its chip, which follows the same tightening.
-int SettingsTabTextInset(const std::array<TabRect, NumCategories>& rects, int index) {
-    return (rects[index].w -
-            g_font.Measure(CategoryName(static_cast<Category>(index)), 18)) /
-           2;
-}
-
-bool CompactTabStrip() {
-    int total = (NumCategories - 1) * kTabGap + NumCategories * 2 * kTabPadMin;
-    for (int i = 0; i < NumCategories; ++i) {
-        total += g_font.Measure(CategoryName(static_cast<Category>(i)), 18);
-    }
-    return total > ContentW() - 48;
-}
-
-std::optional<int> SettingsTabHitTest(int x, int y, int active) {
-    if (y < kTabStripTop || y >= kTabStripTop + kTabStripH) {
-        return std::nullopt;
-    }
-    if (CompactTabStrip()) {
-        const int step = x < kContentX + ContentW() / 2 ? -1 : 1;
-        return (active + step + NumCategories) % NumCategories;
-    }
-    const auto rects = SettingsTabRects();
-    for (int i = 0; i < NumCategories; ++i) {
-        if (x >= rects[i].x && x < rects[i].x + rects[i].w) {
-            return i;
-        }
-    }
-    return std::nullopt;
-}
 
 // swkbd prompt for the text-valued settings rows.
 std::optional<std::string> PromptSettingText(const char* header, const char* guide,
@@ -366,49 +348,6 @@ int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label
     const int label_w = g_font.Draw(canvas, label_x, CenterBaseline(y, chip_h, 18), label, 18,
                                     kColTextDim);
     return chip_w + 8 + label_w;
-}
-
-// Indexed by Tab, so the order has to match the enum.
-constexpr std::array<const std::uint8_t*, 5> kRailIconMasks{
-    RailIcons::kLibrary, RailIcons::kInstall, RailIcons::kSettings, RailIcons::kPaths, nullptr};
-
-// Draws a nav-rail icon, tinted like text: the mask supplies coverage only.
-void DrawRailIcon(Canvas& canvas, Tab tab, int cx, int cy, u32 color) {
-    const std::uint8_t* mask = kRailIconMasks[static_cast<std::size_t>(tab)];
-    if (mask == nullptr) {
-        constexpr const char* label = "AB";
-        g_font.Draw(canvas, cx - g_font.Measure(label, 18) / 2, cy + 6, label, 18, color);
-        return;
-    }
-    const int x0 = cx - RailIcons::kSize / 2;
-    const int y0 = cy - RailIcons::kSize / 2;
-    for (int row = 0; row < RailIcons::kSize; ++row) {
-        for (int col = 0; col < RailIcons::kSize; ++col) {
-            canvas.Blend(x0 + col, y0 + row, color, mask[row * RailIcons::kSize + col]);
-        }
-    }
-}
-
-void DrawRail(Canvas& canvas, Tab active, Tab cursor, bool rail_focused) {
-    canvas.FillRect(0, 0, kRailW, g_screen_h, kColRail);
-    // The solid accent pill follows the cursor while the rail is focused.
-    const Tab pill = rail_focused ? cursor : active;
-    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
-        const auto& [tab, label] = kRailItems[i];
-        const int y = RailItemTop(i);
-        const bool on = tab == pill;
-        const bool ghost = rail_focused && tab == active && tab != cursor;
-        if (on) {
-            canvas.FillRoundRect(12, y, kRailW - 24, kRailItemH, 16, kColAccent);
-        } else if (ghost) {
-            // Keep a faint marker on the section you came from.
-            canvas.FillRoundRect(12, y, kRailW - 24, kRailItemH, 16, kColSurface);
-        }
-        const u32 fg = on ? kColOnAccent : kColTextDim;
-        DrawRailIcon(canvas, tab, kRailW / 2, y + 32, fg);
-        const int tw = g_font.Measure(label, 18);
-        g_font.Draw(canvas, (kRailW - tw) / 2, y + 68, label, 18, fg);
-    }
 }
 
 void DrawHeader(Canvas& canvas, std::string_view subtitle) {
@@ -1005,7 +944,12 @@ public:
 
             MenuResult result;
             bool done = false;
-            if (info_card) {
+            if (info_sheet_open) {
+                if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_X |
+                            HidNpadButton_StickR)) {
+                    info_sheet_open = false;
+                }
+            } else if (info_card) {
                 HandleInfoCard(down, nav);
             } else if (update_installed) {
                 if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus |
@@ -1064,8 +1008,12 @@ public:
             if (!install_active && !update_download_active && !update_installed &&
                 !UpdateModalOpen() && !info_card && !details_open && !saves_open &&
                 !layout_picker_open && !remap_open && !preset_picker_open && !country_picker_open &&
-                !confirm && !PerGameOpen()) {
+                !confirm && !PerGameOpen() && !info_sheet_open) {
                 HandleTouch();
+            }
+            if (exit_requested) {
+                Flush();
+                return {MenuAction::Exit, {}};
             }
             if (pending_launch) {
                 MenuResult launch{MenuAction::Launch, *pending_launch};
@@ -1096,6 +1044,8 @@ public:
         if (updater_thread.joinable()) {
             updater_thread.join();
         }
+        // Not while a game runs: it would compete for the network and the SD card.
+        StopCoverDownload();
         if (fb_ready) {
             framebufferClose(&fb);
         }
@@ -1104,7 +1054,326 @@ public:
 private:
     Tab tab{Tab::Library};
     Focus focus{Focus::Content};
-    Tab rail_sel{Tab::Library}; // Highlighted rail item while focused.
+    Tab rail_sel{Tab::Library}; // Section the drawer was entered from.
+
+    // Options drawer.
+    int drawer_cursor = 0;
+    int drawer_scroll = 0;
+    bool advanced_ack = false;   // The Advanced warning has been accepted this run.
+    bool info_sheet_open = false;
+    bool exit_requested = false;
+
+    // Cover shelf.
+    float shelf_pos = 0.0f;   // Eased towards `selected`; the difference is the slide.
+    float shelf_flip = 0.0f;  // Eased towards 0 (front) or 1 (back).
+    bool shelf_back = false;
+    HomeLayout home_layout{};
+    std::vector<std::shared_ptr<const CoverArt>> frame_covers; // Keeps this frame's art alive.
+
+    static ShelfStyle LibraryStyle() {
+        return static_cast<ShelfStyle>(GetLibraryStyle());
+    }
+
+    // The library as a full-screen shelf of covers. The Grid style keeps the classic page.
+    bool ShelfMode() const {
+        return tab == Tab::Library && !PerGameOpen() && LibraryStyle() != ShelfStyle::Grid;
+    }
+
+    void GoHome() {
+        SetTab(Tab::Library);
+        focus = Focus::Content;
+    }
+
+    // From the library into the options screen, cursor on the drawer.
+    void OpenOptions() {
+        SetTab(Tab::Settings);
+        EnterRail();
+    }
+
+    void ScrollDrawerIntoView() {
+        const std::vector<DrawerItem> items = DrawerItems();
+        const int top = DrawerItemOffset(items, drawer_cursor);
+        const int visible = g_screen_h - kDrawerListTop - 8;
+        const int total = DrawerItemOffset(items, static_cast<int>(items.size()));
+        if (top - kDrawerHeaderH < drawer_scroll) {
+            drawer_scroll = top - kDrawerHeaderH; // Keep the section title in view too.
+        }
+        if (top + kDrawerItemH > drawer_scroll + visible) {
+            drawer_scroll = top + kDrawerItemH - visible;
+        }
+        drawer_scroll = std::clamp(drawer_scroll, 0, std::max(0, total - visible));
+    }
+
+    void ActivateDrawer(int index) {
+        const auto& entries = DrawerEntries();
+        if (index < 0 || index >= static_cast<int>(entries.size())) {
+            return;
+        }
+        const DrawerEntry& entry = entries[index];
+        switch (entry.kind) {
+        case DrawerKind::Header:
+            return;
+        case DrawerKind::Home:
+            GoHome();
+            return;
+        case DrawerKind::Page:
+            SetTab(entry.tab);
+            break;
+        case DrawerKind::Settings:
+            if (entry.advanced && !advanced_ack) {
+                OpenAdvancedWarning(index);
+                return;
+            }
+            SetTab(Tab::Settings);
+            SetSettingsPage(entry.category);
+            break;
+        }
+        drawer_cursor = index;
+        ScrollDrawerIntoView();
+        focus = Focus::Content;
+    }
+
+    // Shown once per run, the first time an Advanced page is opened.
+    void OpenAdvancedWarning(int index) {
+        confirm = ConfirmPrompt{
+            "Advanced settings",
+            {"These pages are for people who know what each option does.",
+             "A wrong value can make games slow, glitchy, or unable to start.",
+             "Press X on any option to read what it is for before changing it."},
+            "General > Reset All Settings puts everything back.",
+            "Continue",
+            [this, index] {
+                advanced_ack = true;
+                ActivateDrawer(index);
+            },
+            {},
+        };
+    }
+
+    void CycleLibraryStyle(int dir) {
+        const int count = static_cast<int>(ShelfStyle::Count);
+        SetLibraryStyle((GetLibraryStyle() + dir + count) % count);
+        settings_dirty = true;
+        shelf_back = false;
+        ShowNotice(std::string{"Library style: "} + ShelfStyleName(LibraryStyle()), false);
+    }
+
+    // Asks for the covers the library is missing. Quietly does nothing without internet access.
+    void RequestCovers() {
+        std::vector<CoverRequest> requests;
+        for (const GameEntry& game : games) {
+            if (!game.game_code.empty()) {
+                requests.push_back({game.game_code});
+            }
+        }
+        StartCoverDownload(std::move(requests));
+    }
+
+    bool HandleShelf(u64 down, u32 nav, MenuResult& result) {
+        const int count = static_cast<int>(filtered.size());
+        if (count > 0) {
+            const int before = selected;
+            if (nav & DirLeft) {
+                selected = std::max(0, selected - 1);
+            }
+            if (nav & DirRight) {
+                selected = std::min(count - 1, selected + 1);
+            }
+            if (down & HidNpadButton_ZL) {
+                selected = std::max(0, selected - 5);
+            }
+            if (down & HidNpadButton_ZR) {
+                selected = std::min(count - 1, selected + 5);
+            }
+            if (selected != before) {
+                shelf_back = false;
+            }
+            if (down & HidNpadButton_A) {
+                result = {MenuAction::Launch, games[filtered[selected]].path};
+                return true;
+            }
+            if (down & HidNpadButton_X) {
+                shelf_back = !shelf_back;
+            }
+            // Guarded so that reaching for the +/- exit combo doesn't flash the panel open.
+            if ((down & HidNpadButton_Plus) && !(held & HidNpadButton_Minus)) {
+                details = GetTitleDetails(games[filtered[selected]]);
+                details_open = true;
+            }
+        }
+        if (down & HidNpadButton_Y) {
+            search = PromptSearch(search);
+            ApplyFilter();
+            shelf_back = false;
+        }
+        if (down & HidNpadButton_StickL) {
+            ShowBusy("Refreshing library…");
+            search.clear();
+            Rescan();
+        }
+        if (((down & HidNpadButton_Minus) && !(held & HidNpadButton_Plus)) ||
+            (down & HidNpadButton_B)) {
+            OpenOptions();
+        }
+        return false;
+    }
+
+    void HandleShelfTouch(int tx, int ty) {
+        const HomeLayout& l = home_layout;
+        const auto within = [&](int cx, int cy, int radius) {
+            return (tx - cx) * (tx - cx) + (ty - cy) * (ty - cy) <= (radius + 10) * (radius + 10);
+        };
+        const int count = static_cast<int>(filtered.size());
+        if (within(l.options_cx, l.options_cy, l.button_radius)) {
+            OpenOptions();
+        } else if (within(l.exit_cx, l.exit_cy, l.button_radius)) {
+            confirm = ConfirmPrompt{"Close Toronja?", {"Returns to the Homebrew Menu."}, "",
+                                    "Close", [this] { exit_requested = true; }, {}};
+        } else if (count > 0 && within(l.prev_x, l.arrows_y, l.arrow_radius)) {
+            selected = std::max(0, selected - 1);
+            shelf_back = false;
+        } else if (count > 0 && within(l.next_x, l.arrows_y, l.arrow_radius)) {
+            selected = std::min(count - 1, selected + 1);
+            shelf_back = false;
+        } else if (count > 0 && ty >= l.shelf_y && ty < l.shelf_y + l.shelf_h) {
+            // The cover in the middle starts the game; either side slides the shelf.
+            const int centre = g_screen_w / 2;
+            const int half = l.shelf_h * 35 / 100;
+            if (tx < centre - half) {
+                selected = std::max(0, selected - 1);
+                shelf_back = false;
+            } else if (tx > centre + half) {
+                selected = std::min(count - 1, selected + 1);
+                shelf_back = false;
+            } else {
+                pending_launch = games[filtered[selected]].path;
+            }
+        }
+    }
+
+    void DrawShelfHome(Canvas& c) {
+        const int count = static_cast<int>(filtered.size());
+        // Ease towards the selection: this is all the sliding and turning there is.
+        const float target = static_cast<float>(selected);
+        shelf_pos += (target - shelf_pos) * 0.26f;
+        if (std::abs(target - shelf_pos) < 0.003f) {
+            shelf_pos = target;
+        }
+        shelf_pos = std::clamp(shelf_pos, 0.0f, static_cast<float>(std::max(0, count - 1)));
+        const float flip_target = shelf_back ? 1.0f : 0.0f;
+        shelf_flip += (flip_target - shelf_flip) * 0.20f;
+        if (std::abs(flip_target - shelf_flip) < 0.004f) {
+            shelf_flip = flip_target;
+        }
+
+        frame_covers.clear();
+        int budget = 1; // At most one cover decoded per frame.
+        const auto get = [&](int i) {
+            const GameEntry& game = games[filtered[i]];
+            ShelfItem item;
+            if (auto art = GetCover(game.game_code, game.program_id, budget)) {
+                item.cover = &art->image;
+                item.full_wrap = art->full_wrap;
+                frame_covers.push_back(std::move(art));
+            }
+            item.icon = &game.icon;
+            item.icon_size = game.icon_size;
+            item.title = game.title;
+            item.publisher = game.publisher;
+            item.badge = game.file_type;
+            if (i == selected) {
+                if (game.program_id != 0) {
+                    item.back_text.push_back("Title ID  " + FormatTitleId(game.program_id));
+                }
+                if (!game.game_code.empty()) {
+                    item.back_text.push_back("Game code  " + game.game_code);
+                }
+                if (!game.file_type.empty()) {
+                    item.back_text.push_back("Format  " + game.file_type);
+                }
+                item.back_text.push_back(game.installed ? "Installed on the emulated SD card"
+                                                        : "Runs from the games folder");
+                if (game.encrypted) {
+                    item.back_text.push_back("Encrypted: needs the console's keys");
+                }
+            }
+            return item;
+        };
+
+        HomeView view;
+        view.screen_w = g_screen_w;
+        view.screen_h = g_screen_h;
+        view.style = LibraryStyle();
+        view.position = shelf_pos;
+        view.count = count;
+        view.flip = shelf_flip;
+        view.app_name = "Toronja";
+#if defined(__SWITCH2__)
+        view.app_tag = "for Switch 2";
+#endif
+        std::string counter;
+        if (count > 0) {
+            const GameEntry& game = games[filtered[selected]];
+            view.title = game.title;
+            view.publisher = game.publisher;
+            counter = std::to_string(selected + 1) + " of " + std::to_string(count);
+        }
+        if (IsCoverDownloadActive()) {
+            counter += (counter.empty() ? "" : "   ") + std::string{"Covers "} +
+                       std::to_string(CoverDownloadDone()) + "/" +
+                       std::to_string(CoverDownloadTotal());
+        }
+        view.counter = counter;
+        view.search = search;
+        view.compact = g_screen_w < 1000;
+        home_layout = DrawHome(c, g_font, view, get);
+
+        if (count == 0) {
+            const char* line1 = search.empty() ? "No games found" : "No game matches the search";
+            const std::string line2 =
+                search.empty() ? "Copy your games to " + paths.roms_dir : "Press Y to search again";
+            const std::string shown = g_font.TruncateFront(line2, 18, g_screen_w - 96);
+            const int mid = home_layout.shelf_y + home_layout.shelf_h / 2;
+            g_font.Draw(c, (g_screen_w - g_font.Measure(line1, 28)) / 2, mid - 8, line1, 28,
+                        kColText);
+            g_font.Draw(c, (g_screen_w - g_font.Measure(shown, 18)) / 2, mid + 26, shown, 18,
+                        kColTextDim);
+            const char* line3 = "- opens the options, where the games folder can be changed";
+            g_font.Draw(c, (g_screen_w - g_font.Measure(line3, 16)) / 2, mid + 54, line3, 16,
+                        kColTextDim);
+        }
+    }
+
+    void DrawDrawerPanel(Canvas& c, bool focused) {
+        const std::vector<DrawerItem> items = DrawerItems();
+        const std::string version = std::string{"Version "} + CurrentVersion();
+        DrawDrawer(c, g_font, 0, 0, g_screen_h, "Toronja", version, items,
+                   DrawerIndexFor(tab, settings_page), drawer_cursor, focused, drawer_scroll);
+    }
+
+    // The sheet X brings up: what the focused option is for.
+    void DrawSettingInfo(Canvas& c) {
+        const int sel = SettingsSel();
+        if (sel < 0 || sel >= static_cast<int>(settings_rows.size())) {
+            info_sheet_open = false;
+            return;
+        }
+        const SettingsRow& row = settings_rows[sel];
+        std::vector<std::string> facts;
+        if (row.value) {
+            facts.push_back("Now: " + row.value());
+        }
+        if (row.needs_restart) {
+            facts.push_back("Takes effect the next time a game starts.");
+        }
+        if (!PerGameOpen() && IsAdvancedCategory(settings_page)) {
+            facts.push_back("Advanced option: leave it alone unless you know you need it.");
+        }
+        DrawInfoSheet(c, g_font, g_screen_w, g_screen_h, kContentX, row.label,
+                      row.description.empty() ? "No description for this option yet."
+                                              : row.description,
+                      facts, "A / B / X  Close");
+    }
     std::vector<GameEntry> games;
     std::vector<int> filtered; // Indices into `games` after search filtering.
     int selected = 0;          // Index into `filtered`.
@@ -1234,6 +1503,9 @@ private:
             install_dir = paths.roms_dir;
         }
         ApplyFilter();
+        EnsureCoverFolders();
+        ResetCoverCache();
+        RequestCovers();
     }
 
     // A drive appearing or leaving changes what the second ROM folder holds, and the library has
@@ -1416,10 +1688,20 @@ private:
         }
         selected = std::clamp(selected, 0, std::max(0, static_cast<int>(filtered.size()) - 1));
         scroll_row = 0;
+        shelf_pos = static_cast<float>(selected);
     }
 
     // Returns true if the menu should return `result` to the caller.
     bool HandleLibrary(u64 down, u32 nav, MenuResult& result) {
+        if (down & HidNpadButton_L) {
+            CycleLibraryStyle(-1);
+        }
+        if (down & HidNpadButton_R) {
+            CycleLibraryStyle(+1);
+        }
+        if (ShelfMode()) {
+            return HandleShelf(down, nav, result);
+        }
         const Grid grid = ComputeGrid();
         const int count = static_cast<int>(filtered.size());
         if (count > 0) {
@@ -1722,29 +2004,39 @@ private:
     void EnterRail() {
         focus = Focus::Rail;
         rail_sel = tab;
+        drawer_cursor = DrawerIndexFor(tab, settings_page);
+        ScrollDrawerIntoView();
     }
 
     void HandleRail(u64 down, u32 nav) {
-        int index = static_cast<int>(rail_sel);
+        const auto& entries = DrawerEntries();
+        const int count = static_cast<int>(entries.size());
+        const auto step = [&](int dir) {
+            int index = drawer_cursor + dir;
+            while (index >= 0 && index < count && entries[index].kind == DrawerKind::Header) {
+                index += dir;
+            }
+            if (index >= 0 && index < count) {
+                drawer_cursor = index;
+            }
+        };
         if (nav & DirUp) {
-            index = std::max(0, index - 1);
+            step(-1);
         }
         if (nav & DirDown) {
-            index = std::min(static_cast<int>(kRailItems.size()) - 1, index + 1);
+            step(+1);
         }
-        rail_sel = kRailItems[index].first;
-        if (down & HidNpadButton_A) {
-            SetTab(rail_sel);
-            focus = Focus::Content;
+        ScrollDrawerIntoView();
+        if ((down & HidNpadButton_A) || (nav & DirRight)) {
+            ActivateDrawer(drawer_cursor);
+            return;
         }
-        // B cancels back into the section left.
+        // B leaves the options: back to the games.
         if (down & HidNpadButton_B) {
-            rail_sel = tab;
-            focus = Focus::Content;
+            GoHome();
         }
     }
 
-    // Keeps the selected settings row inside the visible window.
     void ScrollSettingsIntoView() {
         int& scroll = SettingsScroll();
         const int sel = SettingsSel();
@@ -1762,8 +2054,12 @@ private:
         for (int i = 0; i < NumCategories; ++i) {
             index = (index + dir + NumCategories) % NumCategories;
             const auto page = static_cast<Category>(index);
-            if (!PerGameOpen() || CategoryHasOverridables(page)) {
+            const bool allowed = PerGameOpen() ? CategoryHasOverridables(page)
+                                               : advanced_ack || !IsAdvancedCategory(page);
+            if (allowed) {
                 SetSettingsPage(page);
+                drawer_cursor = DrawerIndexFor(Tab::Settings, page);
+                ScrollDrawerIntoView();
                 return;
             }
         }
@@ -1957,6 +2253,16 @@ private:
 
     // `nav` moves the cursor; `dpad_nav` is the d-pad-only subset that is allowed to edit a value.
     bool HandleSettings(u64 down, u32 nav, u32 dpad_nav) {
+        // X explains the focused option (the right stick does too, and is the only way in
+        // the per-game editor, where X switches between the global value and an override).
+        if (((down & HidNpadButton_X) && !PerGameOpen()) || (down & HidNpadButton_StickR)) {
+            const int index = SettingsSel();
+            if (index >= 0 && index < static_cast<int>(settings_rows.size()) &&
+                !settings_rows[index].is_header) {
+                info_sheet_open = true;
+            }
+            return false;
+        }
         if (down & HidNpadButton_Y) {
             OpenSettingsSearch();
             return false;
@@ -2690,11 +2996,13 @@ private:
         }
         touch_was_down = true;
 
+        if (ShelfMode()) {
+            HandleShelfTouch(tx, ty);
+            return;
+        }
         if (tx < kRailW) {
-            if (const std::optional<Tab> hit = RailHitTest(ty)) {
-                SetTab(*hit);
-                rail_sel = tab;
-                focus = Focus::Content;
+            if (const int hit = DrawerHitTest(ty, drawer_scroll); hit >= 0) {
+                ActivateDrawer(hit);
             }
             return;
         }
@@ -2721,14 +3029,6 @@ private:
                 install_sel = row;
             }
         } else if (tab == Tab::Settings) {
-            const std::optional<int> page =
-                settings_search_open
-                    ? std::optional<int>{}
-                    : SettingsTabHitTest(tx, ty, static_cast<int>(settings_page));
-            if (page) {
-                SetSettingsPage(static_cast<Category>(*page));
-                return;
-            }
             const int visible = (ty - kSettingsTop) / kSettingsRowStride;
             const int row = SettingsScroll() + visible;
             if (ty >= kSettingsTop && visible < SettingsVisibleRows() && row >= 0 &&
@@ -3178,14 +3478,18 @@ private:
     void Draw() {
         Canvas& c = canvas;
         c.Clear(kColBg);
-        DrawHintBar(c);
+        if (!ShelfMode()) {
+            DrawHintBar(c);
+        }
         if (PerGameOpen()) {
-            DrawRail(c, Tab::Settings, Tab::Settings, false);
+            DrawDrawerPanel(c, false);
             DrawSettingsPage(c);
             DrawNotice(c);
             return;
         }
-        DrawRail(c, tab, rail_sel, focus == Focus::Rail);
+        if (!ShelfMode()) {
+            DrawDrawerPanel(c, focus == Focus::Rail);
+        }
         if (tab == Tab::Library) {
             DrawLibrary(c);
         } else if (tab == Tab::Install) {
@@ -3233,6 +3537,9 @@ private:
         }
         if (info_card) {
             DrawInfoCard(c);
+        }
+        if (info_sheet_open) {
+            DrawSettingInfo(c);
         }
     }
 
@@ -3488,6 +3795,10 @@ private:
     }
 
     void DrawLibrary(Canvas& c) {
+        if (ShelfMode()) {
+            DrawShelfHome(c);
+            return;
+        }
         std::string sub;
         if (!search.empty()) {
             sub = "Search: " + search + "  (" + std::to_string(filtered.size()) + ")";
@@ -3515,7 +3826,8 @@ private:
             int hx = HintX();
             const int hy = ContentBottom() + (kHintH - 26) / 2;
             hx += DrawHint(c, hx, hy, "A", "Launch") + 22;
-            hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
+            hx += DrawHint(c, hx, hy, "B", "Options") + 22;
+            hx += DrawHint(c, hx, hy, "L R", "Style") + 22;
             hx += DrawHint(c, hx, hy, "X", "Search") + 22;
             hx += DrawHint(c, hx, hy, "Y", "Refresh") + 22;
             hx += DrawHint(c, hx, hy, "+", "Details") + 22;
@@ -3578,28 +3890,21 @@ private:
                         g_font.Truncate(name, 18, w - kTabPadX * 2), 18, kColOnAccent);
             return;
         }
-        if (CompactTabStrip() || PerGameOpen()) {
-            const char* name = CategoryName(settings_page);
-            const int baseline = CenterBaseline(kTabStripTop, kTabStripH, 18);
-            const int w = g_font.Measure(name, 18) + kTabPadX * 2;
-            const int x = kContentX + (ContentW() - w) / 2;
-            c.FillRoundRect(x, kTabStripTop, w, kTabStripH, kTabStripH / 2, kColAccent);
-            g_font.Draw(c, x + kTabPadX, baseline, name, 18, kColOnAccent);
-            g_font.Draw(c, x - 24, baseline, "<", 18, kColTextDim);
-            g_font.Draw(c, x + w + 14, baseline, ">", 18, kColTextDim);
-            return;
-        }
-        const auto rects = SettingsTabRects();
-        for (int i = 0; i < NumCategories; ++i) {
-            const bool on = i == static_cast<int>(settings_page);
-            if (on) {
-                c.FillRoundRect(rects[i].x, kTabStripTop, rects[i].w, kTabStripH, kTabStripH / 2,
-                                kColAccent);
-            }
-            const char* name = CategoryName(static_cast<Category>(i));
-            g_font.Draw(c, rects[i].x + SettingsTabTextInset(rects, i),
-                        CenterBaseline(kTabStripTop, kTabStripH, 18), name, 18,
-                        on ? kColOnAccent : kColTextDim);
+        const char* name = CategoryName(settings_page);
+        const int baseline = CenterBaseline(kTabStripTop, kTabStripH, 26);
+        const int title_w = g_font.Draw(c, kContentX + 44, baseline, name, 26, kColText);
+        if (!PerGameOpen() && IsAdvancedCategory(settings_page)) {
+            // A reminder that stays in view the whole time an Advanced page is open.
+            const char* note = "Advanced: change only what you understand";
+            const int note_w = g_font.Measure(note, 16) + 52;
+            const int note_x = std::min(kContentX + 44 + title_w + 24,
+                                        g_screen_w - 28 - note_w);
+            c.FillRoundRect(note_x, kTabStripTop + 2, note_w, kTabStripH - 4,
+                            (kTabStripH - 4) / 2, MakeColor(0x4A, 0x30, 0x16));
+            DrawIcon(c, Icon::Warning, note_x + 22.0f, kTabStripTop + kTabStripH / 2.0f, 17.0f,
+                     MakeColor(0xFF, 0xC4, 0x7A));
+            g_font.Draw(c, note_x + 40, CenterBaseline(kTabStripTop + 2, kTabStripH - 4, 16), note,
+                        16, MakeColor(0xFF, 0xD8, 0xA8));
         }
     }
 
@@ -3684,6 +3989,9 @@ private:
             if (PerGameOpen() && has_sel && settings_rows[sel].set_global) {
                 hx += DrawHint(c, hx, hy, "X",
                                settings_rows[sel].using_global() ? "Override" : "Use Global") + 22;
+            }
+            if (!PerGameOpen()) {
+                hx += DrawHint(c, hx, hy, "X", "Info") + 22;
             }
             hx += DrawHint(c, hx, hy, "Y", "Search") + 22;
             if (!settings_search_open) {

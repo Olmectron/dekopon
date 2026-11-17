@@ -12,6 +12,7 @@
 
 #include "audio_core/dsp_interface.h"
 #include "citra_switch/config.h"
+#include "citra_switch/covers.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/overlay_menu.h"
@@ -359,6 +360,12 @@ public:
 
     void Ini(const char* name) {
         section = name;
+    }
+
+    /// Sends the entries that follow to another page. A page gathers what belongs
+    /// together for the user, which is not always how the settings are stored.
+    void Page(Category page) {
+        category = page;
     }
 
     Table& operator<<(SettingEntry entry) {
@@ -756,6 +763,10 @@ SettingEntry GyroSensitivityEntry(bool horizontal) {
         100, 10, 500, 10, "%");
 }
 
+constexpr std::array<const char*, 4> kLibraryStyleNames{"Coverflow", "Carousel", "Stack",
+                                                        "Grid"};
+constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
+
 void BuildGeneral(std::vector<SettingEntry>& out) {
     Table t{out, Category::General};
 
@@ -775,6 +786,7 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                  QuickSection::Display},
                 Settings::values.show_shader_compile_notice);
 
+    t.Page(Category::Amiibo);
     t.Group("Amiibo");
     t.Ini("Switch");
     t << LocalBool("auto_amiibo_scan",
@@ -783,6 +795,24 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                     "Amiibo, and off again afterwards. Just hold the figure against the "
                     "right stick when the game asks."},
                    IsAutoAmiiboEnabled, SetAutoAmiiboEnabled, true);
+
+    t.Page(Category::General);
+    t.Group("Library");
+    t.Ini("Switch");
+    t << LocalChoice(
+        "library_style",
+        {"Library Style",
+         "How the games are laid out: three kinds of cover shelf, or the plain grid. "
+         "L and R switch between them in the library."},
+        [] { return GetLibraryStyle(); }, [](int value) { SetLibraryStyle(value); }, 0,
+        kLibraryStyleNames);
+    t << LocalChoice(
+        "cover_source",
+        {"Download Covers",
+         "Fetches missing box art from GameTDB when the console is online. Covers can "
+         "also be copied to the covers folder by hand; see the readme there."},
+        [] { return GetCoverSource(); }, [](int value) { SetCoverSource(value); }, 1,
+        kCoverSourceNames);
 
     t.Group("Quick Menu");
     t.Ini("Switch");
@@ -841,6 +871,8 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
     t << Toggle({"Shader JIT",
                  "Compiles CPU-side PICA shaders to native code instead of interpreting them."},
                 v.use_shader_jit);
+    t.Page(Category::Display);
+    t.Group("Shaders");
 #if defined(__SWITCH2__)
     t << Toggle({"Async Shader Compilation (Experimental)",
                  "Builds shaders on spare cores while the game keeps running. Cuts hitching; objects "
@@ -850,6 +882,8 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
                  "Builds shaders on a background thread. Cuts hitching at the cost of one-time visual bugs."},
 #endif
                 v.async_shader_compilation);
+    t.Page(Category::Graphics);
+    t.Group("Shaders");
     t << Toggle({"Disk Shader Cache",
                  "Keeps compiled shaders on the SD card so later runs hitch less."},
                 v.use_disk_shader_cache);
@@ -906,6 +940,7 @@ void BuildEnhancements(std::vector<SettingEntry>& out) {
     Table t{out, Category::Enhancements};
     t.Ini("Renderer");
 
+    t.Page(Category::Display);
     t.Group("Resolution");
     t << ResolutionEntry();
     t << Relayout(Toggle({"Integer Scaling",
@@ -913,6 +948,7 @@ void BuildEnhancements(std::vector<SettingEntry>& out) {
                           EntryFlag::None, QuickSection::Graphics},
                          v.use_integer_scaling));
 
+    t.Page(Category::Enhancements);
     t.Group("Filtering");
     t << Toggle({"Linear Filtering", "Samples the 3DS screens smoothly rather than blockily.",
                  EntryFlag::None, QuickSection::Graphics},
@@ -999,6 +1035,7 @@ void BuildLayout(std::vector<SettingEntry>& out) {
     auto& v = Settings::values;
     Table t{out, Category::Layout};
 
+    t.Page(Category::Display);
     t.Group("Screens");
     t << ScreenLayoutEntry();
     t << SwapScreensEntry();
@@ -1014,6 +1051,7 @@ void BuildLayout(std::vector<SettingEntry>& out) {
                     QuickSection::Display},
                    IsFullscreenStretchEnabled, SetFullscreenStretchEnabled, false);
 
+    t.Page(Category::Layout);
     t.Group("Screen Overlay");
     t.Ini("Layout");
     t << Relayout(Choice({"Overlay Screen Position",
@@ -1058,6 +1096,8 @@ void BuildLayout(std::vector<SettingEntry>& out) {
                     "Turns the d-pad with the menu, for holding the console sideways.",
                     EntryFlag::None, QuickSection::Display},
                    IsMenuInputRotated, SetMenuInputRotated, false);
+    t.Page(Category::Display);
+    t.Group("Screens");
     t << LayoutCycleEntry();
 }
 
@@ -1141,6 +1181,7 @@ void BuildSystem(std::vector<SettingEntry>& out) {
     t << PlayCoinsEntry();
     t << SystemSetupEntry();
 
+    t.Page(Category::SystemAdvanced);
     t.Group("Clock");
     t << Choice({"Clock Source", "Where the emulated clock starts from."}, v.init_clock,
                 kInitClockNames);
@@ -1310,11 +1351,11 @@ std::vector<SettingEntry> BuildRegistry() {
     std::vector<SettingEntry> entries;
     entries.reserve(160);
     BuildGeneral(entries);
-    BuildGraphics(entries);
     BuildEnhancements(entries);
+    BuildLayout(entries);
+    BuildGraphics(entries);
     BuildStereo3D(entries);
     BuildAudio(entries);
-    BuildLayout(entries);
     BuildControls(entries);
     BuildSystem(entries);
     BuildConsole(entries);
@@ -1339,28 +1380,34 @@ const char* CategoryName(Category category) {
     switch (category) {
     case Category::General:
         return "General";
+    case Category::Display:
+        return "Display";
+    case Category::Audio:
+        return "Audio";
+    case Category::Controls:
+        return "Controls";
+    case Category::Amiibo:
+        return "Amiibo";
+    case Category::GameShare:
+        return "GameShare";
+    case Category::System:
+        return "System";
     case Category::Graphics:
         return "Graphics";
     case Category::Enhancements:
         return "Enhancements";
     case Category::Stereo3D:
-        return "3D";
-    case Category::Audio:
-        return "Audio";
+        return "Stereoscopic 3D";
     case Category::Layout:
-        return "Layout";
-    case Category::Controls:
-        return "Controls";
-    case Category::System:
-        return "System";
+        return "Screen Tuning";
+    case Category::SystemAdvanced:
+        return "Clock & Modules";
     case Category::Console:
-        return "Console";
+        return "Console Identity";
     case Category::Storage:
         return "Storage";
     case Category::Advanced:
-        return "Advanced";
-    case Category::GameShare:
-        return "GameShare";
+        return "CPU & Debug";
     default:
         return "";
     }

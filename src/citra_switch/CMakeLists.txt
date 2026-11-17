@@ -21,6 +21,8 @@ add_executable(citra_switch
     citra_switch.cpp
     config.cpp
     config.h
+    covers.cpp
+    covers.h
     emu_window.cpp
     emu_window.h
     emulation.cpp

@@ -12,25 +12,37 @@
 
 namespace SwitchFrontend {
 
+// The pages of the options screen, in the order the drawer lists them: the everyday ones
+// first, then the ones kept under "Advanced" (see IsAdvancedCategory).
 enum class Category {
     General,
+    Display,
+    Audio,
+    Controls,
+    Amiibo,
+    GameShare,
+    System,
+    // Advanced from here on.
     Graphics,
     Enhancements,
     Stereo3D,
-    Audio,
     Layout,
-    Controls,
-    System,
+    SystemAdvanced,
     Console,
     Storage,
     Advanced,
-    GameShare,
     Count,
 };
 
 inline constexpr int NumCategories = static_cast<int>(Category::Count);
 
 const char* CategoryName(Category category);
+
+/// Pages that can break things when changed blindly. The options screen lists them
+/// apart and warns before letting anyone in.
+constexpr bool IsAdvancedCategory(Category category) {
+    return category >= Category::Graphics && category < Category::Count;
+}
 
 enum class QuickSection {
     None,

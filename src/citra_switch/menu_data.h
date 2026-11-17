@@ -36,6 +36,7 @@ struct GameEntry {
     bool installed{};           // Came from the SD title tree rather than the ROM directory.
     bool insertable{};          // A CCI cartridge image that can occupy the emulated card slot.
     std::uint64_t program_id{}; // 0 if it couldn't be read.
+    std::string game_code;      // Four-character code ("AQEE"), empty if it has none.
     int icon_size{};            // 48x48 RGBA8888 icon, empty if none.
     std::vector<std::uint32_t> icon;
 };
