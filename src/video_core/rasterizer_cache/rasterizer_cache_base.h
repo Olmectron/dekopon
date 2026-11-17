@@ -232,7 +232,8 @@ private:
         u32 streak{};
         bool pending{};
         u64 tick{};
-        StagingData staging{};
+        u32 staging_size{};
+        std::span<u8> mapped{};
         u32 width{};
         u32 height{};
         u32 format{};
