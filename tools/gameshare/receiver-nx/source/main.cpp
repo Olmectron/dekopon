@@ -31,6 +31,8 @@
 
 #include <switch.h>
 
+#include "../../../../src/citra_switch/game_share_usb.h"
+
 #include <jpeglib.h>
 
 namespace {
@@ -410,11 +412,12 @@ int main(int, char**) {
 
     // How to reach the host. The socket is created afterwards, so that with local wireless it
     // lives on that network.
-    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
+    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)    Y: USB cable\n");
     std::printf("Local wireless needs the Homebrew Menu opened from the Album,\n"
                 "not on top of a game.\n");
     consoleUpdate(nullptr);
     bool local_wireless = false;
+    bool usb_mode = false;
     bool quit = false;
     in_addr local_host{};
     while (appletMainLoop()) {
@@ -425,6 +428,19 @@ int main(int, char**) {
             break;
         }
         if (down & HidNpadButton_A) {
+            break;
+        }
+        if (down & HidNpadButton_Y) {
+            char usb_log[256];
+            usb_mode = GameShareUsb::Start(usb_log, sizeof(usb_log));
+            std::printf("USB: %s\n", usb_log);
+            if (!usb_mode) {
+                std::printf("USB is not available. A: network  X: local wireless\n");
+                consoleUpdate(nullptr);
+                continue;
+            }
+            std::printf("Connect both consoles with a USB-C cable.\n");
+            consoleUpdate(nullptr);
             break;
         }
         if (down & HidNpadButton_X) {
@@ -470,6 +486,9 @@ int main(int, char**) {
     u8 screen = 1; // bottom
     u32 input_seq = 0;
     u64 last_hello_ns = 0;
+    u64 last_input_ns = 0;
+    u32 ack_id = 0; // newest frame id seen, reported back to the host
+    bool usb_was_connected = false;
     u64 last_frame_ns = 0;
     u64 quit_since_ns = 0;
 
@@ -511,7 +530,16 @@ int main(int, char**) {
             last_hello_ns = 0; // ask for the other screen right away
         }
 
-        if (sock >= 0) {
+        if (usb_mode && console_active &&
+            GameShareUsb::IsConnected() != usb_was_connected) {
+            usb_was_connected = !usb_was_connected;
+            std::printf(usb_was_connected ? "USB link up (this console is the %s)\n"
+                                          : "USB link down%s\n",
+                        GameShareUsb::Role());
+            consoleUpdate(nullptr);
+        }
+
+        if (sock >= 0 || usb_mode) {
             // HELLO once a second: finds the host (broadcast) and keeps the stream alive.
             if (now - last_hello_ns >= 1'000'000'000ULL) {
                 last_hello_ns = now;
@@ -521,9 +549,13 @@ int main(int, char**) {
                 hello[5] = screen;
                 hello[6] = 80; // JPEG quality
                 hello[7] = 30; // frames per second
-                sendto(sock, hello, sizeof(hello), 0, reinterpret_cast<const sockaddr*>(&host),
-                       sizeof(host));
-                if (!host_known) {
+                if (usb_mode) {
+                    GameShareUsb::Send(hello, sizeof(hello));
+                } else {
+                    sendto(sock, hello, sizeof(hello), 0,
+                           reinterpret_cast<const sockaddr*>(&host), sizeof(host));
+                }
+                if (!host_known && !usb_mode) {
                     // Not found by broadcast yet: also ask the listed addresses directly.
                     for (const in_addr& extra : extra_hosts) {
                         sockaddr_in target = host;
@@ -534,7 +566,10 @@ int main(int, char**) {
                 }
             }
 
-            if (host_known) {
+            // At most 125 times a second: one packet per pass of this loop (up to a
+            // thousand a second) floods a wireless link with tiny packets.
+            if (host_known && now - last_input_ns >= 8'000'000ULL) {
+                last_input_ns = now;
                 u32 buttons = 0;
                 for (const ButtonMap& map : BUTTONS) {
                     if (held & map.pad) {
@@ -561,7 +596,7 @@ int main(int, char**) {
                     }
                 }
 
-                u8 packet[HEADER + 21];
+                u8 packet[HEADER + 25];
                 std::memcpy(packet, MAGIC, sizeof(MAGIC));
                 packet[4] = PacketType::Input;
                 WriteU32(packet + HEADER, ++input_seq);
@@ -573,16 +608,24 @@ int main(int, char**) {
                 WriteU16(packet + HEADER + 15, touch_y);
                 WriteU16(packet + HEADER + 17, static_cast<u16>(static_cast<s16>(right.x)));
                 WriteU16(packet + HEADER + 19, static_cast<u16>(static_cast<s16>(right.y)));
-                sendto(sock, packet, sizeof(packet), 0, reinterpret_cast<const sockaddr*>(&host),
-                       sizeof(host));
+                WriteU32(packet + HEADER + 21, ack_id);
+                if (usb_mode) {
+                    GameShareUsb::Send(packet, sizeof(packet));
+                } else {
+                    sendto(sock, packet, sizeof(packet), 0,
+                           reinterpret_cast<const sockaddr*>(&host), sizeof(host));
+                }
             }
 
             // Take everything that has arrived; only the newest complete frame is shown.
             for (;;) {
                 sockaddr_in from{};
                 socklen_t from_len = sizeof(from);
-                const ssize_t got = recvfrom(sock, recv_buffer, sizeof(recv_buffer), 0,
-                                             reinterpret_cast<sockaddr*>(&from), &from_len);
+                const ssize_t got =
+                    usb_mode ? static_cast<ssize_t>(
+                                   GameShareUsb::Receive(recv_buffer, sizeof(recv_buffer)))
+                             : recvfrom(sock, recv_buffer, sizeof(recv_buffer), 0,
+                                        reinterpret_cast<sockaddr*>(&from), &from_len);
                 if (got <= 0) {
                     break;
                 }
@@ -603,6 +646,9 @@ int main(int, char**) {
                     }
                 } else if (type == PacketType::Frame && size > HEADER + 17 && host_known) {
                     const u32 id = ReadU32(body);
+                    if (static_cast<s32>(id - ack_id) > 0) {
+                        ack_id = id;
+                    }
                     const u16 index = ReadU16(body + 4);
                     const u16 count = ReadU16(body + 6);
                     const u32 total = ReadU32(body + 8);
@@ -669,6 +715,9 @@ int main(int, char**) {
     }
     if (local_wireless) {
         ldnExit();
+    }
+    if (usb_mode) {
+        GameShareUsb::Stop();
     }
     socketExit();
     return 0;

@@ -47,7 +47,11 @@ $(OUT):
 $(OUT)/main.o: source/main.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(OUT)/$(TARGET).elf: $(OUT)/main.o
+# The USB link is shared with Dekopon itself.
+$(OUT)/game_share_usb.o: ../../../src/citra_switch/game_share_usb.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OUT)/$(TARGET).elf: $(OUT)/main.o $(OUT)/game_share_usb.o
 	$(CXX) $(LDFLAGS) $^ $(LIBPATHS) $(LIBS) -o $@
 
 $(OUT)/$(TARGET).nacp: | $(OUT)

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -22,6 +23,7 @@
 #include "citra_switch/emu_window.h"
 #include "citra_switch/game_share.h"
 #include "citra_switch/game_share_ldn.h"
+#include "citra_switch/game_share_usb.h"
 #include "citra_switch/input.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
@@ -43,6 +45,10 @@ constexpr std::size_t CHUNK = 1200;
 constexpr auto CLIENT_TIMEOUT = std::chrono::seconds{3};
 constexpr auto INPUT_TIMEOUT = std::chrono::milliseconds{500};
 constexpr auto STATS_INTERVAL = std::chrono::seconds{5};
+// Congestion control: frames sent but not yet seen by the receiver before holding back,
+// and how often to send one anyway to find out whether the link has recovered.
+constexpr u32 MAX_UNACKED_FRAMES = 3;
+constexpr auto PROBE_INTERVAL = std::chrono::milliseconds{250};
 
 enum PacketType : u8 {
     Hello = 1,
@@ -91,6 +97,9 @@ std::atomic<bool> s_running{false};
 std::thread s_thread;
 std::atomic<bool> s_enabled{true};
 std::atomic<int> s_mode{static_cast<int>(Mode::Network)};
+// Newest frame id the receiver reports having seen (newer receivers only).
+std::atomic<u32> s_acked{0};
+std::atomic<bool> s_ack_seen{false};
 
 u16 ReadU16(const u8* p) {
     return static_cast<u16>(p[0] | (p[1] << 8));
@@ -180,6 +189,7 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
             screen = s.screen;
         }
         if (is_new) {
+            s_ack_seen.store(false);
             LOG_INFO(Frontend, "GameShare: receiver connected from {}:{} ({} screen)",
                      inet_ntoa(from.sin_addr), ntohs(from.sin_port), screen == 1 ? "bottom" : "top");
         }
@@ -189,8 +199,12 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
         WriteU16(reply + HEADER, static_cast<u16>(ScreenWidth(screen)));
         WriteU16(reply + HEADER + 2, static_cast<u16>(SCREEN_HEIGHT));
         reply[HEADER + 4] = screen;
-        sendto(sock, reply, sizeof(reply), 0, reinterpret_cast<const sockaddr*>(&from),
-               sizeof(from));
+        if (sock < 0) {
+            GameShareUsb::Send(reply, sizeof(reply));
+        } else {
+            sendto(sock, reply, sizeof(reply), 0, reinterpret_cast<const sockaddr*>(&from),
+                   sizeof(from));
+        }
     } else if (type == PacketType::Input && body_size >= 17) {
         std::lock_guard lock{s.mutex};
         if (!s.client_active || s.client_addr.sin_addr.s_addr != from.sin_addr.s_addr) {
@@ -209,6 +223,10 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
             s.input.right_y = static_cast<s16>(ReadU16(body + 19));
         } else {
             s.input.right_x = s.input.right_y = 0;
+        }
+        if (body_size >= 25) {
+            s_acked.store(ReadU32(body + 21));
+            s_ack_seen.store(true);
         }
         s.input.when = now;
     }
@@ -230,8 +248,20 @@ void NetworkThread() {
         return;
     }
 
-    const int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
+    const bool usb = s_mode.load() == static_cast<int>(Mode::Usb);
+    if (usb) {
+        char usb_log[256];
+        const bool ok = GameShareUsb::Start(usb_log, sizeof(usb_log));
+        LOG_INFO(Frontend, "GameShare/USB: {} -> {}", usb_log,
+                 ok ? "waiting for the other console" : "not available");
+        if (!ok) {
+            LOG_ERROR(Frontend, "GameShare: USB is not available; not sharing");
+            return;
+        }
+    }
+
+    const int sock = usb ? -1 : socket(AF_INET, SOCK_DGRAM, 0);
+    if (!usb && sock < 0) {
         LOG_ERROR(Frontend, "GameShare: could not create the socket");
         return;
     }
@@ -239,7 +269,7 @@ void NetworkThread() {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+    if (!usb && bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
         LOG_ERROR(Frontend, "GameShare: could not bind UDP port {}", PORT);
         close(sock);
         if (local_wireless) {
@@ -247,21 +277,43 @@ void NetworkThread() {
         }
         return;
     }
+    if (!usb) {
+        // Never let frames pile up behind a slow link: with a small, non-blocking send
+        // buffer a frame that does not fit is dropped instead of delivered late.
+        const int send_buffer = 64 * 1024;
+        setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer));
+        fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+    }
     LOG_INFO(Frontend, "GameShare: listening on UDP port {} ({})", PORT,
-             local_wireless ? "local wireless" : "network");
+             usb ? "USB" : local_wireless ? "local wireless" : "network");
 
     std::vector<u8> frame;
     std::vector<u8> packet(HEADER + 17 + CHUNK);
     u8 recv_buffer[256];
     u32 frame_id = 0;
 
-    u32 stat_frames = 0;
+    u32 stat_frames = 0, stat_held = 0;
+    auto last_sent = Clock::now();
     u64 stat_bytes = 0, stat_encode_us = 0, stat_capture_us = 0;
     auto stat_start = Clock::now();
 
     while (s_running.load(std::memory_order_relaxed)) {
-        pollfd pfd{.fd = sock, .events = POLLIN, .revents = 0};
-        if (poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN) != 0) {
+        if (usb) {
+            bool any = false;
+            for (int i = 0; i < 16; ++i) {
+                const std::size_t got =
+                    GameShareUsb::Receive(recv_buffer, sizeof(recv_buffer));
+                if (got == 0) {
+                    break;
+                }
+                any = true;
+                HandlePacket(-1, recv_buffer, got, sockaddr_in{});
+            }
+            if (!any) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        } else if (pollfd pfd{.fd = sock, .events = POLLIN, .revents = 0};
+                   poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN) != 0) {
             sockaddr_in from{};
             socklen_t from_len = sizeof(from);
             const ssize_t got = recvfrom(sock, recv_buffer, sizeof(recv_buffer), 0,
@@ -302,6 +354,16 @@ void NetworkThread() {
             continue;
         }
 
+        // The receiver reports the newest frame it has seen. When it falls behind, the
+        // link is not keeping up: hold frames back instead of queueing them (queued
+        // frames are what turns into seconds of delay), but still send one now and then
+        // to notice when the link recovers.
+        if (s_ack_seen.load() && frame_id - s_acked.load() > MAX_UNACKED_FRAMES &&
+            Clock::now() - last_sent < PROBE_INTERVAL) {
+            ++stat_held;
+            continue;
+        }
+
         const auto encode_start = Clock::now();
         const std::vector<u8> jpeg = EncodeJpeg(frame, width, height, quality);
         if (jpeg.empty()) {
@@ -327,9 +389,18 @@ void NetworkThread() {
             WriteU16(p + HEADER + 14, static_cast<u16>(height));
             p[HEADER + 16] = screen;
             std::memcpy(p + HEADER + 17, jpeg.data() + offset, size);
-            sendto(sock, p, HEADER + 17 + size, 0, reinterpret_cast<const sockaddr*>(&client),
-                   sizeof(client));
+            const std::size_t length = HEADER + 17 + size;
+            // A full queue drops the rest of this frame: late is worse than missing.
+            if (usb) {
+                if (!GameShareUsb::Send(p, length)) {
+                    break;
+                }
+            } else if (sendto(sock, p, length, 0, reinterpret_cast<const sockaddr*>(&client),
+                              sizeof(client)) < 0) {
+                break;
+            }
         }
+        last_sent = Clock::now();
 
         ++stat_frames;
         stat_bytes += jpeg.size();
@@ -339,17 +410,22 @@ void NetworkThread() {
             const double seconds = std::chrono::duration<double>(now - stat_start).count();
             LOG_INFO(Frontend,
                      "GameShare: {:.1f} fps, {} KB/s, jpeg {} bytes avg, capture {:.1f} ms avg, "
-                     "encode {:.1f} ms avg",
+                     "encode {:.1f} ms avg, {} frames held back",
                      stat_frames / seconds, static_cast<u64>(stat_bytes / seconds / 1024),
                      stat_bytes / stat_frames, stat_capture_us / 1000.0 / stat_frames,
-                     stat_encode_us / 1000.0 / stat_frames);
-            stat_frames = 0;
+                     stat_encode_us / 1000.0 / stat_frames, stat_held);
+            stat_frames = stat_held = 0;
             stat_bytes = stat_encode_us = stat_capture_us = 0;
             stat_start = now;
         }
     }
 
-    close(sock);
+    if (sock >= 0) {
+        close(sock);
+    }
+    if (usb) {
+        GameShareUsb::Stop();
+    }
     if (local_wireless) {
         StopLocalWirelessHost();
     }

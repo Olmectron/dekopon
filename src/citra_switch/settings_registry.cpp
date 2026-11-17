@@ -1271,8 +1271,8 @@ void BuildAdvanced(std::vector<SettingEntry>& out) {
                         [] { return Settings::values.log_filter.GetValue(); });
 }
 
-constexpr std::array<const char*, 2> kGameShareModeNames{"Wi-Fi / LAN",
-                                                         "Local wireless (direct)"};
+constexpr std::array<const char*, 3> kGameShareModeNames{
+    "Wi-Fi / LAN", "Local wireless (direct)", "USB cable (experimental)"};
 
 void BuildGameShare(std::vector<SettingEntry>& out) {
     Table t{out, Category::GameShare};
@@ -1288,7 +1288,8 @@ void BuildGameShare(std::vector<SettingEntry>& out) {
         "gameshare_mode",
         {"Connection",
          "Wi-Fi / LAN uses the network this console is on. Local wireless creates a "
-         "console-to-console network (experimental). Applies to the next game started."},
+         "console-to-console network. USB cable links both consoles with a USB-C "
+         "cable (experimental). Applies to the next game started."},
         [] { return GameShare::GetMode(); }, [](int value) { GameShare::SetMode(value); }, 0,
         kGameShareModeNames);
 }

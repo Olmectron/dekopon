@@ -20,7 +20,8 @@ struct InputState;
 //   2 INPUT   receiver -> host   u32 seq, u32 buttons (bit = SwitchFrontend::InputButton),
 //                                 s16 stick x, s16 stick y, u8 touching, u16 touch x, u16 touch y
 //                                 (touch in bottom-screen pixels, 320x240), then optionally
-//                                 s16 right stick x, s16 right stick y
+//                                 s16 right stick x, s16 right stick y, then optionally
+//                                 u32 newest frame id seen (drives congestion control)
 //   3 FRAME   host -> receiver   u32 frame id, u16 chunk index, u16 chunk count, u32 jpeg size,
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)
@@ -30,6 +31,7 @@ namespace SwitchFrontend::GameShare {
 enum class Mode : int {
     Network = 0,       ///< The network the console is already on (Wi-Fi or LAN).
     LocalWireless = 1, ///< Console-to-console: this console creates a local network.
+    Usb = 2,           ///< Console-to-console over a USB-C cable.
     Count,
 };
 
