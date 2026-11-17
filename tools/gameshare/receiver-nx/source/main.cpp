@@ -167,20 +167,17 @@ constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0
 
 /// Joins the local network a Dekopon host created and returns the host's address. Prints
 /// every step with its result code: this path cannot be tested without two consoles.
+///
+/// Two things are not known in advance, so both are tried in turn:
+///  - the protocol (plain NX, or the mixed NX + Switch 2 one);
+///  - the filter: a network only matches "our" local communication id when both consoles run
+///    the homebrew through the same title, so the scan also looks for the scene id alone and,
+///    failing that, lists whatever local networks are in range.
 bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
     Result rc = ldnInitialize(LdnServiceType_User);
     std::printf("ldnInitialize: 0x%x\n", rc);
     consoleUpdate(nullptr);
     if (R_FAILED(rc)) {
-        return false;
-    }
-    rc = ldnSetProtocol(LdnProtocol_Unknown3);
-    std::printf("ldnSetProtocol(NX+Ounce): 0x%x\n", rc);
-    rc = ldnOpenStation();
-    std::printf("ldnOpenStation: 0x%x\n", rc);
-    consoleUpdate(nullptr);
-    if (R_FAILED(rc)) {
-        ldnExit();
         return false;
     }
 
@@ -191,35 +188,87 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
     LdnUserConfig user{};
     std::strncpy(user.user_name, "DekoponLink", sizeof(user.user_name) - 1);
 
-    LdnScanFilter filter{};
-    filter.network_id.intent_id.local_communication_id = -1;
-    filter.network_id.intent_id.scene_id = LDN_SCENE_ID;
-    filter.flags = LdnScanFilterFlag_LocalCommunicationId | LdnScanFilterFlag_SceneId;
-
     static LdnNetworkInfo networks[0x18];
+    bool station_open = false;
+    bool connected = false;
     std::printf("Scanning for a Dekopon host (B to cancel)...\n");
     consoleUpdate(nullptr);
-    for (int attempt = 0; appletMainLoop(); ++attempt) {
+
+    for (int round = 0; appletMainLoop() && !connected; ++round) {
+        // Alternate the protocol every few scans.
+        if (round % 6 == 0) {
+            if (station_open) {
+                ldnCloseStation();
+                station_open = false;
+            }
+            const bool mixed = (round / 6) % 2 == 0;
+            rc = ldnSetProtocol(mixed ? LdnProtocol_Unknown3 : LdnProtocol_NX);
+            std::printf("protocol %s: 0x%x\n", mixed ? "NX+Switch2" : "NX", rc);
+            rc = ldnOpenStation();
+            std::printf("ldnOpenStation: 0x%x\n", rc);
+            consoleUpdate(nullptr);
+            if (R_FAILED(rc)) {
+                ldnExit();
+                return false;
+            }
+            station_open = true;
+        }
+
         padUpdate(&pad);
         if (padGetButtonsDown(&pad) & HidNpadButton_B) {
             ldnExit();
             return false;
         }
-        s32 total = 0;
-        rc = ldnScan(0, &filter, networks, 0x18, &total);
-        if (attempt % 5 == 0 || R_FAILED(rc) || total > 0) {
-            std::printf("ldnScan: 0x%x, %d network(s)\n", rc, total);
-            consoleUpdate(nullptr);
-        }
-        if (R_SUCCEEDED(rc) && total > 0) {
-            rc = ldnConnect(&security, &user, 0, 0, &networks[0]);
-            std::printf("ldnConnect: 0x%x\n", rc);
-            consoleUpdate(nullptr);
-            if (R_SUCCEEDED(rc)) {
-                break;
+
+        // 1) our scene id and our local communication id; 2) our scene id only.
+        for (int pass = 0; pass < 2 && !connected; ++pass) {
+            LdnScanFilter filter{};
+            filter.network_id.intent_id.local_communication_id = -1;
+            filter.network_id.intent_id.scene_id = LDN_SCENE_ID;
+            filter.flags = LdnScanFilterFlag_SceneId |
+                           (pass == 0 ? LdnScanFilterFlag_LocalCommunicationId : 0);
+            s32 total = 0;
+            rc = ldnScan(0, &filter, networks, 0x18, &total);
+            if (R_FAILED(rc) || total > 0) {
+                std::printf("scan %s: 0x%x, %d network(s)\n",
+                            pass == 0 ? "scene+id" : "scene only", rc, total);
+                consoleUpdate(nullptr);
+            }
+            if (R_SUCCEEDED(rc) && total > 0) {
+                std::printf("found: id %016llx scene %04x ch %d\n",
+                            static_cast<unsigned long long>(
+                                networks[0].network_id.intent_id.local_communication_id),
+                            networks[0].network_id.intent_id.scene_id, networks[0].common.channel);
+                rc = ldnConnect(&security, &user, 0, 0, &networks[0]);
+                std::printf("ldnConnect: 0x%x\n", rc);
+                consoleUpdate(nullptr);
+                connected = R_SUCCEEDED(rc);
             }
         }
-        svcSleepThread(300'000'000);
+
+        // 3) nothing of ours: say what is in range at all, once per protocol round.
+        if (!connected && round % 6 == 3) {
+            LdnScanFilter any{};
+            s32 total = 0;
+            rc = ldnScan(0, &any, networks, 0x18, &total);
+            std::printf("scan any: 0x%x, %d network(s)\n", rc, total);
+            for (s32 i = 0; i < total && i < 4; ++i) {
+                std::printf("  id %016llx scene %04x ch %d nodes %d\n",
+                            static_cast<unsigned long long>(
+                                networks[i].network_id.intent_id.local_communication_id),
+                            networks[i].network_id.intent_id.scene_id, networks[i].common.channel,
+                            networks[i].node_count);
+            }
+            consoleUpdate(nullptr);
+        }
+
+        if (!connected) {
+            svcSleepThread(300'000'000);
+        }
+    }
+    if (!connected) {
+        ldnExit();
+        return false;
     }
 
     LdnNetworkInfo info{};
