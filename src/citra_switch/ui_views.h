@@ -362,9 +362,11 @@ struct ShelfItem {
 };
 
 /// A 3DS case is a little wider than tall.
-constexpr float kCaseAspect = 1.11f;
+constexpr float kCaseAspect = 1.13f;
 /// In a full wrap the back and the front each take this share of the width; the spine the rest.
-constexpr float kWrapFace = 0.4667f;
+// Measured on GameTDB's scans (1616 x 680): the spine runs from 47.9% to 52.1%. A wider
+// guess put a sliver of the front and of the back on the spine.
+constexpr float kWrapFace = 0.479f;
 
 struct ShelfPose {
     float cx{};     // Centre.
@@ -573,7 +575,29 @@ inline void DrawCase3D(Canvas& c, Font& font, const ShelfItem& item, const BoxPo
     }
     const u32 plastic = g_theme_light ? MakeColor(214, 218, 224) : MakeColor(226, 229, 234);
     const u32 plastic_dark = MakeColor(150, 155, 164);
-    const u32 card = MakeColor(58, 64, 78); // The face of a case with nothing printed on it.
+    u32 card = MakeColor(58, 64, 78); // The face of a case with nothing printed on it.
+    if (art != nullptr && !wrap) {
+        // No spine was printed for this one: give it the cover's own colour, darkened, so
+        // the case reads as one object.
+        u32 r = 0, g = 0, b = 0, n = 0;
+        for (int gy = 1; gy <= 5; ++gy) {
+            for (int gx = 1; gx <= 5; ++gx) {
+                const u32 px = art->px[static_cast<std::size_t>(art->h * gy / 6) * art->w +
+                                       static_cast<std::size_t>(art->w * gx / 6)];
+                if ((px >> 24) < 32) {
+                    continue;
+                }
+                r += px & 0xFF;
+                g += (px >> 8) & 0xFF;
+                b += (px >> 16) & 0xFF;
+                ++n;
+            }
+        }
+        if (n > 0) {
+            card = MakeColor(static_cast<u8>(r * 7 / (n * 10)), static_cast<u8>(g * 7 / (n * 10)),
+                             static_cast<u8>(b * 7 / (n * 10)));
+        }
+    }
 
     const float H = pose.h, W = H * kCaseAspect, D = H * kCaseDepth;
     const float cyaw = std::cos(pose.yaw), syaw = std::sin(pose.yaw);
@@ -642,16 +666,17 @@ inline void DrawCase3D(Canvas& c, Font& font, const ShelfItem& item, const BoxPo
             break;
         case 1:
             img = wrap ? art : nullptr;
-            solid = g_theme_light ? MakeColor(236, 238, 242) : MakeColor(44, 48, 58);
+            solid = wrap || art == nullptr
+                        ? (g_theme_light ? MakeColor(236, 238, 242) : MakeColor(44, 48, 58))
+                        : card;
             u1 = wrap ? kWrapFace : 1.0f;
             break;
         case 2:
-            img = art;
+            // The spine of a wrap; otherwise the cover's colour.
+            img = wrap ? art : nullptr;
             solid = card;
-            // The spine of a wrap; otherwise a strip off the cover's edge, so the spine
-            // carries the game's colours.
-            u0 = wrap ? kWrapFace : 0.0f;
-            u1 = wrap ? 1.0f - kWrapFace : 0.04f;
+            u0 = kWrapFace;
+            u1 = 1.0f - kWrapFace;
             break;
         case 3:
             solid = plastic;
@@ -811,15 +836,24 @@ inline void DrawShelfCases(Canvas& c, Font& font, const ShelfView& v,
         BoxPose p;
         switch (v.style) {
         case ShelfStyle::Bookshelf: {
-            // Spines side by side, each turned just enough to show a sliver of its front;
-            // the selected one is pulled out and faces the room.
-            p.h = case_h * (1.0f - 0.10f * ease);
-            const float thick = p.h * kCaseDepth;
-            p.cx = cx + sign * (ease * (case_w * 0.5f + 22.0f + thick * 0.5f) +
-                                beyond * (thick + 5.0f));
-            p.cy = floor - p.h / 2;
-            p.yaw = -ease * (half_pi - 0.16f) + 0.012f * sway * t;
-            p.shade = std::min(0.45f, 0.05f * t + 0.025f * beyond);
+            // A row of spines that never moves aside: every book keeps its place. The
+            // selected one is lifted out of its slot, towards the room, and turned to show
+            // its front; choosing another slides it back in while the next comes out.
+            BoxPose slot;
+            slot.h = case_h * 0.80f;
+            const float thick = slot.h * kCaseDepth;
+            slot.cx = cx + d * (thick + 3.0f);
+            slot.cy = floor - slot.h / 2;
+            slot.yaw = -half_pi;
+            slot.shade = std::min(0.42f, 0.04f + 0.012f * ad);
+            BoxPose out;
+            out.h = case_h * 1.04f;
+            out.cx = slot.cx;
+            out.cy = floor - out.h / 2 - case_h * 0.13f - wobble_on * case_h * 0.006f * (1.0f + sway);
+            out.yaw = 0.0f;
+            p = MixPose(slot, out, 1.0f - ease);
+            (void)sign;
+            (void)beyond;
             break;
         }
         case ShelfStyle::Pile: {
@@ -858,7 +892,7 @@ inline void DrawShelfCases(Canvas& c, Font& font, const ShelfView& v,
     };
 
     const bool pile = v.style == ShelfStyle::Pile;
-    const int reach = v.style == ShelfStyle::Bookshelf ? 18 : pile ? 9 : 3;
+    const int reach = v.style == ShelfStyle::Bookshelf ? 26 : pile ? 9 : 3;
     const auto draw = [&](int index, bool mirror) {
         if (index < 0 || index >= v.count) {
             return;

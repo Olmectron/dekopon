@@ -239,13 +239,27 @@ void DownloadThread(std::vector<CoverRequest> requests) {
         }
         const std::string& code = request.game_code;
         bool got = false;
+        // The same game under its other regions' codes, after its own: a ROM marked
+        // region-free (AT3A) often has only a front on GameTDB while the American or
+        // European release (AT3E, AT3P) has the whole wrap.
+        std::vector<std::string> ids{code};
+        for (const char letter : {'E', 'P', 'J'}) {
+            if (code.back() != letter) {
+                ids.push_back(code.substr(0, 3) + letter);
+            }
+        }
         for (const Kind& kind : kinds) {
-            for (const char* region : RegionsFor(code)) {
+            for (const std::string& id : ids) {
+              for (const char* region : RegionsFor(id)) {
                 if (got || s_cancel.load() || !failure.empty()) {
                     break;
                 }
+                // A front is only worth taking under the game's own code.
+                if (!kind.wrap && id != code) {
+                    break;
+                }
                 const std::string tail = std::string{"://art.gametdb.com/3ds/"} + kind.folder +
-                                         "/" + region + "/" + code + ".jpg";
+                                         "/" + region + "/" + id + ".jpg";
                 const std::string path = dir + (kind.wrap ? "/full/" : "/") + code + ".jpg";
                 std::string error;
                 Fetch result = Download(scheme + tail, path, error);
@@ -259,6 +273,7 @@ void DownloadThread(std::vector<CoverRequest> requests) {
                     failure = error; // Neither way works: no point trying the rest.
                 }
                 got = result == Fetch::Ok;
+              }
             }
             if (got) {
                 break;
