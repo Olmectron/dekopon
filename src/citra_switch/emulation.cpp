@@ -408,8 +408,7 @@ bool BootRom(const std::string& rom_arg) {
         constexpr int ROUNDS = 20000;
         const auto start = std::chrono::steady_clock::now();
         for (int i = 0; i < ROUNDS; ++i) {
-            asm volatile("sevl
-wfe");
+            asm volatile("sevl; wfe");
         }
         const auto wfe = std::chrono::steady_clock::now() - start;
         LOG_INFO(Frontend, "SEVL + WFE costs {} ns here",
