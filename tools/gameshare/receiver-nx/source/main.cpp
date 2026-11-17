@@ -294,6 +294,11 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
                             networks[0].network_id.intent_id.scene_id, networks[0].common.channel);
                 rc = ldnConnect(&security, &user, 0, 0, &networks[0]);
                 Say("ldnConnect[ldn:%s]: 0x%x\n", system_service ? "s" : "u", rc);
+                if (rc == 0xc2cb) {
+                    // The id of the host's network is checked against the NACP of the
+                    // title this runs as; only applet mode has none to check.
+                    Say("  -> open the Homebrew Menu from the Album, not from a game\n");
+                }
                 consoleUpdate(nullptr);
                 connected = R_SUCCEEDED(rc);
             }
@@ -406,6 +411,8 @@ int main(int, char**) {
     // How to reach the host. The socket is created afterwards, so that with local wireless it
     // lives on that network.
     std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
+    std::printf("Local wireless needs the Homebrew Menu opened from the Album,\n"
+                "not on top of a game.\n");
     consoleUpdate(nullptr);
     bool local_wireless = false;
     bool quit = false;

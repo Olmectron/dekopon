@@ -128,6 +128,44 @@ the slow periods); the GPU wait in `Surface::Download` (removed, no change); syn
 GPU thread (Async GPU is off); the number of guest reads (same when fast); JIT recompilation
 (no publishes in the slow periods).
 
+## GameShare (screen streaming to a second console) - network and local wireless work
+
+Dekopon streams one 3DS screen as JPEG over UDP and takes input back. Host side:
+`src/citra_switch/game_share.cpp` (+ `game_share_ldn.cpp`, its own translation unit because
+`<switch.h>` clashes with the emulator's `Result` / `Service`). Receiver: "Dekopon Link",
+`tools/gameshare/receiver-nx` (Switch 1 and Switch 2 `.nro`, built by the `dekopon-link`
+workflow); `tools/gameshare/receiver.py` is a PC receiver for testing. Settings live in the
+"GameShare" tab (enable, mode).
+
+Protocol: UDP port 28300, magic `DKGS`; HELLO(1), INPUT(2, right stick in bytes 17-20),
+FRAME(3, JPEG in chunks of at most 1200 bytes), WELCOME(4).
+
+**Network mode** (both consoles on the same LAN / Wi-Fi): confirmed on console, latency is
+barely noticeable.
+
+**Local wireless (LDN), console to console - confirmed on console (Switch 2 host, Switch 1
+receiver).** What it took, all found on hardware:
+
+- kaiHEN grants `ldn:u` to the Switch 2 host; `ldnCreateNetwork` with
+  `local_communication_id = -1` resolves to the id of the title kaiHEN runs under
+  (`0400486024dec000` here). While the network is up the Switch 2 leaves its normal LAN, so
+  FTP to it stops answering - that is expected, not a crash.
+- The Switch 1 only sees the network with `ldnSetProtocol(LdnProtocol_Unknown3)` (the mixed
+  NX + Switch 2 protocol); with `LdnProtocol_NX` the scan returns nothing of ours.
+- The scan must filter by scene id only (`0x4453`). Filtering by local communication id
+  never matches, because the two consoles run as different titles.
+- **`ldnConnect` returned `0xc2cb` (LDN "invalid object") whenever hbmenu on the Switch 1
+  was started on top of a game (title override).** The system then checks the network's
+  local communication id against that game's NACP list, and the Switch 2's id is never in
+  it. `ldn:s` does *not* skip the check (tried: same `0xc2cb` through both services).
+  **Starting hbmenu from the Album (applet mode) makes it work**: there is no NACP to load,
+  and libnx's `ldn.h` documents that the id is only checked "if NACP loading is successful".
+- Dekopon Link writes every step of the join to `sdmc:/switch/dekopon-link.log`; read that
+  instead of asking for photos of a scrolling console.
+
+Not done: GameShare over USB; Switch 2 as the receiver over LDN is untested (it will hit the
+same id check if its loader exposes a NACP).
+
 ## JIT on Switch 2 (kaiHEN) — read before touching JIT code
 
 Reference: `libkaihen/JIT.md` in https://github.com/ouncebrew/kaihen.
