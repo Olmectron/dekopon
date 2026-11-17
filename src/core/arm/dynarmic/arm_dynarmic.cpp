@@ -46,57 +46,6 @@ CITRA_PROFILE_COUNTER_DEFINE(jit_svc, "ARM JIT", "svc calls");
 CITRA_PROFILE_COUNTER_DEFINE(jit_ticks, "ARM JIT", "guest ticks");
 CITRA_PROFILE_COUNTER_DEFINE(jit_runs, "ARM JIT", "Run() entries");
 
-#if defined(__SWITCH2__)
-// Diagnostics: where the time of a guest LDREX ... STREX loop goes. Timestamps are taken on
-// entry to and exit from the two callbacks, which splits a loop iteration into the callback
-// bodies, the stretch between LDREX and STREX (a couple of guest instructions plus leaving
-// and re-entering JIT code) and the rest of the loop.
-struct ExclusiveTiming {
-    u64 last_tick{};
-    bool last_was_read{};
-    u64 read_body{};
-    u64 write_body{};
-    u64 read_to_write{};
-    u64 write_to_read{};
-    u64 other_gap{};
-    u32 reads{};
-    u32 writes{};
-    u32 failed{};
-    u32 address[4]{};
-    u32 address_hits[4]{};
-    u32 address_other{};
-    u32 last_value{};
-};
-ExclusiveTiming g_exclusive;
-
-inline u64 HostTick() {
-    u64 ticks;
-    asm volatile("mrs %0, cntpct_el0" : "=r"(ticks));
-    return ticks;
-}
-
-void ReportExclusiveTiming(u32 pc) {
-    ExclusiveTiming& x = g_exclusive;
-    u64 frequency;
-    asm volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
-    const auto ns = [&](u64 ticks, u32 count) {
-        return count == 0 ? 0.0
-                          : static_cast<double>(ticks) * 1e9 / static_cast<double>(frequency) / count;
-    };
-    LOG_INFO(Core_ARM11,
-             "Exclusive access: {} reads, {} writes ({} failed) | per op: read callback {:.0f} ns, "
-             "LDREX to STREX {:.0f} ns, write callback {:.0f} ns, STREX to next LDREX {:.0f} ns, "
-             "other gaps {:.0f} ns | addresses {:08x} x{}, {:08x} x{}, {:08x} x{}, {:08x} x{}, "
-             "others x{} | last value {:08x}, pc {:08x}",
-             x.reads, x.writes, x.failed, ns(x.read_body, x.reads),
-             ns(x.read_to_write, x.writes), ns(x.write_body, x.writes),
-             ns(x.write_to_read, x.reads), ns(x.other_gap, x.reads + x.writes), x.address[0],
-             x.address_hits[0], x.address[1], x.address_hits[1], x.address[2], x.address_hits[2],
-             x.address[3], x.address_hits[3], x.address_other, x.last_value, pc);
-    x = ExclusiveTiming{};
-}
-#endif
-
 class DynarmicUserCallbacks final : public Dynarmic::A32::UserCallbacks {
 public:
     explicit DynarmicUserCallbacks(ARM_Dynarmic& parent)
@@ -118,24 +67,7 @@ public:
     }
     std::uint32_t MemoryRead32(VAddr vaddr) override {
         CITRA_PROFILE_COUNT(jit_mem_read, 1);
-#if defined(__SWITCH2__)
-        // Plain loads are inlined by the JIT, so in practice this is the LDREX path.
-        ExclusiveTiming& x = g_exclusive;
-        const u64 enter = HostTick();
-        if (x.last_tick != 0) {
-            (x.last_was_read ? x.other_gap : x.write_to_read) += enter - x.last_tick;
-        }
-        const u32 value = memory.Read32(vaddr);
-        const u64 leave = HostTick();
-        x.read_body += leave - enter;
-        x.last_tick = leave;
-        x.last_was_read = true;
-        x.last_value = value;
-        ++x.reads;
-        return value;
-#else
         return memory.Read32(vaddr);
-#endif
     }
     std::uint64_t MemoryRead64(VAddr vaddr) override {
         CITRA_PROFILE_COUNT(jit_mem_read, 1);
@@ -169,35 +101,7 @@ public:
     }
     bool MemoryWriteExclusive32(u32 vaddr, u32 value, u32 expected) override {
         CITRA_PROFILE_COUNT(jit_mem_excl, 1);
-#if defined(__SWITCH2__)
-        ExclusiveTiming& x = g_exclusive;
-        const u64 enter = HostTick();
-        if (x.last_tick != 0) {
-            (x.last_was_read ? x.read_to_write : x.other_gap) += enter - x.last_tick;
-        }
-        const bool stored = memory.WriteExclusive32(vaddr, value, expected);
-        const u64 leave = HostTick();
-        x.write_body += leave - enter;
-        x.last_tick = leave;
-        x.last_was_read = false;
-        ++x.writes;
-        x.failed += stored ? 0 : 1;
-        bool counted = false;
-        for (int i = 0; i < 4 && !counted; ++i) {
-            if (x.address_hits[i] == 0 || x.address[i] == vaddr) {
-                x.address[i] = vaddr;
-                ++x.address_hits[i];
-                counted = true;
-            }
-        }
-        x.address_other += counted ? 0 : 1;
-        if (x.writes >= (1U << 20)) {
-            ReportExclusiveTiming(parent.GetPC());
-        }
-        return stored;
-#else
         return memory.WriteExclusive32(vaddr, value, expected);
-#endif
     }
     bool MemoryWriteExclusive64(u32 vaddr, u64 value, u64 expected) override {
         CITRA_PROFILE_COUNT(jit_mem_excl, 1);

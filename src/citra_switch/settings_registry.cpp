@@ -1271,8 +1271,10 @@ void BuildAdvanced(std::vector<SettingEntry>& out) {
                         [] { return Settings::values.log_filter.GetValue(); });
 }
 
-constexpr std::array<const char*, 3> kGameShareModeNames{
-    "Wi-Fi / LAN", "Local wireless (direct)", "USB cable (experimental)"};
+// USB is implemented (game_share_usb.cpp) but not offered: kaiHEN does not grant usb:ds
+// or usb:hs yet. See SWITCH2_HANDOFF.md.
+constexpr std::array<const char*, 2> kGameShareModeNames{"Wi-Fi / LAN",
+                                                         "Local wireless (direct)"};
 
 void BuildGameShare(std::vector<SettingEntry>& out) {
     Table t{out, Category::GameShare};
@@ -1288,8 +1290,8 @@ void BuildGameShare(std::vector<SettingEntry>& out) {
         "gameshare_mode",
         {"Connection",
          "Wi-Fi / LAN uses the network this console is on. Local wireless creates a "
-         "console-to-console network. USB cable links both consoles with a USB-C "
-         "cable (experimental). Applies to the next game started."},
+         "console-to-console network; on the other console, open the Homebrew Menu "
+         "from the Album. Applies to the next game started."},
         [] { return GameShare::GetMode(); }, [](int value) { GameShare::SetMode(value); }, 0,
         kGameShareModeNames);
 }

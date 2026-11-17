@@ -422,7 +422,7 @@ int main(int, char**) {
 
     // How to reach the host. The socket is created afterwards, so that with local wireless it
     // lives on that network.
-    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)    Y: USB cable\n");
+    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
     std::printf("Local wireless needs the Homebrew Menu opened from the Album,\n"
                 "not on top of a game.\n");
     consoleUpdate(nullptr);
@@ -440,6 +440,7 @@ int main(int, char**) {
         if (down & HidNpadButton_A) {
             break;
         }
+#ifdef DEKOPON_LINK_USB
         if (down & HidNpadButton_Y) {
             char usb_log[256];
             usb_mode = GameShareUsb::Start(usb_log, sizeof(usb_log));
@@ -455,6 +456,7 @@ int main(int, char**) {
             consoleUpdate(nullptr);
             break;
         }
+#endif
         if (down & HidNpadButton_X) {
             local_wireless = JoinLocalWireless(pad, local_host, quit);
             if (quit) {

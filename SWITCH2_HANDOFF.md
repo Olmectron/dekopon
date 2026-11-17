@@ -163,8 +163,47 @@ receiver).** What it took, all found on hardware:
 - Dekopon Link writes every step of the join to `sdmc:/switch/dekopon-link.log`; read that
   instead of asking for photos of a scrolling console.
 
-Not done: GameShare over USB; Switch 2 as the receiver over LDN is untested (it will hit the
-same id check if its loader exposes a NACP).
+**USB cable - implemented, not offered.** `src/citra_switch/game_share_usb.cpp` (shared with
+Dekopon Link) carries the same datagrams over a bulk in/out pair and offers both roles on
+both ends: device through usbComms (vendor class, 057e:3000) and host through `usb:hs`.
+Tried on console: with a USB-C cable to the Switch 2's bottom port, or to the dock's USB-A
+port, the Switch 1 comes up as the *device* (the top port does nothing), so the Switch 2 has
+to be the USB host - and under kaiHEN neither service opens there
+(`usbCommsInitialize=0x4bb25`, `usbHsInitialize=0xf601`). To take it up again once a loader
+grants them: add the third entry back to `kGameShareModeNames`, let `SetMode` accept
+`Mode::Usb`, and build Dekopon Link with `-DDEKOPON_LINK_USB` (its Y button). `Status()`
+in that file reports the role, what `usb:hs` enumerates and the last failing step.
+
+Remote play extras: the receiver's input counts as user activity on the host (no screen
+dimming), its six-axis sensor is forwarded (the console being moved aims), and frames are
+held back when the receiver reports falling behind (input is sent 125 times a second, not
+once per loop pass - that flooded the wireless link).
+
+Switch 2 as the receiver over LDN is untested (it will hit the same id check if its loader
+exposes a NACP).
+
+## CPU-side slowdown fixed: dynarmic's spin lock (Majora's Mask, Sheikah stone visions list)
+
+Symptom: 9 fps, rock steady, in a menu that draws almost nothing; 53 of 56 ms per frame in
+"other" (CPU), GPU 0.7 ms. The game busy-waits there on one address with LDREX/STREX,
+about 165 000 pairs per frame.
+
+How it was found (worth repeating for the next CPU-side mystery): build with
+`DEKOPON_ZONE_PROFILER=ON` (docker/switch2/build.sh) - the zone profile is logged with the
+"Perf:" line every 10 s, and `arm_dynarmic.cpp` adds counters for the JIT's callbacks. The
+counters showed the exclusive-access storm; timestamps taken on entry to and exit from the
+two callbacks then showed 32 + 35 ns inside them but ~250 ns in each stretch between them,
+i.e. in dynarmic's own path around the callback.
+
+Cause: `Dynarmic::SpinLock::Lock()` / `Unlock()` (the exclusive monitor's lock, taken twice
+per LDREX/STREX pair) each ran `std::call_once`, which is slow on this platform. A ready
+flag now skips it; the lock also no longer does SEVL + WFE (20 ns, measured - worth ~10%).
+Result on console: 9 fps -> 25-29 fps with the profiler still on.
+
+dynarmic is a submodule we do not own, so the change is
+`docker/switch2/patches/dynarmic-spinlock.patch`, applied by build.sh. Dead end: WFE
+trapping (it does not).
+
 
 ## JIT on Switch 2 (kaiHEN) — read before touching JIT code
 

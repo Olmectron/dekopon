@@ -401,20 +401,6 @@ bool BootRom(const std::string& rom_arg) {
     }
 
     LOG_INFO(Frontend, "Booting ROM {}", path);
-#if defined(__SWITCH2__)
-    {
-        // What a userland WFE costs here. dynarmic's spin lock used SEVL + WFE on every
-        // guest LDREX/STREX; see docker/switch2/patches/dynarmic-spinlock.patch.
-        constexpr int ROUNDS = 20000;
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < ROUNDS; ++i) {
-            asm volatile("sevl; wfe");
-        }
-        const auto wfe = std::chrono::steady_clock::now() - start;
-        LOG_INFO(Frontend, "SEVL + WFE costs {} ns here",
-                 std::chrono::duration_cast<std::chrono::nanoseconds>(wfe).count() / ROUNDS);
-    }
-#endif
 
     s_load_ok = false;
     s_artic_disconnected = false;

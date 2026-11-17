@@ -483,7 +483,8 @@ int GetMode() {
 }
 
 void SetMode(int mode) {
-    s_mode.store(std::clamp(mode, 0, static_cast<int>(Mode::Count) - 1));
+    // Mode::Usb exists but is not selectable until the loader grants the USB services.
+    s_mode.store(std::clamp(mode, 0, static_cast<int>(Mode::LocalWireless)));
 }
 
 void Start() {
