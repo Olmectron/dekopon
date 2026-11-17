@@ -3,7 +3,78 @@
 Everything needed to continue the Switch 2 port on another machine. All code is
 pushed to GitHub (see below); clone the fork and read this file.
 
-Last updated: 2026-11-17 (0.9.3 wip: GPU read-backs fixed, GameShare prototype).
+Last updated: 2026-11-17 (0.9.4 wip: renamed Toronja; launcher, in-game menu and receiver
+reworked without console access - see the first section).
+
+## 0.9.4: Toronja, the new launcher, Toronja Link - WRITTEN BLIND, NOT YET RUN ON A CONSOLE
+
+Everything in this section compiles (Switch 2, the receiver for both consoles) but was written
+with nobody at the consoles. Only the new launcher *views* were looked at, as PC renders.
+Treat every item as "check it first".
+
+**Name.** The app is now **Toronja** (hbmenu: "Toronja for SW2"), the receiver **Toronja
+Link**. Only visible text changed. Kept on purpose so existing installs carry on: the data
+folder `sdmc:/switch/dekopon`, ini keys, the release repository `Olmectron/dekopon`, release
+asset `dekopon.nro`, and internal identifiers (`DEKOPON_*`, `DekoponBootMark`, ...). The
+donation page is gone; General > Release Notes cards end with an About page (Olmectron,
+Dekopon by PalindromicBreadLoaf, Azahar / Citra). Source copyright headers are untouched.
+Icon: `tools/branding/make_icon.py`.
+
+**Launcher** (`menu.cpp`, with the canvas and font split out to `ui_canvas.h` and the new
+views in `ui_views.h`):
+- Library = a WiiFlow-style shelf (`DrawHome`/`DrawShelf`): styles Coverflow, Carousel,
+  Stack (L/R; "Grid" keeps the old page with the drawer). X turns the selected case round.
+  A play, Y search, + details, ZL/ZR jump five, left stick click rescans, - or B opens the
+  options. Round buttons in the corners (options, close) and arrows beside the title are
+  touchable.
+- Covers: `covers.cpp`. Files in `<user dir>/covers/<ID>.jpg|png` (front) and
+  `covers/full/` (back + spine + front), `<ID>` = four-character game code (read from the
+  NCCH header, `ReadGameCode`) or title ID. Missing ones are fetched from GameTDB in the
+  background when the console is online (General > Library > Download Covers). For a console
+  kept offline: `python tools/covers/fetch_covers.py --host <ip> --port 5000` on a PC.
+  UNVERIFIED: that GameTDB serves `coverfull` for 3DS at that URL; the front `cover` path is
+  the fallback.
+- Options: one drawer (Settings / Tools / Advanced) replaces the rail and the settings tabs.
+  `Category` was reordered: everyday pages first (General, Display, Audio, Controls, Amiibo,
+  GameShare, System), then the Advanced ones (`IsAdvancedCategory`). Entries were moved
+  between pages with `Table::Page()` in `settings_registry.cpp`, not by changing where they
+  are stored. Opening an Advanced page asks once per run; a reminder stays in its header.
+  X (right stick in the per-game editor) shows what the focused option is for.
+- Known rough edge: the drawer is 268 px wide, which leaves little room when the menu is
+  rotated to portrait.
+
+**Seeing the UI without a console.** `tools/ui-preview` renders the views in `ui_views.h` to
+PNG; the `ui-preview` workflow does it on every push that touches them and uploads the
+pictures as an artifact. It covers the shelf, the home bar, the drawer, the Advanced banner
+and the info sheet - not `menu.cpp`'s own pages.
+
+**In-game menu** (`overlay_menu.cpp`, drawn in `renderer_vulkan.cpp` `PrepareQuickMenu`):
+pages listed down the side, L/R from anywhere, Graphics / Stereo / System under an Advanced
+heading, a line saying what the selected option is for, launcher palette. Opening it pauses
+the game by default on every platform.
+
+**Amiibo.** `amiibo_session.cpp` `FollowGuest()`: Amiibo > When A Game Asks For An Amiibo =
+scan a real one (the reader opens when the game starts searching and closes ~3 s after it
+stops), choose a file (the in-game menu opens on its Amiibo page), or nothing.
+
+**GameShare additions** (protocol in `game_share.h`): both screens in one 400x480 picture;
+COMMAND (the receiver asks the host to show top or bottom only, and for its FPS counter);
+AUDIO (DSP output tapped in `DspInterface::OutputFrame`, PCM 32728 Hz); STATUS; AMIIBO (a
+figure read by the receiver's reader, loaded on the host; writing back is refused). Touch
+from the receiver now goes through `EmuWindow::TouchPressedOnScreen`, so it lands even when
+the host shows only the top screen.
+
+**Toronja Link** (`tools/gameshare/receiver-nx`, UI in `source/link_ui.h` on the launcher's
+canvas): a tab in a corner (tap, swipe from the corner, or hold + and -; it can be hidden
+and still works), a menu with the screen pairings, two-screen layouts, sound, FPS here / on
+the host, tab opacity and corner, and Close. Settings in `sdmc:/switch/dekopon-link.ini`.
+
+**Switch 1 build.** `docker/switch1/build.sh` + the `dekopon-switch1` workflow (fetches NXVK,
+builds its archives once, cached by NXVK commit). New in this round - check the workflow's
+last run before relying on it.
+
+**CI.** The toolchain image is cached in Actions (pkg.devkitpro.org answers 403 to runners
+too often to build it every time).
 
 ## TL;DR status
 

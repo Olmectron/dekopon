@@ -114,7 +114,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
         # channel), so it has its own version; the upstream Dekopon version it is
         # based on is kept for the About text.
         set(DEKOPON_UPSTREAM_VERSION "${DEKOPON_VERSION}")
-        set(DEKOPON_VERSION "0.9.3")
+        set(DEKOPON_VERSION "0.9.4")
     endif()
     set(ARCHITECTURE "arm64")
     message(STATUS "Building for Nintendo Switch")
