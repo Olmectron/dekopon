@@ -35,6 +35,17 @@ constexpr u32 SIGTRAP = 5;
 
 namespace Core {
 
+// Diagnostics (zone profiler builds only): what the JIT asks the emulator for. A scene
+// that is slow on the CPU side shows up here as either far more guest ticks per frame
+// (the game really runs more code) or far more callbacks per tick (the host is slow).
+CITRA_PROFILE_COUNTER_DEFINE(jit_mem_read, "ARM JIT", "memory read callbacks");
+CITRA_PROFILE_COUNTER_DEFINE(jit_mem_write, "ARM JIT", "memory write callbacks");
+CITRA_PROFILE_COUNTER_DEFINE(jit_mem_excl, "ARM JIT", "exclusive write callbacks");
+CITRA_PROFILE_COUNTER_DEFINE(jit_code_read, "ARM JIT", "code reads (block compiles)");
+CITRA_PROFILE_COUNTER_DEFINE(jit_svc, "ARM JIT", "svc calls");
+CITRA_PROFILE_COUNTER_DEFINE(jit_ticks, "ARM JIT", "guest ticks");
+CITRA_PROFILE_COUNTER_DEFINE(jit_runs, "ARM JIT", "Run() entries");
+
 class DynarmicUserCallbacks final : public Dynarmic::A32::UserCallbacks {
 public:
     explicit DynarmicUserCallbacks(ARM_Dynarmic& parent)
@@ -42,45 +53,58 @@ public:
     ~DynarmicUserCallbacks() = default;
 
     std::optional<std::uint32_t> MemoryReadCode(VAddr vaddr) override {
+        CITRA_PROFILE_COUNT(jit_code_read, 1);
         return memory.Read32OrNullopt(vaddr);
     }
 
     std::uint8_t MemoryRead8(VAddr vaddr) override {
+        CITRA_PROFILE_COUNT(jit_mem_read, 1);
         return memory.Read8(vaddr);
     }
     std::uint16_t MemoryRead16(VAddr vaddr) override {
+        CITRA_PROFILE_COUNT(jit_mem_read, 1);
         return memory.Read16(vaddr);
     }
     std::uint32_t MemoryRead32(VAddr vaddr) override {
+        CITRA_PROFILE_COUNT(jit_mem_read, 1);
         return memory.Read32(vaddr);
     }
     std::uint64_t MemoryRead64(VAddr vaddr) override {
+        CITRA_PROFILE_COUNT(jit_mem_read, 1);
         return memory.Read64(vaddr);
     }
 
     void MemoryWrite8(VAddr vaddr, std::uint8_t value) override {
+        CITRA_PROFILE_COUNT(jit_mem_write, 1);
         memory.Write8(vaddr, value);
     }
     void MemoryWrite16(VAddr vaddr, std::uint16_t value) override {
+        CITRA_PROFILE_COUNT(jit_mem_write, 1);
         memory.Write16(vaddr, value);
     }
     void MemoryWrite32(VAddr vaddr, std::uint32_t value) override {
+        CITRA_PROFILE_COUNT(jit_mem_write, 1);
         memory.Write32(vaddr, value);
     }
     void MemoryWrite64(VAddr vaddr, std::uint64_t value) override {
+        CITRA_PROFILE_COUNT(jit_mem_write, 1);
         memory.Write64(vaddr, value);
     }
 
     bool MemoryWriteExclusive8(u32 vaddr, u8 value, u8 expected) override {
+        CITRA_PROFILE_COUNT(jit_mem_excl, 1);
         return memory.WriteExclusive8(vaddr, value, expected);
     }
     bool MemoryWriteExclusive16(u32 vaddr, u16 value, u16 expected) override {
+        CITRA_PROFILE_COUNT(jit_mem_excl, 1);
         return memory.WriteExclusive16(vaddr, value, expected);
     }
     bool MemoryWriteExclusive32(u32 vaddr, u32 value, u32 expected) override {
+        CITRA_PROFILE_COUNT(jit_mem_excl, 1);
         return memory.WriteExclusive32(vaddr, value, expected);
     }
     bool MemoryWriteExclusive64(u32 vaddr, u64 value, u64 expected) override {
+        CITRA_PROFILE_COUNT(jit_mem_excl, 1);
         return memory.WriteExclusive64(vaddr, value, expected);
     }
 
@@ -91,6 +115,7 @@ public:
     }
 
     void CallSVC(std::uint32_t swi) override {
+        CITRA_PROFILE_COUNT(jit_svc, 1);
         svc_context.CallSVC(swi);
     }
 
@@ -165,6 +190,7 @@ public:
     }
 
     void AddTicks(std::uint64_t ticks) override {
+        CITRA_PROFILE_COUNT(jit_ticks, ticks);
         parent.GetTimer().AddTicks(ticks);
     }
     std::uint64_t GetTicksRemaining() override {
@@ -200,6 +226,7 @@ void ARM_Dynarmic::Run() {
         return;
     }
 
+    CITRA_PROFILE_COUNT(jit_runs, 1);
     jit->Run();
 }
 
