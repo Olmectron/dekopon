@@ -157,7 +157,6 @@ public:
     /// again when a host is (re)found.
     void QueueHostState() {
         commands.push_back({1, HostScreen()});
-        commands.push_back({2, static_cast<u8>(settings.fps_there ? 1 : 0)});
         hello_due = true;
     }
 
@@ -197,9 +196,13 @@ public:
 
     // ------------------------------------------------------------------ status from the host
 
-    void OnStatus(u8 flags) {
+    void OnStatus(u8 flags, int game_fps) {
         host_allows_audio = (flags & 8) != 0;
         amiibo_wanted = (flags & 1) != 0;
+        if (game_fps != fps) {
+            fps = game_fps;
+            dirty = dirty || settings.fps_here;
+        }
     }
 
     bool AmiiboWanted() const {
@@ -210,16 +213,6 @@ public:
         notice = text;
         notice_until_ns = now_ns + duration_ns;
         dirty = true;
-    }
-
-    void CountFrame(u64 now_ns) {
-        ++frames_this_second;
-        if (now_ns - fps_window_ns >= 1'000'000'000ULL) {
-            fps = frames_this_second;
-            frames_this_second = 0;
-            fps_window_ns = now_ns;
-            dirty = dirty || settings.fps_here;
-        }
     }
 
     // ------------------------------------------------------------------ menu
@@ -344,7 +337,7 @@ public:
             }
         }
         if (font_ready) {
-            if (settings.fps_here) {
+            if (settings.fps_here && fps > 0) {
                 DrawFps(has_top ? &top : nullptr, has_bottom ? &bottom : nullptr);
             }
             DrawTab();
@@ -534,11 +527,9 @@ private:
                                                         : "On (off on the other console)",
                         "Plays the game's sound here as well. The other console can refuse it "
                         "(GameShare > Share The Sound)."});
-        rows.push_back({"FPS here", settings.fps_here ? "On" : "Off",
-                        "Shows how many pictures a second arrive here, in a corner beside the "
-                        "picture when there is room."});
-        rows.push_back({"FPS on the other console", settings.fps_there ? "On" : "Off",
-                        "Turns the other console's own frame-rate counter on or off."});
+        rows.push_back({"Game FPS", settings.fps_here ? "On" : "Off",
+                        "Shows the frame rate the game is running at on the other console, "
+                        "small, in a corner beside the picture when there is room."});
         rows.push_back({"Menu tab", opacity[settings.tab_opacity],
                         "The tab that opens this menu. Hidden, it still works: tap its corner or "
                         "swipe away from it. Holding + and - opens the menu too."});
@@ -570,20 +561,16 @@ private:
             settings.fps_here = !settings.fps_here;
             break;
         case 4:
-            settings.fps_there = !settings.fps_there;
-            QueueHostState();
-            break;
-        case 5:
             settings.tab_opacity = cycle(settings.tab_opacity, 3);
             break;
-        case 6:
+        case 5:
             settings.tab_corner = cycle(settings.tab_corner, 4);
             break;
-        case 7:
+        case 6:
             settings.light = !settings.light;
             ApplyTheme(settings.light);
             break;
-        case 8:
+        case 7:
             quit = true;
             break;
         default:
@@ -675,7 +662,8 @@ private:
     void DrawFps(const Rect* top, const Rect* bottom) {
         char text[24];
         std::snprintf(text, sizeof(text), "%d fps", fps);
-        const int tw = font.Measure(text, 18);
+        constexpr int size = 15;
+        const int tw = font.Measure(text, size);
         // Beside the picture when there is a margin (the bottom screen leaves one on each
         // side); over a corner of it otherwise.
         const Rect* edge = bottom != nullptr ? bottom : top;
@@ -689,9 +677,10 @@ private:
             backing = false;
         }
         if (backing) {
-            canvas.FillRoundRect(x - 8, y - 2, tw + 16, 28, 8, WithAlpha(MakeColor(0, 0, 0), 150));
+            canvas.FillRoundRect(x - 7, y - 2, tw + 14, 24, 7, WithAlpha(MakeColor(0, 0, 0), 150));
         }
-        font.Draw(canvas, x, y + 19, text, 18, kColAccent);
+        // Over the black bars beside the picture it has to read on black whatever the theme.
+        font.Draw(canvas, x, y + 16, text, size, MakeColor(0x9A, 0xE8, 0xDC));
     }
 
     void DrawNotice() {

@@ -715,7 +715,7 @@ int main(int, char**) {
                 const u8 type = recv_buffer[4];
                 const u8* body = recv_buffer + HEADER;
                 if (type == PacketType::Status && size >= HEADER + 2) {
-                    ui.OnStatus(body[0]);
+                    ui.OnStatus(body[0], size >= HEADER + 3 ? body[2] : 0);
                 } else if (type == PacketType::Audio && size >= HEADER + 6 + 4) {
                     const std::size_t frames = ReadU16(body + 4);
                     if (ui.settings.audio && size >= HEADER + 6 + frames * 4 && audio.Start()) {
@@ -766,7 +766,6 @@ int main(int, char**) {
                             if (DecodeJpeg(jpeg, picture)) {
                                 picture_dirty = true;
                                 last_frame_ns = now;
-                                ui.CountFrame(now);
                             }
                         }
                     }

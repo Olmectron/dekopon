@@ -31,7 +31,8 @@ struct InputState;
 //                                 layout, 1 top only, 2 bottom only), 2 = host FPS counter
 //   6 AUDIO   host -> receiver   u32 seq, u16 frames, then s16 stereo PCM at 32728 Hz
 //   7 STATUS  host -> receiver   u8 flags (1 game wants an Amiibo, 2 sound is being sent,
-//                                 4 host FPS counter on, 8 host allows sound), u8 host screen
+//                                 4 host FPS counter on, 8 host allows sound), u8 host screen,
+//                                 u8 the game's frames per second
 //   8 AMIIBO  receiver -> host   libnx NfpData (0x298), UID (7), u16 character, u8 variant,
 //                                 u8 type, u16 model, u8 series
 // HELLO: u8 screen (0 top, 1 bottom, 2 both: top above bottom in 400 x 480), u8 quality,

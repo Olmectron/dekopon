@@ -491,7 +491,9 @@ void NetworkThread() {
                                               (Settings::values.show_fps.GetValue() ? 4 : 0) |
                                               (s_audio_enabled.load() ? 8 : 0));
                 out[HEADER + 1] = static_cast<u8>(s_host_layout.load());
-                out[HEADER + 2] = 0;
+                // The game's frame rate, for the receiver to show beside the picture.
+                const double game_fps = Core::System::GetInstance().GetLastPerfStats().game_fps;
+                out[HEADER + 2] = static_cast<u8>(std::clamp(game_fps + 0.5, 0.0, 255.0));
                 send(out, sizeof(out));
             }
         }

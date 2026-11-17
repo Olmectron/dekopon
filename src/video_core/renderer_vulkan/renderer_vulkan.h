@@ -204,6 +204,7 @@ private:
     // one can actually read it.
     std::chrono::steady_clock::time_point shader_notice_until{};
 
+    bool drawing_screenshot = false; // DrawScreens is filling a screenshot, not the display.
     bool isSecondaryWindow = false;
     bool secondaryWindowEnabled = false;
     bool screenRendered = false;

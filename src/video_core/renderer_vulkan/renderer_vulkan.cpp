@@ -1512,10 +1512,16 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
 #ifdef ENABLE_LSFG
     frame->overlay_offset = 0;
 #endif
-    OverlayDraw fps_overlay = PrepareFpsOverlay(overlay_layout, frame);
-    OverlayDraw shader_notice = PrepareShaderNotice(overlay_layout, frame);
-    OverlayDraw toast = PrepareToast(overlay_layout, frame);
-    OverlayDraw quick_menu = PrepareQuickMenu(overlay_layout, frame);
+    OverlayDraw fps_overlay;
+    OverlayDraw shader_notice;
+    OverlayDraw toast;
+    OverlayDraw quick_menu;
+    if (!drawing_screenshot) {
+        fps_overlay = PrepareFpsOverlay(overlay_layout, frame);
+        shader_notice = PrepareShaderNotice(overlay_layout, frame);
+        toast = PrepareToast(overlay_layout, frame);
+        quick_menu = PrepareQuickMenu(overlay_layout, frame);
+    }
 
     PrepareDraw(frame, layout);
 
@@ -2639,7 +2645,11 @@ void RendererVulkan::RenderScreenshotWithStagingCopy() {
     Frame frame{};
     main_present_window.RecreateFrame(&frame, width, height);
 
+    // A screenshot (what GameShare sends) is the game's picture only: no FPS counter, no
+    // notices, no menu. The receiver draws what it wants to show itself.
+    drawing_screenshot = true;
     DrawScreens(&frame, layout, layout, false);
+    drawing_screenshot = false;
 
     scheduler.Record(
         [width, height, source_image = frame.image, staging_buffer](vk::CommandBuffer cmdbuf) {
@@ -2821,7 +2831,11 @@ bool RendererVulkan::TryRenderScreenshotWithHostMemory() {
     Frame frame{};
     main_present_window.RecreateFrame(&frame, width, height);
 
+    // A screenshot (what GameShare sends) is the game's picture only: no FPS counter, no
+    // notices, no menu. The receiver draws what it wants to show itself.
+    drawing_screenshot = true;
     DrawScreens(&frame, layout, layout, false);
+    drawing_screenshot = false;
 
     scheduler.Record([buffer_image_copy, source_image = frame.image,
                       imported_buffer = imported_buffer.get()](vk::CommandBuffer cmdbuf) {
