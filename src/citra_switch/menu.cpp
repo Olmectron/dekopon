@@ -904,6 +904,7 @@ public:
             const u64 down = padGetButtonsDown(&pad) | ModalTap();
             held = padGetButtons(&pad);
             stick_right = padGetStickPos(&pad, 1);
+            stick_left = padGetStickPos(&pad, 0);
             PumpUpdater();
 
             if (const int serial = CoverShare::Serial(); serial != cover_share_serial) {
@@ -1098,6 +1099,10 @@ private:
     float shelf_zoom = 0.0f;    // Eased towards 0 or 1 with the above.
     float shelf_spin_yaw = 0.0f, shelf_spin_pitch = 0.0f; // Eased towards the right stick.
     HidAnalogStickState stick_right{};
+    HidAnalogStickState stick_left{};
+    // A case that is forward: looked at from nearer or farther (ZL / ZR), the view moved
+    // with the left stick. Back to normal when the case is put back.
+    float shelf_look_scale = 1.0f, shelf_look_x = 0.0f, shelf_look_y = 0.0f;
     bool shelf_back = false;
     HomeLayout home_layout{};
     std::vector<std::shared_ptr<const CoverArt>> frame_covers; // Keeps this frame's art alive.
@@ -1531,6 +1536,22 @@ private:
             const float f = static_cast<float>(value) / 32767.0f;
             return std::abs(f) < 0.14f ? 0.0f : std::clamp(f, -1.0f, 1.0f);
         };
+        if (shelf_forward && count > 0) {
+            // Held, not tapped: the view glides.
+            if (held & HidNpadButton_ZR) {
+                shelf_look_scale = std::min(2.6f, shelf_look_scale * 1.022f);
+            }
+            if (held & HidNpadButton_ZL) {
+                shelf_look_scale = std::max(0.55f, shelf_look_scale / 1.022f);
+            }
+            // The view moves the way the stick is pushed, so the case goes the other way.
+            const float reach_x = g_screen_w * 0.55f, reach_y = g_screen_h * 0.45f;
+            shelf_look_x = std::clamp(shelf_look_x - axis(stick_left.x) * 9.0f, -reach_x, reach_x);
+            shelf_look_y = std::clamp(shelf_look_y + axis(stick_left.y) * 9.0f, -reach_y, reach_y);
+        } else if (shelf_zoom <= 0.0f) {
+            shelf_look_scale = 1.0f;
+            shelf_look_x = shelf_look_y = 0.0f;
+        }
         const float yaw_target = -axis(stick_right.x) * 2.7f;
         const float pitch_target = axis(stick_right.y) * 0.95f;
         shelf_spin_yaw += (yaw_target - shelf_spin_yaw) * 0.22f;
@@ -1589,6 +1610,9 @@ private:
         view.spin_yaw = shelf_spin_yaw;
         view.spin_pitch = shelf_spin_pitch;
         view.forward = shelf_forward;
+        view.look_scale = shelf_look_scale;
+        view.look_x = shelf_look_x;
+        view.look_y = shelf_look_y;
         view.time = UiTime();
         view.app_name = "Toronja";
 #if defined(__SWITCH2__)

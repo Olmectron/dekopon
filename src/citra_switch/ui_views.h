@@ -846,6 +846,8 @@ struct ShelfView {
     float zoom{};       // 0..1: the selected case brought forward, before it is started.
     float spin_yaw{};   // The selected case turned by hand (the right stick), radians.
     float spin_pitch{};
+    float look_scale{1.0f};     // Forward: nearer or farther (ZL / ZR).
+    float look_x{}, look_y{};   // Forward: the view moved sideways and up or down, pixels.
 };
 
 inline float ShelfCaseHeight(const ShelfView& v) {
@@ -880,6 +882,10 @@ inline BoxPose ForwardPose(const ShelfView& v, BoxPose pose) {
         // Square on once it is forward, whatever the shelf had it doing.
         pose.yaw *= 1.0f - t;
         pose.pitch *= 1.0f - t;
+        // Looked at from nearer or farther, and from a little to one side.
+        pose.h *= 1.0f + (v.look_scale - 1.0f) * t;
+        pose.cx += v.look_x * t;
+        pose.cy += v.look_y * t;
     }
     pose.yaw += -3.14159265f * v.flip + v.spin_yaw;
     pose.pitch += v.spin_pitch;
@@ -1445,6 +1451,8 @@ struct HomeView {
     float zoom{};               // The selected case brought forward (0..1).
     float spin_yaw{};           // ...and turned by hand.
     float spin_pitch{};
+    float look_scale{1.0f};     // Forward: nearer or farther, and the view moved.
+    float look_x{}, look_y{};
     bool forward{};             // A case is forward: A starts it, B puts it back.
 };
 
@@ -1499,6 +1507,9 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     shelf.zoom = v.zoom;
     shelf.spin_yaw = v.spin_yaw;
     shelf.spin_pitch = v.spin_pitch;
+    shelf.look_scale = v.look_scale;
+    shelf.look_x = v.look_x;
+    shelf.look_y = v.look_y;
 
     // Backdrop: a wall that brightens towards the horizon, then a floor that takes the
     // reflections and falls away into the bottom of the screen.
@@ -1560,7 +1571,10 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     const Pill full[] = {{"A", "Play", 'A'},     {"X", "Flip", 'X'},  {"Y", "Search", 'Y'},
                          {"L R", "Style", 'S'}, {"+", "Details", 'D'}};
     const Pill narrow[] = {{"A", "Play", 'A'}, {"X", "Flip", 'X'}, {"Y", "Search", 'Y'}};
-    const Pill brought[] = {{"A", "Start", 'A'}, {"X", "Flip", 'X'}, {"B", "Back", 'B'}};
+    const Pill brought[] = {{"A", "Start", 'A'},
+                            {"X", "Flip", 'X'},
+                            {"ZL ZR", "Zoom", 0},
+                            {"B", "Back", 'B'}};
     const std::span<const Pill> pills = v.forward   ? std::span<const Pill>{brought}
                                         : v.compact ? std::span<const Pill>{narrow}
                                                     : std::span<const Pill>{full};
