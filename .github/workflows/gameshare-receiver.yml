@@ -1,0 +1,47 @@
+name: dekopon-link
+
+# Builds Dekopon Link, the GameShare receiver, for Switch 1 and Switch 2 with the same
+# toolchain image as the Switch 2 port.
+on:
+  push:
+    branches: [switch2-gameshare]
+    paths:
+      - 'tools/gameshare/receiver-nx/**'
+      - '.github/workflows/gameshare-receiver.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dekopon-link-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the toolchain image
+        run: docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .
+
+      - name: Build for Switch 1
+        run: >
+          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2
+          -c "make -C tools/gameshare/receiver-nx PLATFORM=switch1"
+
+      - name: Build for Switch 2
+        if: always()
+        run: >
+          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2
+          -c "source /opt/devkitpro/switch2vars.sh && make -C tools/gameshare/receiver-nx PLATFORM=switch2"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dekopon-link
+          path: tools/gameshare/receiver-nx/out/**/*.nro
+          if-no-files-found: warn

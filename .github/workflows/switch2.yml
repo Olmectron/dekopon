@@ -9,7 +9,7 @@ on:
   push:
     branches: [master, switch2-ounce-devkit, switch2-async-shaders, switch2-gameshare]
     # Docs-only pushes do not build (and so do not cancel a build in progress).
-    paths-ignore: ['**.md']
+    paths-ignore: ['**.md', 'tools/gameshare/**', '.github/workflows/gameshare-receiver.yml']
   # Manual run. Give it a release tag to also publish the build as a GitHub
   # release: that is what the in-app updater (Check for Updates) installs.
   workflow_dispatch:
