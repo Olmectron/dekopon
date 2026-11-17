@@ -200,6 +200,15 @@ public:
      */
     bool TouchPressed(unsigned framebuffer_x, unsigned framebuffer_y);
 
+    /**
+     * Touch at a point of the bottom screen itself, whatever the window is showing.
+     * For input that does not come through this window - a second console showing the
+     * bottom screen while this one shows only the top, say.
+     * @param x 0..1 across the screen
+     * @param y 0..1 down the screen
+     */
+    void TouchPressedOnScreen(float x, float y);
+
     /// Signal that a touch released event has occurred (e.g. mouse click released)
     void TouchReleased();
 

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -21,6 +22,9 @@
 
 #include <jpeglib.h>
 
+#include "audio_core/dsp_interface.h"
+#include "citra_switch/amiibo_reader.h"
+#include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
 #include "citra_switch/game_share.h"
 #include "citra_switch/game_share_ldn.h"
@@ -28,6 +32,7 @@
 #include "citra_switch/input.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
@@ -56,6 +61,10 @@ enum PacketType : u8 {
     Input = 2,
     Frame = 3,
     Welcome = 4,
+    Command = 5,
+    Audio = 6,
+    Status = 7,
+    Amiibo = 8,
 };
 
 struct RemoteInput {
@@ -77,7 +86,8 @@ struct Shared {
     // Receiver
     bool client_active{};
     sockaddr_in client_addr{};
-    u8 screen{1};
+    u8 screen{1};         // 0 top, 1 bottom, 2 both (top above bottom)
+    bool audio_wanted{};  // The receiver asked for the sound too.
     u8 quality{80};
     u8 max_fps{30};
     Clock::time_point client_seen{};
@@ -104,6 +114,41 @@ std::atomic<int> s_mode{static_cast<int>(Mode::Network)};
 std::atomic<u32> s_acked{0};
 std::atomic<bool> s_ack_seen{false};
 
+// Settings (GameShare tab).
+std::atomic<bool> s_audio_enabled{true};
+
+// Requests from the receiver, applied on the main loop (MergeRemoteInput).
+std::atomic<int> s_pending_layout{-1};
+std::atomic<int> s_pending_fps{-1};
+std::atomic<int> s_host_layout{0}; // What the receiver last asked this console to show.
+
+// Whether the game is looking for an Amiibo (set by the Amiibo session), so the
+// receiver can offer its own NFC reader.
+std::atomic<bool> s_amiibo_wanted{false};
+std::mutex s_amiibo_mutex;
+bool s_amiibo_pending = false;
+AmiiboCapture s_amiibo_capture;
+
+// Sound on its way to the receiver: DSP frames, oldest first.
+constexpr std::size_t AUDIO_FRAME_SAMPLES = 160;
+constexpr std::size_t MAX_QUEUED_AUDIO = 48; // About a quarter of a second.
+std::mutex s_audio_mutex;
+std::deque<std::array<s16, AUDIO_FRAME_SAMPLES * 2>> s_audio_queue;
+std::atomic<bool> s_audio_streaming{false};
+
+void OnAudioFrame(const s16* samples, std::size_t frames) {
+    if (!s_audio_streaming.load(std::memory_order_relaxed) || frames != AUDIO_FRAME_SAMPLES) {
+        return;
+    }
+    std::array<s16, AUDIO_FRAME_SAMPLES * 2> frame;
+    std::memcpy(frame.data(), samples, sizeof(frame));
+    std::lock_guard lock{s_audio_mutex};
+    if (s_audio_queue.size() >= MAX_QUEUED_AUDIO) {
+        s_audio_queue.pop_front(); // The receiver is not keeping up: stay current.
+    }
+    s_audio_queue.push_back(frame);
+}
+
 u16 ReadU16(const u8* p) {
     return static_cast<u16>(p[0] | (p[1] << 8));
 }
@@ -125,7 +170,11 @@ void WriteU32(u8* p, u32 v) {
 u32 ScreenWidth(u8 screen) {
     return screen == 1 ? 320 : 400;
 }
-constexpr u32 SCREEN_HEIGHT = 240;
+// Both screens are sent as the 3DS has them: the top one above, the bottom one centred
+// under it, in a 400 x 480 picture.
+u32 ScreenHeight(u8 screen) {
+    return screen == 2 ? 480 : 240;
+}
 
 /// BGRA -> JPEG. Returns an empty vector on failure.
 std::vector<u8> EncodeJpeg(const std::vector<u8>& bgra, u32 width, u32 height, int quality) {
@@ -185,7 +234,8 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
                      s.client_addr.sin_port != from.sin_port;
             s.client_active = true;
             s.client_addr = from;
-            s.screen = body[0] == 0 ? 0 : 1;
+            s.screen = body[0] <= 2 ? body[0] : 1;
+            s.audio_wanted = body_size >= 4 && (body[3] & 1) != 0;
             s.quality = body[1];
             s.max_fps = std::clamp<u8>(body[2], 5, 60);
             s.client_seen = now;
@@ -193,14 +243,15 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
         }
         if (is_new) {
             s_ack_seen.store(false);
-            LOG_INFO(Frontend, "GameShare: receiver connected from {}:{} ({} screen)",
-                     inet_ntoa(from.sin_addr), ntohs(from.sin_port), screen == 1 ? "bottom" : "top");
+            LOG_INFO(Frontend, "GameShare: receiver connected from {}:{} ({})",
+                     inet_ntoa(from.sin_addr), ntohs(from.sin_port),
+                     screen == 2 ? "both screens" : screen == 1 ? "bottom screen" : "top screen");
         }
         u8 reply[HEADER + 5];
         std::memcpy(reply, MAGIC, sizeof(MAGIC));
         reply[4] = PacketType::Welcome;
         WriteU16(reply + HEADER, static_cast<u16>(ScreenWidth(screen)));
-        WriteU16(reply + HEADER + 2, static_cast<u16>(SCREEN_HEIGHT));
+        WriteU16(reply + HEADER + 2, static_cast<u16>(ScreenHeight(screen)));
         reply[HEADER + 4] = screen;
         if (sock < 0) {
             GameShareUsb::Send(reply, sizeof(reply));
@@ -250,6 +301,30 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
         if (acted && now - last_report > std::chrono::seconds{1}) {
             last_report = now;
             ReportUserActivity();
+        }
+    } else if (type == PacketType::Command && body_size >= 2) {
+        // 1: which screen this console should show (0 its own layout, 1 top, 2 bottom).
+        // 2: this console's FPS counter (0 off, 1 on).
+        if (body[0] == 1 && body[1] <= 2) {
+            s_pending_layout.store(body[1]);
+        } else if (body[0] == 2) {
+            s_pending_fps.store(body[1] != 0 ? 1 : 0);
+        }
+    } else if (type == PacketType::Amiibo) {
+        // An Amiibo read by the receiver's NFC reader: libnx NfpData, then the UID and
+        // the model fields. Anything shorter is not one.
+        constexpr std::size_t NFP = 0x298;
+        if (body_size >= NFP + 14) {
+            std::lock_guard lock{s_amiibo_mutex};
+            std::memcpy(s_amiibo_capture.nfp_data.data(), body, NFP);
+            std::memcpy(s_amiibo_capture.uid.data(), body + NFP, 7);
+            s_amiibo_capture.character_id = ReadU16(body + NFP + 7);
+            s_amiibo_capture.character_variant = body[NFP + 9];
+            s_amiibo_capture.amiibo_type = body[NFP + 10];
+            s_amiibo_capture.model_number = ReadU16(body + NFP + 11);
+            s_amiibo_capture.series = body[NFP + 13];
+            s_amiibo_capture.name.clear();
+            s_amiibo_pending = true;
         }
     }
 }
@@ -311,8 +386,11 @@ void NetworkThread() {
 
     std::vector<u8> frame;
     std::vector<u8> packet(HEADER + 17 + CHUNK);
-    u8 recv_buffer[256];
+    u8 recv_buffer[1024];
     u32 frame_id = 0;
+    auto last_status = Clock::now();
+    u32 audio_seq = 0;
+    AudioCore::SetOutputTap(OnAudioFrame);
 
     u32 stat_frames = 0, stat_held = 0;
     auto last_sent = Clock::now();
@@ -357,6 +435,63 @@ void NetworkThread() {
                                          reinterpret_cast<sockaddr*>(&from), &from_len);
             if (got > 0) {
                 HandlePacket(sock, recv_buffer, static_cast<std::size_t>(got), from);
+            }
+        }
+
+        // Sound and status go out whether or not there is a picture this pass.
+        {
+            sockaddr_in target{};
+            bool active = false;
+            bool audio = false;
+            {
+                std::lock_guard lock{s.mutex};
+                active = s.client_active;
+                target = s.client_addr;
+                audio = active && s.audio_wanted && s_audio_enabled.load();
+            }
+            const auto send = [&](const u8* data, std::size_t size) {
+                if (usb) {
+                    GameShareUsb::Send(data, size);
+                } else {
+                    sendto(sock, data, size, 0, reinterpret_cast<const sockaddr*>(&target),
+                           sizeof(target));
+                }
+            };
+            s_audio_streaming.store(audio, std::memory_order_relaxed);
+            if (audio) {
+                for (int burst = 0; burst < 8; ++burst) {
+                    u8 out[HEADER + 6 + AUDIO_FRAME_SAMPLES * 4];
+                    {
+                        std::lock_guard lock{s_audio_mutex};
+                        if (s_audio_queue.empty()) {
+                            break;
+                        }
+                        std::memcpy(out + HEADER + 6, s_audio_queue.front().data(),
+                                    AUDIO_FRAME_SAMPLES * 4);
+                        s_audio_queue.pop_front();
+                    }
+                    std::memcpy(out, MAGIC, sizeof(MAGIC));
+                    out[4] = PacketType::Audio;
+                    WriteU32(out + HEADER, ++audio_seq);
+                    WriteU16(out + HEADER + 4, static_cast<u16>(AUDIO_FRAME_SAMPLES));
+                    send(out, sizeof(out));
+                }
+            } else {
+                std::lock_guard lock{s_audio_mutex};
+                s_audio_queue.clear();
+            }
+            if (active && Clock::now() - last_status > std::chrono::milliseconds{400}) {
+                last_status = Clock::now();
+                u8 out[HEADER + 3];
+                std::memcpy(out, MAGIC, sizeof(MAGIC));
+                out[4] = PacketType::Status;
+                out[HEADER] = static_cast<u8>((s_amiibo_wanted.load() ? 1 : 0) |
+                                              (audio ? 2 : 0) |
+                                              (Settings::values.show_fps.GetValue() ? 4 : 0) |
+                                              (s_audio_enabled.load() ? 8 : 0));
+                out[HEADER + 1] = static_cast<u8>(s_host_layout.load());
+                out[HEADER + 2] = 0;
+                send(out, sizeof(out));
             }
         }
 
@@ -457,6 +592,8 @@ void NetworkThread() {
         }
     }
 
+    AudioCore::SetOutputTap(nullptr);
+    s_audio_streaming.store(false);
     if (sock >= 0) {
         close(sock);
     }
@@ -480,6 +617,36 @@ void SetEnabled(bool enabled) {
 
 int GetMode() {
     return s_mode.load();
+}
+
+bool IsAudioEnabled() {
+    return s_audio_enabled.load();
+}
+
+void SetAudioEnabled(bool enabled) {
+    s_audio_enabled.store(enabled);
+}
+
+void SetAmiiboWanted(bool wanted) {
+    s_amiibo_wanted.store(wanted);
+}
+
+bool TakeRemoteAmiibo(AmiiboCapture& out) {
+    std::lock_guard lock{s_amiibo_mutex};
+    if (!s_amiibo_pending) {
+        return false;
+    }
+    out = s_amiibo_capture;
+    s_amiibo_pending = false;
+    return true;
+}
+
+bool HasReceiver() {
+    if (!s_running.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    std::lock_guard lock{s.mutex};
+    return s.client_active;
 }
 
 void SetMode(int mode) {
@@ -511,6 +678,8 @@ void Stop() {
     if (s_thread.joinable()) {
         s_thread.join();
     }
+    s_pending_layout.store(-1);
+    s_host_layout.store(0);
     std::lock_guard lock{s.mutex};
     s.client_active = false;
     s.input = {};
@@ -549,14 +718,15 @@ void Tick(Core::System& system) {
     }
 
     const u32 width = ScreenWidth(screen);
-    const u32 height = SCREEN_HEIGHT;
+    const u32 height = ScreenHeight(screen);
     {
         std::lock_guard lock{s.mutex};
         s.capture.resize(static_cast<std::size_t>(width) * height * 4);
     }
     // One screen, at the 3DS's own resolution, whatever the host itself is showing.
     const Layout::FramebufferLayout layout =
-        Layout::SingleFrameLayout(width, height, screen == 1, false);
+        screen == 2 ? Layout::DefaultFrameLayout(width, height, false, false)
+                    : Layout::SingleFrameLayout(width, height, screen == 1, false);
     renderer.RequestScreenshot(
         s.capture.data(),
         [width, height, screen](bool) {
@@ -579,6 +749,14 @@ void Tick(Core::System& system) {
 void MergeRemoteInput(InputState& state) {
     if (!s_running.load(std::memory_order_relaxed)) {
         return;
+    }
+    // What the receiver asked this console to do.
+    if (const int layout = s_pending_layout.exchange(-1); layout >= 0) {
+        s_host_layout.store(layout);
+        SetSharedScreenLayout(layout);
+    }
+    if (const int fps = s_pending_fps.exchange(-1); fps >= 0) {
+        Settings::values.show_fps = fps != 0;
     }
     RemoteInput input;
     {
@@ -635,19 +813,12 @@ void MergeRemoteInput(InputState& state) {
         }
     }
 
-    // Touch arrives in bottom-screen pixels; the emulator window wants window coordinates, so
-    // it only lands when the host's own layout shows the bottom screen (prototype limitation).
+    // Touch arrives as a position on the bottom screen and is applied there directly, so
+    // it works whatever this console is showing - the top screen alone, for instance.
     if (input.touching && !state.touch_pressed) {
-        if (EmuWindow_Switch* window = GetEmuWindow()) {
-            const auto& bottom = window->GetFramebufferLayout().bottom_screen;
-            if (bottom.GetWidth() > 0 && bottom.GetHeight() > 0) {
-                state.touch_pressed = true;
-                state.touch_x =
-                    bottom.left + std::min<u32>(input.touch_x, 319) * bottom.GetWidth() / 320;
-                state.touch_y =
-                    bottom.top + std::min<u32>(input.touch_y, 239) * bottom.GetHeight() / 240;
-            }
-        }
+        state.touch_on_screen = true;
+        state.touch_fx = (std::min<u32>(input.touch_x, 319) + 0.5f) / 320.0f;
+        state.touch_fy = (std::min<u32>(input.touch_y, 239) + 0.5f) / 240.0f;
     }
 }
 

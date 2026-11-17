@@ -27,6 +27,19 @@ struct InputState;
 //   3 FRAME   host -> receiver   u32 frame id, u16 chunk index, u16 chunk count, u32 jpeg size,
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)
+//   5 COMMAND receiver -> host   u8 what, u8 value: 1 = screen the host shows (0 its own
+//                                 layout, 1 top only, 2 bottom only), 2 = host FPS counter
+//   6 AUDIO   host -> receiver   u32 seq, u16 frames, then s16 stereo PCM at 32728 Hz
+//   7 STATUS  host -> receiver   u8 flags (1 game wants an Amiibo, 2 sound is being sent,
+//                                 4 host FPS counter on, 8 host allows sound), u8 host screen
+//   8 AMIIBO  receiver -> host   libnx NfpData (0x298), UID (7), u16 character, u8 variant,
+//                                 u8 type, u16 model, u8 series
+// HELLO: u8 screen (0 top, 1 bottom, 2 both: top above bottom in 400 x 480), u8 quality,
+//        u8 frames per second, then optionally u8 flags (1 = send the sound too)
+namespace SwitchFrontend {
+struct AmiiboCapture;
+}
+
 namespace SwitchFrontend::GameShare {
 
 /// How the receiver reaches this console.
@@ -42,6 +55,19 @@ bool IsEnabled();
 void SetEnabled(bool enabled);
 int GetMode();
 void SetMode(int mode);
+/// Whether the sound may be sent along with the picture (the receiver still has to ask).
+bool IsAudioEnabled();
+void SetAudioEnabled(bool enabled);
+
+/// True while a receiver is connected.
+bool HasReceiver();
+
+/// Tells the receiver whether the game is looking for an Amiibo, so it can offer its
+/// own NFC reader.
+void SetAmiiboWanted(bool wanted);
+
+/// An Amiibo the receiver read and sent over, if one arrived since the last call.
+bool TakeRemoteAmiibo(AmiiboCapture& out);
 
 /// Starts listening for a receiver. Safe to call again while running.
 void Start();

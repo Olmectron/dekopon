@@ -24,6 +24,12 @@ enum class InterruptType : u32;
 namespace AudioCore {
 
 class Sink;
+
+/// Gets every frame of audio the emulated DSP outputs (stereo, native sample rate), on the
+/// emulation thread. One listener; null to stop. Used to share the sound with a second
+/// console.
+using OutputTap = void (*)(const s16* samples, std::size_t frames);
+void SetOutputTap(OutputTap tap);
 enum class SinkType : u32;
 
 class DspInterface {

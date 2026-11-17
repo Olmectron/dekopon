@@ -3,15 +3,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <span>
 #include <vector>
 
 #include <cstdio>
 
 #include "citra_switch/amiibo_convert.h"
 #include "citra_switch/amiibo_session.h"
+#include "citra_switch/game_share.h"
 #include "citra_switch/overlay_menu.h"
 #include "core/core.h"
 #include "core/hle/kernel/kernel.h"
@@ -197,6 +200,25 @@ void FollowGuest() {
     s_auto_next_check = now + AUTO_CHECK_INTERVAL;
 
     const bool searching = GuestIsSearching();
+    // A second console showing the game can read the Amiibo with its own reader.
+    GameShare::SetAmiiboWanted(searching);
+    if (AmiiboCapture remote; GameShare::TakeRemoteAmiibo(remote)) {
+        if (!searching) {
+            VideoCore::PostOverlayToast("Amiibo received, but the game is not asking for one");
+        } else if (auto nfc = GetNfc()) {
+            const std::array<std::uint8_t, 0x21C> plain_tag = BuildPlainTag(remote);
+            std::scoped_lock lock{Core::System::GetInstance().Kernel().GetHLELock()};
+            // Nothing can be written back to a figure that sits on another console.
+            const bool loaded =
+                nfc->LoadAmiiboFromMemory(plain_tag, [](u32, std::span<const u8>) {
+                    VideoCore::PostOverlayToast(
+                        "Saving to an Amiibo read on the other console is not supported", 4000);
+                    return false;
+                });
+            VideoCore::PostOverlayToast(loaded ? "Amiibo read on the other console"
+                                               : "The Amiibo from the other console was refused");
+        }
+    }
     const bool started_searching = searching && !s_guest_was_searching;
     s_guest_was_searching = searching;
     const auto mode = static_cast<AmiiboRequestMode>(s_request_mode.load());

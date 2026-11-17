@@ -1349,6 +1349,11 @@ void BuildGameShare(std::vector<SettingEntry>& out) {
          "from the Album. Applies to the next game started."},
         [] { return GameShare::GetMode(); }, [](int value) { GameShare::SetMode(value); }, 0,
         kGameShareModeNames);
+    t << LocalBool("gameshare_audio",
+                   {"Share The Sound",
+                    "Sends the game's sound to the other console too. The other "
+                    "console can still mute it from its own menu."},
+                   GameShare::IsAudioEnabled, GameShare::SetAudioEnabled, true);
 }
 
 std::vector<SettingEntry> BuildRegistry() {

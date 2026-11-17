@@ -194,6 +194,10 @@ void StepScreenLayout(int delta);
 // Swaps which 3DS screen occupies which slot of the current arrangement.
 void ToggleSwapScreens();
 
+// Shows a single screen on this console because another one is showing the other
+// (GameShare): 1 = top only, 2 = bottom only, 0 = back to the layout that was in use.
+void SetSharedScreenLayout(int which);
+
 // Stretches either single-screen layout to fill the entire display.
 bool IsFullscreenStretchEnabled();
 void SetFullscreenStretchEnabled(bool enabled);

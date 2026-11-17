@@ -561,6 +561,34 @@ void CycleScreenLayout() {
     }
 }
 
+void SetSharedScreenLayout(int which) {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+    // What the user had before a receiver asked for a single screen here.
+    static bool overridden = false;
+    static Settings::LayoutOption saved_option{};
+    static bool saved_swap = false;
+    if (which == 1 || which == 2) {
+        if (!overridden) {
+            saved_option = Settings::values.layout_option.GetValue();
+            saved_swap = Settings::values.swap_screen.GetValue();
+            overridden = true;
+        }
+        Settings::values.layout_option = which == 1 ? Settings::LayoutOption::TopScreenOnly
+                                                    : Settings::LayoutOption::BottomScreenOnly;
+    } else if (overridden) {
+        Settings::values.layout_option = saved_option;
+        Settings::values.swap_screen = saved_swap;
+        overridden = false;
+    } else {
+        return;
+    }
+    SyncLayoutIndex();
+    s_layout_update_pending.store(true, std::memory_order_release);
+}
+
 void ToggleSwapScreens() {
     auto& system = Core::System::GetInstance();
     if (!system.IsPoweredOn()) {

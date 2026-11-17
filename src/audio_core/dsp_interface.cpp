@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <atomic>
 #include <cstddef>
 #include "audio_core/dsp_interface.h"
 #include "audio_core/sink.h"
@@ -36,7 +37,18 @@ void DspInterface::EnableStretching(bool enable) {
     enable_time_stretching = enable;
 }
 
+namespace {
+std::atomic<OutputTap> g_output_tap{nullptr};
+} // namespace
+
+void SetOutputTap(OutputTap tap) {
+    g_output_tap.store(tap);
+}
+
 void DspInterface::OutputFrame(StereoFrame16 frame) {
+    if (const OutputTap tap = g_output_tap.load(std::memory_order_relaxed)) {
+        tap(&frame[0][0], frame.size());
+    }
     if (!sink) {
         return;
     }

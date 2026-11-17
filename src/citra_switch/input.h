@@ -85,6 +85,11 @@ struct InputState {
     bool touch_pressed{};
     std::uint32_t touch_x{};
     std::uint32_t touch_y{};
+    // A touch given as a position on the bottom screen (0..1), not in window pixels:
+    // it lands even when the window is not showing that screen.
+    bool touch_on_screen{};
+    float touch_fx{};
+    float touch_fy{};
     MotionState motion{};
 };
 

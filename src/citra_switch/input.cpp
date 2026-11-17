@@ -516,7 +516,10 @@ void UpdateInput(const InputState& state) {
                            bottom.bottom - 1);
     }
 
-    if (touch_pressed) {
+    if (!touch_pressed && state.touch_on_screen) {
+        window->TouchPressedOnScreen(state.touch_fx, state.touch_fy);
+        s_touch_active = true;
+    } else if (touch_pressed) {
         if (s_touch_active) {
             window->TouchMoved(touch_x, touch_y);
         } else {
