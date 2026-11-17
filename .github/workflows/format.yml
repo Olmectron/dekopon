@@ -2,7 +2,7 @@ name: citra-format
 
 on:
   push:
-    branches: [ "*", "!master", "!switch2-ounce-devkit", "!switch2-async-shaders" ]
+    branches: [ "*", "!master", "!switch2-*" ]
   pull_request:
     branches: [ master ]
 
