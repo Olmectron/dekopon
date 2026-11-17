@@ -366,6 +366,12 @@ void StartCoverDownload(std::vector<CoverRequest> requests) {
         return;
     }
     StopCoverDownload();
+    // On this thread, before any worker exists: libcurl's lazy start-up is not safe when
+    // two threads (this download, the update check) make their first call at once.
+    static const bool curl_ready = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
+    if (!curl_ready) {
+        return;
+    }
     s_cancel = false;
     s_done = 0;
     s_total = static_cast<int>(missing.size());

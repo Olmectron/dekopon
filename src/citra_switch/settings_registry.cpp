@@ -1339,8 +1339,8 @@ void BuildGameShare(std::vector<SettingEntry>& out) {
     t << LocalBool("gameshare_enabled",
                    {"GameShare",
                     "Lets another console running Toronja Link show one of the screens and "
-                    "play along. Applies to the next game started."},
-                   GameShare::IsEnabled, GameShare::SetEnabled, true);
+                    "play along. Off by default; it can also be switched from the in-game menu."},
+                   GameShare::IsEnabled, GameShare::SetEnabled, false);
     t << LocalChoice(
         "gameshare_mode",
         {"Connection",

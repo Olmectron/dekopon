@@ -118,16 +118,20 @@ struct Quad {
 };
 
 /// Draws the part of `img` between `u0` and `u1` (0..1 across the picture) into `q`.
-/// `shade` darkens (0 = as is, 1 = black); `alpha` fades the whole picture. With `mirror` the
-/// picture is drawn upside down under the quad and fades out downwards, as a reflection.
+/// `shade` darkens (0 = as is, 1 = black). With `mirror` the picture is drawn upside down
+/// under the quad and fades out downwards, as a reflection. `smooth` filters the picture;
+/// without it the nearest pixel is taken, which is several times cheaper and is what the
+/// covers at the sides and the reflections get - a shelf redraws every frame, in software.
 inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0 = 0.0f, float u1 = 1.0f,
-                     float shade = 0.0f, u8 alpha = 255, bool mirror = false) {
+                     float shade = 0.0f, bool mirror = false, bool smooth = true) {
     if (img.Empty() || q.x1 <= q.x0) {
         return;
     }
     const int xa = std::max(0, static_cast<int>(std::floor(q.x0)));
     const int xb = std::min(c.Width(), static_cast<int>(std::ceil(q.x1)));
-    const float keep = 1.0f - std::clamp(shade, 0.0f, 1.0f);
+    const u32 keep = static_cast<u32>((1.0f - std::clamp(shade, 0.0f, 1.0f)) * 256.0f);
+    u32* const pixels = c.Data();
+    const int stride = c.Width();
     for (int x = xa; x < xb; ++x) {
         const float t = std::clamp((x + 0.5f - q.x0) / (q.x1 - q.x0), 0.0f, 1.0f);
         const float top = q.top0 + (q.top1 - q.top0) * t;
@@ -136,29 +140,39 @@ inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0 = 0.0f
             continue;
         }
         const float u = (u0 + (u1 - u0) * t) * (img.w - 1);
+        const int ui = std::clamp(static_cast<int>(u + 0.5f), 0, img.w - 1);
         const float y_begin = mirror ? top + h : top;
         const float y_end = mirror ? top + h + h * 0.34f : top + h;
         const int ya = std::max(0, static_cast<int>(std::floor(y_begin)));
         const int yb = std::min(c.Height(), static_cast<int>(std::ceil(y_end)));
+        const float v_step = (img.h - 1) / h;
         for (int y = ya; y < yb; ++y) {
-            float s = (y + 0.5f - top) / h; // 0 at the top of the picture, 1 at its bottom.
-            float fade = 1.0f;
+            float v = (y + 0.5f - top) * v_step; // Row of the picture, 0 at its top.
+            u32 fade = 256;
             if (mirror) {
-                s = 2.0f - s; // Fold back up from the bottom edge.
-                fade = std::clamp(0.30f * (1.0f - (y + 0.5f - y_begin) / (y_end - y_begin)), 0.0f,
-                                  1.0f);
+                v = 2.0f * (img.h - 1) - v; // Fold back up from the bottom edge.
+                fade = static_cast<u32>(
+                    77.0f * std::clamp(1.0f - (y + 0.5f - y_begin) / (y_end - y_begin), 0.0f, 1.0f));
             }
-            if (s < 0.0f || s > 1.0f) {
+            if (v < 0.0f || v > static_cast<float>(img.h - 1)) {
                 continue;
             }
-            u32 color = SampleImage(img, u, s * (img.h - 1));
-            if (keep < 1.0f) {
-                const u32 r = static_cast<u32>((color & 0xFF) * keep);
-                const u32 g = static_cast<u32>(((color >> 8) & 0xFF) * keep);
-                const u32 b = static_cast<u32>(((color >> 16) & 0xFF) * keep);
-                color = 0xFF000000u | (b << 16) | (g << 8) | r;
+            u32 color = smooth ? SampleImage(img, u, v)
+                               : img.px[static_cast<std::size_t>(static_cast<int>(v + 0.5f)) * img.w + ui];
+            u32 r = color & 0xFF, g = (color >> 8) & 0xFF, b = (color >> 16) & 0xFF;
+            if (keep < 256) {
+                r = r * keep >> 8;
+                g = g * keep >> 8;
+                b = b * keep >> 8;
             }
-            c.Blend(x, y, color, static_cast<u8>(alpha * fade));
+            u32& dst = pixels[static_cast<std::size_t>(y) * stride + x];
+            if (fade < 256) {
+                const u32 inv = 256 - fade;
+                r = (r * fade + (dst & 0xFF) * inv) >> 8;
+                g = (g * fade + ((dst >> 8) & 0xFF) * inv) >> 8;
+                b = (b * fade + ((dst >> 16) & 0xFF) * inv) >> 8;
+            }
+            dst = 0xFF000000u | (b << 16) | (g << 8) | r;
         }
     }
 }
@@ -496,9 +510,9 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
                              static_cast<int>(q.x1 - q.x0), static_cast<int>(q.h0));
             } else {
                 if (v.reflections) {
-                    BlitQuad(c, *item.cover, q, u0, u1, p.shade, 255, true);
+                    BlitQuad(c, *item.cover, q, u0, u1, p.shade, true, false);
                 }
-                BlitQuad(c, *item.cover, q, u0, u1, p.shade);
+                BlitQuad(c, *item.cover, q, u0, u1, p.shade, false, selected);
             }
         } else if (show_back) {
             DrawTextBack(c, font, item, static_cast<int>(q.x0), static_cast<int>(q.top0),
@@ -543,6 +557,12 @@ inline void DrawRoundButton(Canvas& c, Font& font, Icon icon, int cx, int cy, in
         font.Draw(c, chip_x + (chip_w - tw) / 2, CenterBaseline(chip_y, 22, 15), pad_hint, 15,
                   MakeColor(0xF1, 0xF2, 0xF4));
     }
+}
+
+/// Width DrawPill gives a pill.
+inline int PillWidth(Font& font, std::string_view pad_hint, std::string_view label) {
+    const int hint_w = pad_hint.empty() ? 0 : std::max(24, font.Measure(pad_hint, 16) + 14);
+    return 14 + hint_w + (hint_w ? 8 : 0) + font.Measure(label, 17) + 16;
 }
 
 /// A text button (pill).
@@ -808,11 +828,9 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
                                                   : std::span<const Pill>{full};
     if (v.count > 0) {
         // Measure first so the row can be centred.
-        Canvas scratch;
-        scratch.Resize(1, 1);
         int total = 0;
         for (const Pill& p : pills) {
-            total += DrawPill(scratch, font, 0, 0, p.hint, p.label, p.primary) + 10;
+            total += PillWidth(font, p.hint, p.label) + 10;
         }
         int px = (v.screen_w - (total - 10)) / 2;
         for (const Pill& p : pills) {

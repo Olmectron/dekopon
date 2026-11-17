@@ -44,8 +44,11 @@ jobs:
         if: steps.archives.outputs.cache-hit != 'true'
         working-directory: externals/nxvk
         run: |
-          make CONTAINER=docker image
-          make CONTAINER=docker
+          # As root: the container writes its files as root, and make then touches stamps
+          # next to them. Only the driver archives are built - packaging them needs
+          # devkitA64 on the host, and the build links the archives directly anyway.
+          sudo make CONTAINER=docker image
+          sudo make CONTAINER=docker driver
           # Only the static archives are needed afterwards.
           find switch/build/cross -name '*.a' -print0 | sudo tar --null -T - -cf /tmp/nxvk-archives.tar
           sudo chmod a+r /tmp/nxvk-archives.tar

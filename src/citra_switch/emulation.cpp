@@ -324,6 +324,14 @@ void EmuThread(std::string path) {
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
     GameShare::Start();
+    if (GameShare::IsEnabled()) {
+        // Said every time: sharing left on by mistake should not go unnoticed, least of
+        // all local wireless, which takes this console off its normal network.
+        VideoCore::PostOverlayToast(std::string{"GameShare is on ("} + GameShare::ModeName() +
+                                        "): another console can join. To turn it off, "
+                                        "press + and - and switch GameShare off.",
+                                    7000);
+    }
     while (!s_stop) {
         if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
             system.GPU().UpdateCurrentFramebufferLayout();

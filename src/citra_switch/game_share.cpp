@@ -108,7 +108,8 @@ struct Shared {
 Shared s;
 std::atomic<bool> s_running{false};
 std::thread s_thread;
-std::atomic<bool> s_enabled{true};
+std::atomic<bool> s_enabled{false}; // Off unless the user turns it on.
+std::atomic<bool> s_session{false}; // A game is running, so sharing may start.
 std::atomic<int> s_mode{static_cast<int>(Mode::Network)};
 // Newest frame id the receiver reports having seen (newer receivers only).
 std::atomic<u32> s_acked{0};
@@ -613,6 +614,27 @@ bool IsEnabled() {
 
 void SetEnabled(bool enabled) {
     s_enabled.store(enabled);
+    // Mid-game (the in-game menu's switch): takes effect at once.
+    if (s_session.load()) {
+        if (enabled) {
+            Start();
+        } else {
+            const bool session = s_session.load();
+            Stop();
+            s_session.store(session);
+        }
+    }
+}
+
+const char* ModeName() {
+    switch (static_cast<Mode>(s_mode.load())) {
+    case Mode::LocalWireless:
+        return "local wireless";
+    case Mode::Usb:
+        return "USB";
+    default:
+        return "Wi-Fi / LAN";
+    }
 }
 
 int GetMode() {
@@ -655,6 +677,7 @@ void SetMode(int mode) {
 }
 
 void Start() {
+    s_session.store(true);
     if (!s_enabled.load()) {
         return;
     }
@@ -672,6 +695,7 @@ void Start() {
 }
 
 void Stop() {
+    s_session.store(false);
     if (!s_running.exchange(false)) {
         return;
     }

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "citra_switch/amiibo_session.h"
+#include "citra_switch/game_share.h"
 #include "citra_switch/camera/still_image_camera.h"
 #include "citra_switch/config.h"
 #include "citra_switch/menu_data.h"
@@ -38,6 +39,7 @@ enum class Item {
     Separator,
     SaveHere,
     LoadHere,
+    GameShareSwitch,
     Cheat,
     CheatsEmpty,
     SaveStateSlot,
@@ -352,6 +354,7 @@ void BuildHomeRows() {
     s_rows.push_back({Item::ExitGame});
     s_rows.push_back({Item::SaveHere});
     s_rows.push_back({Item::LoadHere});
+    s_rows.push_back({Item::GameShareSwitch});
     s_rows.push_back({Item::Separator, 0});
     for (const Page page : kPageOrder) {
         if (page != Page::Home && !IsAdvancedPage(page)) {
@@ -445,6 +448,7 @@ bool IsAction(const Row& row) {
     case Item::CameraTargetRow:
     case Item::SaveHere:
     case Item::LoadHere:
+    case Item::GameShareSwitch:
         return false;
     default:
         return true;
@@ -473,6 +477,8 @@ std::string Label(const Row& row) {
         return "Save State";
     case Item::LoadHere:
         return "Load State";
+    case Item::GameShareSwitch:
+        return "GameShare";
     case Item::Cheat:
         return CheatName(row.index);
     case Item::CheatsEmpty:
@@ -517,6 +523,10 @@ std::string Value(const Row& row) {
     case Item::SaveHere:
     case Item::LoadHere:
         return SlotSummary(s_home_slot);
+    case Item::GameShareSwitch:
+        return GameShare::IsEnabled()
+                   ? std::string{"On ("} + GameShare::ModeName() + ")"
+                   : std::string{"Off"};
     case Item::Cheat:
         return CheatEnabled(row.index) ? "On" : "Off";
     case Item::SaveStateSlot: {
@@ -544,6 +554,9 @@ void Adjust(const Row& row, int dir) {
     case Item::LoadHere:
         s_home_slot = (s_home_slot + dir + static_cast<int>(Core::SaveStateSlotCount)) %
                       static_cast<int>(Core::SaveStateSlotCount);
+        break;
+    case Item::GameShareSwitch:
+        GameShare::SetEnabled(!GameShare::IsEnabled());
         break;
     case Item::Cheat:
         ToggleCheat(row.index);
@@ -603,6 +616,9 @@ void Repaint() {
         if (focused.item == Item::Setting && focused.index >= 0 &&
             focused.index < static_cast<int>(s_settings.size())) {
             state.description = s_settings[static_cast<std::size_t>(focused.index)].description;
+        } else if (focused.item == Item::GameShareSwitch) {
+            state.description = "Lets another console running Toronja Link show a screen and play "
+                                "along. The connection type is set in the launcher's options.";
         } else if (focused.item == Item::Section && IsAdvancedPage(static_cast<Page>(focused.index))) {
             state.description = "Advanced: change these only if you know what they do.";
         }

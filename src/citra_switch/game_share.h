@@ -53,6 +53,8 @@ enum class Mode : int {
 /// Settings, persisted by the frontend (GameShare tab).
 bool IsEnabled();
 void SetEnabled(bool enabled);
+/// "Wi-Fi / LAN", "local wireless": for notices.
+const char* ModeName();
 int GetMode();
 void SetMode(int mode);
 /// Whether the sound may be sent along with the picture (the receiver still has to ask).
