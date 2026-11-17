@@ -7,6 +7,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -106,9 +107,12 @@ StreamBuffer::StreamBuffer(const Instance& instance_, Scheduler& scheduler_,
 }
 
 StreamBuffer::~StreamBuffer() {
-    device.unmapMemory(memory);
+    if (host_memory == nullptr) {
+        device.unmapMemory(memory);
+    }
     device.destroyBuffer(buffer);
     device.freeMemory(memory);
+    std::free(host_memory);
 }
 
 std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u64 alignment) {
@@ -174,11 +178,106 @@ void StreamBuffer::Commit(u32 size) {
     watch.tick = scheduler.CurrentTick();
 }
 
+bool StreamBuffer::TryCreateHostBacked(u64 size) {
+    // The driver may offer no host-visible memory that is also CPU-cached (Switch 2's
+    // does not). Reading back through an uncached mapping is extremely slow: copying one
+    // 3DS depth buffer out of it took ~37 ms, which is what dropped Majora's Mask 3D to
+    // 18 fps while it reads the depth buffer for the sun. So have the GPU write into
+    // ordinary memory instead, imported with VK_EXT_external_memory_host.
+    if (!instance.IsExternalMemoryHostSupported()) {
+        return false;
+    }
+    const u64 alignment = instance.GetMinImportedHostPointerAlignment();
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        return false;
+    }
+    const u64 aligned_size = Common::AlignUp(size, alignment);
+    void* const host = std::aligned_alloc(alignment, aligned_size);
+    if (host == nullptr) {
+        return false;
+    }
+
+    vk::Buffer new_buffer{};
+    vk::DeviceMemory new_memory{};
+    try {
+        const vk::MemoryHostPointerPropertiesEXT import_properties =
+            device.getMemoryHostPointerPropertiesEXT(
+                vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT, host);
+        const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+        std::optional<u32> type_index;
+        for (u32 i = 0; i < memory_properties.memoryTypeCount; ++i) {
+            const auto flags = memory_properties.memoryTypes[i].propertyFlags;
+            if ((import_properties.memoryTypeBits & (1U << i)) != 0 &&
+                (flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+                type_index = i;
+                break;
+            }
+        }
+        if (!type_index) {
+            std::free(host);
+            return false;
+        }
+
+        const vk::StructureChain<vk::MemoryAllocateInfo, vk::ImportMemoryHostPointerInfoEXT>
+            allocation_chain = {
+                vk::MemoryAllocateInfo{
+                    .allocationSize = aligned_size,
+                    .memoryTypeIndex = *type_index,
+                },
+                vk::ImportMemoryHostPointerInfoEXT{
+                    .handleType = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
+                    .pHostPointer = host,
+                },
+            };
+        new_memory = device.allocateMemory(allocation_chain.get());
+
+        const vk::StructureChain<vk::BufferCreateInfo, vk::ExternalMemoryBufferCreateInfo>
+            buffer_chain = {
+                vk::BufferCreateInfo{
+                    .size = aligned_size,
+                    .usage = usage,
+                    .sharingMode = vk::SharingMode::eExclusive,
+                },
+                vk::ExternalMemoryBufferCreateInfo{
+                    .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
+                },
+            };
+        new_buffer = device.createBuffer(buffer_chain.get());
+        device.bindBufferMemory(new_buffer, new_memory, 0);
+    } catch (const vk::SystemError& err) {
+        LOG_WARNING(Render_Vulkan, "Could not back the {} buffer with host memory: {}",
+                    BufferTypeName(type), err.what());
+        if (new_buffer) {
+            device.destroyBuffer(new_buffer);
+        }
+        if (new_memory) {
+            device.freeMemory(new_memory);
+        }
+        std::free(host);
+        return false;
+    }
+
+    buffer = new_buffer;
+    memory = new_memory;
+    host_memory = host;
+    mapped = static_cast<u8*>(host);
+    stream_buffer_size = size;
+    is_coherent = true;
+    LOG_INFO(Render_Vulkan, "Created {} buffer with size {} KiB (imported host memory)",
+             BufferTypeName(type), stream_buffer_size / 1024);
+    return true;
+}
+
 void StreamBuffer::CreateBuffers(u64 preferred_size) {
     const vk::Device device = instance.GetDevice();
     const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
     const u32 preferred_type = GetMemoryType(memory_properties, type);
     const vk::MemoryType mem_type = memory_properties.memoryTypes[preferred_type];
+    if (type == BufferType::Download &&
+        !(mem_type.propertyFlags & vk::MemoryPropertyFlagBits::eHostCached) &&
+        TryCreateHostBacked(preferred_size)) {
+        return;
+    }
     const u32 preferred_heap = mem_type.heapIndex;
     is_coherent =
         static_cast<bool>(mem_type.propertyFlags & vk::MemoryPropertyFlagBits::eHostCoherent);

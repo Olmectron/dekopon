@@ -58,6 +58,10 @@ private:
     /// Creates Vulkan buffer handles committing the required the required memory.
     void CreateBuffers(u64 prefered_size);
 
+    /// Backs a download buffer with ordinary (CPU-cached) memory imported into the
+    /// driver. Returns false when that is not possible.
+    bool TryCreateHostBacked(u64 size);
+
     /// Increases the amount of watches available.
     void ReserveWatches(std::vector<Watch>& watches, std::size_t grow_size);
 
@@ -71,6 +75,7 @@ private:
     vk::Buffer buffer;        ///< Mapped buffer.
     vk::DeviceMemory memory;  ///< Memory allocation.
     u8* mapped{};             ///< Pointer to the mapped memory
+    void* host_memory{};      ///< Imported host allocation backing the buffer, if any.
     u64 stream_buffer_size{}; ///< Stream buffer size.
     vk::BufferUsageFlags usage{};
     BufferType type;
