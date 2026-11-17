@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <csetjmp>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -166,6 +167,27 @@ constexpr u16 LDN_SCENE_ID = 0x4453; // "DS"
 constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0x47,
                                      0x61, 0x6d, 0x65, 0x53, 0x68, 0x61, 0x72, 0x65};
 
+constexpr const char* LOG_FILE = "sdmc:/switch/dekopon-link.log";
+int s_log_lines = 0;
+
+/// printf that also appends to LOG_FILE (the first few hundred lines), so the result of a
+/// local wireless attempt can be read afterwards instead of off a scrolling screen.
+__attribute__((format(printf, 1, 2))) void Say(const char* format, ...) {
+    char line[256];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    std::fputs(line, stdout);
+    if (s_log_lines < 400) {
+        ++s_log_lines;
+        if (std::FILE* file = std::fopen(LOG_FILE, "a")) {
+            std::fputs(line, file);
+            std::fclose(file);
+        }
+    }
+}
+
 /// Joins the local network a Dekopon host created and returns the host's address. Prints
 /// every step with its result code: this path cannot be tested without two consoles.
 ///
@@ -178,11 +200,15 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     // The system flavour of the service first: the user one only lets an application join
     // networks whose local communication id is listed by the title it runs as, and the host
     // runs as a different title (ldnConnect then fails with 0xc2cb, "invalid object").
+    s_log_lines = 0;
+    std::remove(LOG_FILE);
+    bool system_service = true;
     Result rc = ldnInitialize(LdnServiceType_System);
-    std::printf("ldnInitialize(system): 0x%x\n", rc);
+    Say("ldnInitialize(system): 0x%x\n", rc);
     if (R_FAILED(rc)) {
+        system_service = false;
         rc = ldnInitialize(LdnServiceType_User);
-        std::printf("ldnInitialize(user): 0x%x\n", rc);
+        Say("ldnInitialize(user): 0x%x\n", rc);
     }
     consoleUpdate(nullptr);
     if (R_FAILED(rc)) {
@@ -199,10 +225,26 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     static LdnNetworkInfo networks[0x18];
     bool station_open = false;
     bool connected = false;
-    std::printf("Scanning for a Dekopon host (hold B: cancel, hold Plus: quit)...\n");
+    Say("Scanning for a Dekopon host (hold B: cancel, hold Plus: quit)...\n");
     consoleUpdate(nullptr);
 
     for (int round = 0; appletMainLoop() && !connected; ++round) {
+        // After a full round of both protocols, try the other flavour of the service.
+        if (round > 0 && round % 12 == 0) {
+            ldnExit();
+            station_open = false;
+            system_service = !system_service;
+            rc = ldnInitialize(system_service ? LdnServiceType_System : LdnServiceType_User);
+            Say("switch to ldn:%s: 0x%x\n", system_service ? "s" : "u", rc);
+            if (R_FAILED(rc)) {
+                system_service = !system_service;
+                rc = ldnInitialize(system_service ? LdnServiceType_System : LdnServiceType_User);
+                Say("back to ldn:%s: 0x%x\n", system_service ? "s" : "u", rc);
+                if (R_FAILED(rc)) {
+                    return false;
+                }
+            }
+        }
         // Alternate the protocol every few scans.
         if (round % 6 == 0) {
             if (station_open) {
@@ -211,9 +253,9 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
             }
             const bool mixed = (round / 6) % 2 == 0;
             rc = ldnSetProtocol(mixed ? LdnProtocol_Unknown3 : LdnProtocol_NX);
-            std::printf("protocol %s: 0x%x\n", mixed ? "NX+Switch2" : "NX", rc);
+            Say("protocol %s: 0x%x\n", mixed ? "NX+Switch2" : "NX", rc);
             rc = ldnOpenStation();
-            std::printf("ldnOpenStation: 0x%x\n", rc);
+            Say("ldnOpenStation: 0x%x\n", rc);
             consoleUpdate(nullptr);
             if (R_FAILED(rc)) {
                 ldnExit();
@@ -241,17 +283,17 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
             s32 total = 0;
             rc = ldnScan(0, &filter, networks, 0x18, &total);
             if (R_FAILED(rc) || total > 0) {
-                std::printf("scan %s: 0x%x, %d network(s)\n",
+                Say("scan %s: 0x%x, %d network(s)\n",
                             pass == 1 ? "scene+id" : "scene only", rc, total);
                 consoleUpdate(nullptr);
             }
             if (R_SUCCEEDED(rc) && total > 0) {
-                std::printf("found: id %016llx scene %04x ch %d\n",
+                Say("found: id %016llx scene %04x ch %d\n",
                             static_cast<unsigned long long>(
                                 networks[0].network_id.intent_id.local_communication_id),
                             networks[0].network_id.intent_id.scene_id, networks[0].common.channel);
                 rc = ldnConnect(&security, &user, 0, 0, &networks[0]);
-                std::printf("ldnConnect: 0x%x\n", rc);
+                Say("ldnConnect[ldn:%s]: 0x%x\n", system_service ? "s" : "u", rc);
                 consoleUpdate(nullptr);
                 connected = R_SUCCEEDED(rc);
             }
@@ -262,9 +304,9 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
             LdnScanFilter any{};
             s32 total = 0;
             rc = ldnScan(0, &any, networks, 0x18, &total);
-            std::printf("scan any: 0x%x, %d network(s)\n", rc, total);
+            Say("scan any: 0x%x, %d network(s)\n", rc, total);
             for (s32 i = 0; i < total && i < 4; ++i) {
-                std::printf("  id %016llx scene %04x ch %d nodes %d\n",
+                Say("  id %016llx scene %04x ch %d nodes %d\n",
                             static_cast<unsigned long long>(
                                 networks[i].network_id.intent_id.local_communication_id),
                             networks[i].network_id.intent_id.scene_id, networks[i].common.channel,
@@ -293,14 +335,14 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     LdnIpv4Address address{};
     LdnSubnetMask mask{};
     const Result rc2 = ldnGetIpv4Address(&address, &mask);
-    std::printf("ldnGetNetworkInfo: 0x%x, ldnGetIpv4Address: 0x%x\n", rc, rc2);
+    Say("ldnGetNetworkInfo: 0x%x, ldnGetIpv4Address: 0x%x\n", rc, rc2);
     if (R_FAILED(rc) || info.node_count == 0) {
         ldnExit();
         return false;
     }
     // The first node is the access point, i.e. the Dekopon host.
     host_addr.s_addr = htonl(info.nodes[0].ip_addr.addr);
-    std::printf("Joined. Host %s\n", inet_ntoa(host_addr));
+    Say("Joined. Host %s\n", inet_ntoa(host_addr));
     consoleUpdate(nullptr);
     return true;
 }
