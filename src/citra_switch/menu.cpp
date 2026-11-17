@@ -903,6 +903,7 @@ public:
             // A tap on a dialog counts as the button it stands for.
             const u64 down = padGetButtonsDown(&pad) | ModalTap();
             held = padGetButtons(&pad);
+            stick_right = padGetStickPos(&pad, 1);
             PumpUpdater();
 
             if (const int serial = CoverShare::Serial(); serial != cover_share_serial) {
@@ -1093,6 +1094,10 @@ private:
     // Cover shelf.
     float shelf_pos = 0.0f;   // Eased towards `selected`; the difference is the slide.
     float shelf_flip = 0.0f;  // Eased towards 0 (front) or 1 (back).
+    bool shelf_forward = false; // The selected case is forward: A starts it, B puts it back.
+    float shelf_zoom = 0.0f;    // Eased towards 0 or 1 with the above.
+    float shelf_spin_yaw = 0.0f, shelf_spin_pitch = 0.0f; // Eased towards the right stick.
+    HidAnalogStickState stick_right{};
     bool shelf_back = false;
     HomeLayout home_layout{};
     std::vector<std::shared_ptr<const CoverArt>> frame_covers; // Keeps this frame's art alive.
@@ -1273,6 +1278,26 @@ private:
 
     bool HandleShelf(u64 down, u32 nav, MenuResult& result) {
         const int count = static_cast<int>(filtered.size());
+        if (count == 0) {
+            shelf_forward = false;
+        }
+        if (shelf_forward) {
+            // A case is forward: it can be turned over and turned by hand; A starts the
+            // game, B puts the case back.
+            if (down & HidNpadButton_A) {
+                shelf_forward = false;
+                result = {MenuAction::Launch, games[filtered[selected]].path};
+                return true;
+            }
+            if (down & HidNpadButton_X) {
+                shelf_back = !shelf_back;
+            }
+            if (down & (HidNpadButton_B | HidNpadButton_Minus)) {
+                shelf_forward = false;
+                shelf_back = false;
+            }
+            return false;
+        }
         if (count > 0) {
             const int before = selected;
             if (nav & DirLeft) {
@@ -1291,8 +1316,7 @@ private:
                 shelf_back = false;
             }
             if (down & HidNpadButton_A) {
-                result = {MenuAction::Launch, games[filtered[selected]].path};
-                return true;
+                shelf_forward = true; // Brought forward first; A again starts it.
             }
             if (down & HidNpadButton_X) {
                 shelf_back = !shelf_back;
@@ -1410,7 +1434,16 @@ private:
             }
             switch (pill.action) {
             case 'A':
-                pending_launch = games[filtered[selected]].path;
+                if (shelf_forward) {
+                    shelf_forward = false;
+                    pending_launch = games[filtered[selected]].path;
+                } else {
+                    shelf_forward = true;
+                }
+                break;
+            case 'B':
+                shelf_forward = false;
+                shelf_back = false;
                 break;
             case 'X':
                 shelf_back = !shelf_back;
@@ -1429,6 +1462,20 @@ private:
                 break;
             default:
                 break;
+            }
+            return;
+        }
+        if (shelf_forward) {
+            // The case itself starts the game; anywhere else puts it back.
+            const int centre = g_screen_w / 2;
+            const int half = l.shelf_h * 40 / 100;
+            const bool on_case = count > 0 && ty >= l.shelf_y && ty < l.shelf_y + l.shelf_h &&
+                                 tx >= centre - half && tx <= centre + half;
+            shelf_forward = false;
+            if (on_case) {
+                pending_launch = games[filtered[selected]].path;
+            } else {
+                shelf_back = false;
             }
             return;
         }
@@ -1454,7 +1501,7 @@ private:
                 selected = std::min(count - 1, selected + 1);
                 shelf_back = false;
             } else {
-                pending_launch = games[filtered[selected]].path;
+                shelf_forward = true; // A second tap starts it.
             }
         }
     }
@@ -1472,6 +1519,27 @@ private:
         shelf_flip += (flip_target - shelf_flip) * 0.20f;
         if (std::abs(flip_target - shelf_flip) < 0.004f) {
             shelf_flip = flip_target;
+        }
+        const float zoom_target = shelf_forward && count > 0 ? 1.0f : 0.0f;
+        shelf_zoom += (zoom_target - shelf_zoom) * 0.20f;
+        if (std::abs(zoom_target - shelf_zoom) < 0.004f) {
+            shelf_zoom = zoom_target;
+        }
+        // The right stick turns the selected case like a model in a viewer; let go and
+        // it comes back.
+        const auto axis = [](s32 value) {
+            const float f = static_cast<float>(value) / 32767.0f;
+            return std::abs(f) < 0.14f ? 0.0f : std::clamp(f, -1.0f, 1.0f);
+        };
+        const float yaw_target = -axis(stick_right.x) * 2.7f;
+        const float pitch_target = axis(stick_right.y) * 0.95f;
+        shelf_spin_yaw += (yaw_target - shelf_spin_yaw) * 0.22f;
+        shelf_spin_pitch += (pitch_target - shelf_spin_pitch) * 0.22f;
+        if (std::abs(shelf_spin_yaw) < 0.002f && yaw_target == 0.0f) {
+            shelf_spin_yaw = 0.0f;
+        }
+        if (std::abs(shelf_spin_pitch) < 0.002f && pitch_target == 0.0f) {
+            shelf_spin_pitch = 0.0f;
         }
 
         frame_covers.clear();
@@ -1517,6 +1585,10 @@ private:
         view.position = shelf_pos;
         view.count = count;
         view.flip = shelf_flip;
+        view.zoom = shelf_zoom;
+        view.spin_yaw = shelf_spin_yaw;
+        view.spin_pitch = shelf_spin_pitch;
+        view.forward = shelf_forward;
         view.time = UiTime();
         view.app_name = "Toronja";
 #if defined(__SWITCH2__)

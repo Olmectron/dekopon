@@ -27,6 +27,8 @@ inline std::atomic<u64> flush_total_micros{};  ///< Whole GPU::FlushRegion slow 
 inline std::atomic<u64> flush_wait_micros{};   ///< Waiting for the previous frame's copy.
 inline std::atomic<u64> flush_record_micros{}; ///< Recording / performing the download.
 inline std::atomic<u64> flush_encode_micros{}; ///< Converting and writing to guest memory.
+inline std::atomic<u64> flush_copy_micros{};   ///< Of the above: copying out of driver memory.
+inline std::atomic<u64> flush_bytes{};         ///< Bytes of surface data read back.
 
 /// Serve read-backs the guest repeats every frame one frame late instead of waiting for the
 /// GPU (see RasterizerCache::DownloadSurface). Off by default: it was written while chasing

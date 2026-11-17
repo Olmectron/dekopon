@@ -766,8 +766,8 @@ SettingEntry GyroSensitivityEntry(bool horizontal) {
         100, 10, 500, 10, "%");
 }
 
-constexpr std::array<const char*, 6> kLibraryStyleNames{"Coverflow", "Shelf", "Carousel",
-                                                        "Arc",       "Stack", "Spotlight"};
+constexpr std::array<const char*, 9> kLibraryStyleNames{
+    "Coverflow", "Shelf", "Carousel", "Arc", "Stack", "Spotlight", "Bookshelf", "Pile", "Showroom"};
 constexpr std::array<const char*, 2> kThemeNames{"Dark", "Light"};
 constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
 constexpr std::array<const char*, 2> kCoverQualityNames{"Standard", "High"};

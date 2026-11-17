@@ -607,13 +607,16 @@ void PipelineCache::ReportAsyncStats() {
         const u64 flush_wait = take_ms(VideoCore::CacheStats::flush_wait_micros);
         const u64 flush_record = take_ms(VideoCore::CacheStats::flush_record_micros);
         const u64 flush_encode = take_ms(VideoCore::CacheStats::flush_encode_micros);
+        const u64 flush_copy = take_ms(VideoCore::CacheStats::flush_copy_micros);
+        const u64 flush_kib =
+            VideoCore::CacheStats::flush_bytes.exchange(0, std::memory_order_relaxed) / 1024;
         if (read_requests > 1000 || flush_total > 0) {
             LOG_INFO(Render_Vulkan,
                      "Guest reads of GPU-cached memory: {} ({} answered from the clean range) | "
                      "flushes that reached the rasterizer: {} ms total = wait {} ms + download "
-                     "{} ms + encode {} ms + rest",
+                     "{} ms + encode {} ms (copy {} ms, {} KiB) + rest",
                      read_requests, read_skipped, flush_total, flush_wait, flush_record,
-                     flush_encode);
+                     flush_encode, flush_copy, flush_kib);
         }
         if (downloads.count > 0 || small_writes > 0 || delayed.count > 0) {
             LOG_INFO(Render_Vulkan,

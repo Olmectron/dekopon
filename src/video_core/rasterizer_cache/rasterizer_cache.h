@@ -1197,9 +1197,13 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
         // memory first is far cheaper than that.
         static std::vector<u8> scratch;
         scratch.resize(source.size());
-        std::memcpy(scratch.data(), source.data(), source.size());
+        {
+            CacheStats::ScopedMicros copy_timer{CacheStats::flush_copy_micros};
+            std::memcpy(scratch.data(), source.data(), source.size());
+        }
         source = std::span<u8>{scratch};
 #endif
+        CacheStats::flush_bytes.fetch_add(source.size(), std::memory_order_relaxed);
         EncodeTexture(flush_info, flush_start, flush_end, source, download_dest,
                       runtime.NeedsConversion(surface));
     };

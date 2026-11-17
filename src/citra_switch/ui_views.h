@@ -311,7 +311,18 @@ inline std::vector<std::string> WrapLines(Font& font, std::string_view text, int
 // ---------------------------------------------------------------------------------------------
 // The shelf
 
-enum class ShelfStyle { Coverflow, Shelf, Carousel, Arc, Stack, Spotlight, Count };
+enum class ShelfStyle {
+    Coverflow,
+    Shelf,
+    Carousel,
+    Arc,
+    Stack,
+    Spotlight,
+    Bookshelf,
+    Pile,
+    Showroom,
+    Count,
+};
 
 inline const char* ShelfStyleName(ShelfStyle style) {
     switch (style) {
@@ -327,6 +338,12 @@ inline const char* ShelfStyleName(ShelfStyle style) {
         return "Stack";
     case ShelfStyle::Spotlight:
         return "Spotlight";
+    case ShelfStyle::Bookshelf:
+        return "Bookshelf";
+    case ShelfStyle::Pile:
+        return "Pile";
+    case ShelfStyle::Showroom:
+        return "Showroom";
     default:
         return "";
     }
@@ -419,6 +436,257 @@ inline ShelfPose PoseFor(ShelfStyle style, float d, float cx, float case_h) {
     return p;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Cases in three dimensions: a box with six faces, turned and seen in perspective
+
+/// How thick a case is, as a share of its height.
+constexpr float kCaseDepth = 0.105f;
+
+struct BoxPose {
+    float cx{}, cy{};             // Where the middle of the case is on screen.
+    float h{};                    // Its height on screen when it faces the eye.
+    float yaw{}, roll{}, pitch{}; // Radians, applied in this order.
+    float shade{};
+};
+
+inline BoxPose MixPose(const BoxPose& a, const BoxPose& b, float t) {
+    BoxPose p;
+    p.cx = a.cx + (b.cx - a.cx) * t;
+    p.cy = a.cy + (b.cy - a.cy) * t;
+    p.h = a.h + (b.h - a.h) * t;
+    p.yaw = a.yaw + (b.yaw - a.yaw) * t;
+    p.roll = a.roll + (b.roll - a.roll) * t;
+    p.pitch = a.pitch + (b.pitch - a.pitch) * t;
+    p.shade = a.shade + (b.shade - a.shade) * t;
+    return p;
+}
+
+/// A corner on screen. `w` is how much perspective has shrunk things there; `u`, `v` are
+/// in the picture's own pixels.
+struct BoxVertex {
+    float x{}, y{}, w{1.0f};
+    float u{}, v{};
+};
+
+/// One triangle of a face, with the picture laid on it in true perspective. Without a
+/// picture it is filled with `solid`. With `mirror_floor` at or above zero the pixels are a
+/// reflection: they fade out over `mirror_span` pixels below that line.
+inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxVertex& a,
+                            const BoxVertex& b, const BoxVertex& d, float shade, u32 shade_to,
+                            bool smooth, float mirror_floor, float mirror_span) {
+    const float area = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
+    if (std::abs(area) < 0.5f) {
+        return;
+    }
+    const int x0 = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, d.x}))));
+    const int x1 = std::min(c.Width() - 1, static_cast<int>(std::ceil(std::max({a.x, b.x, d.x}))));
+    const int y0 = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, d.y}))));
+    const int y1 = std::min(c.Height() - 1, static_cast<int>(std::ceil(std::max({a.y, b.y, d.y}))));
+    if (x0 > x1 || y0 > y1) {
+        return;
+    }
+    const float inv_area = 1.0f / area;
+    // Weights of a, b and d at a point, each a plane over the screen.
+    const float wa_dx = (b.y - d.y) * inv_area, wa_dy = (d.x - b.x) * inv_area;
+    const float wb_dx = (d.y - a.y) * inv_area, wb_dy = (a.x - d.x) * inv_area;
+    const u32 keep = static_cast<u32>((1.0f - std::clamp(shade, 0.0f, 1.0f)) * 256.0f);
+    const u32 lose = 256 - keep;
+    const u32 tr = shade_to & 0xFF, tg = (shade_to >> 8) & 0xFF, tb = (shade_to >> 16) & 0xFF;
+    const bool textured = img != nullptr && !img->Empty();
+    u32* const pixels = c.Data();
+    const int stride = c.Width();
+    for (int y = y0; y <= y1; ++y) {
+        const float py = y + 0.5f;
+        u32 fade = 256;
+        if (mirror_floor >= 0.0f) {
+            const float f = 1.0f - (py - mirror_floor) / std::max(mirror_span, 1.0f);
+            if (f <= 0.0f || py < mirror_floor) {
+                continue;
+            }
+            fade = static_cast<u32>(64.0f * f * f);
+        }
+        const float px0 = x0 + 0.5f;
+        float wa = ((b.x - px0) * (d.y - py) - (b.y - py) * (d.x - px0)) * inv_area;
+        float wb = ((d.x - px0) * (a.y - py) - (d.y - py) * (a.x - px0)) * inv_area;
+        (void)wa_dy;
+        (void)wb_dy;
+        u32* row = pixels + static_cast<std::size_t>(y) * stride;
+        for (int x = x0; x <= x1; ++x, wa += wa_dx, wb += wb_dx) {
+            const float wd = 1.0f - wa - wb;
+            if (wa < -0.0005f || wb < -0.0005f || wd < -0.0005f) {
+                continue;
+            }
+            u32 color = solid;
+            if (textured) {
+                const float q = wa * a.w + wb * b.w + wd * d.w;
+                if (q <= 0.0f) {
+                    continue;
+                }
+                const float u = (wa * a.u * a.w + wb * b.u * b.w + wd * d.u * d.w) / q;
+                const float v = (wa * a.v * a.w + wb * b.v * b.w + wd * d.v * d.w) / q;
+                if (smooth) {
+                    color = SampleImage(*img, u, v);
+                } else {
+                    const int ui = std::clamp(static_cast<int>(u + 0.5f), 0, img->w - 1);
+                    const int vi = std::clamp(static_cast<int>(v + 0.5f), 0, img->h - 1);
+                    color = img->px[static_cast<std::size_t>(vi) * img->w + ui];
+                }
+                if ((color >> 24) < 32) {
+                    color = solid; // A see-through pixel of an icon: the case shows through.
+                }
+            }
+            u32 r = color & 0xFF, g = (color >> 8) & 0xFF, bl = (color >> 16) & 0xFF;
+            if (keep < 256) {
+                r = (r * keep + tr * lose) >> 8;
+                g = (g * keep + tg * lose) >> 8;
+                bl = (bl * keep + tb * lose) >> 8;
+            }
+            u32& dst = row[x];
+            if (fade < 256) {
+                const u32 inv = 256 - fade;
+                r = (r * fade + (dst & 0xFF) * inv) >> 8;
+                g = (g * fade + ((dst >> 8) & 0xFF) * inv) >> 8;
+                bl = (bl * fade + ((dst >> 16) & 0xFF) * inv) >> 8;
+            }
+            dst = 0xFF000000u | (bl << 16) | (g << 8) | r;
+        }
+    }
+}
+
+inline void DrawTextBack(Canvas& c, Font& font, const ShelfItem& item, int x, int y, int w, int h);
+
+/// Draws one game as a case: front, back, spine and the plain sides, whichever of them
+/// face the eye. A full wrap supplies the back and the spine; a front-only cover gets a
+/// spine in its own colours and the text back once it is square on. A game with no cover
+/// wears its icon on the front. With `mirror_floor` at or above zero the case is drawn as
+/// its own reflection in a floor at that height.
+inline void DrawCase3D(Canvas& c, Font& font, const ShelfItem& item, const BoxPose& pose,
+                       u32 shade_to, bool smooth, float mirror_floor = -1.0f) {
+    static Image icon_face;
+    const Image* art = item.cover != nullptr && !item.cover->Empty() ? item.cover : nullptr;
+    bool wrap = art != nullptr && item.full_wrap;
+    if (art == nullptr && item.icon != nullptr && !item.icon->empty() && item.icon_size > 0) {
+        icon_face.w = icon_face.h = item.icon_size;
+        icon_face.px = *item.icon;
+        art = &icon_face;
+        wrap = false;
+    }
+    const u32 plastic = g_theme_light ? MakeColor(214, 218, 224) : MakeColor(226, 229, 234);
+    const u32 plastic_dark = MakeColor(150, 155, 164);
+    const u32 card = MakeColor(58, 64, 78); // The face of a case with nothing printed on it.
+
+    const float H = pose.h, W = H * kCaseAspect, D = H * kCaseDepth;
+    const float cyaw = std::cos(pose.yaw), syaw = std::sin(pose.yaw);
+    const float croll = std::cos(pose.roll), sroll = std::sin(pose.roll);
+    const float cpitch = std::cos(pose.pitch), spitch = std::sin(pose.pitch);
+    const float eye = 3.4f * H;
+    struct P3 {
+        float x, y, z;
+    };
+    const auto turn = [&](float x, float y, float z) {
+        const float x1 = x * cyaw + z * syaw;
+        const float z1 = -x * syaw + z * cyaw;
+        const float x2 = x1 * croll - y * sroll;
+        const float y2 = x1 * sroll + y * croll;
+        return P3{x2, y2 * cpitch - z1 * spitch, y2 * spitch + z1 * cpitch};
+    };
+    const auto project = [&](int sx, int sy, int sz) {
+        const P3 p = turn(sx * W / 2, sy * H / 2, sz * D / 2);
+        const float s = eye / std::max(eye + p.z, eye * 0.2f);
+        BoxVertex out;
+        out.x = pose.cx + p.x * s;
+        out.y = pose.cy + p.y * s;
+        out.w = s;
+        return out;
+    };
+
+    struct Face {
+        int corner[4][3]; // TL, TR, BR, BL as seen from outside.
+        int normal[3];
+        int kind; // 0 front, 1 back, 2 spine, 3 right, 4 top, 5 bottom
+    };
+    static constexpr Face faces[] = {
+        {{{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1}}, {0, 0, -1}, 0},
+        {{{1, -1, 1}, {-1, -1, 1}, {-1, 1, 1}, {1, 1, 1}}, {0, 0, 1}, 1},
+        {{{-1, -1, 1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, 1}}, {-1, 0, 0}, 2},
+        {{{1, -1, -1}, {1, -1, 1}, {1, 1, 1}, {1, 1, -1}}, {1, 0, 0}, 3},
+        {{{-1, -1, 1}, {1, -1, 1}, {1, -1, -1}, {-1, -1, -1}}, {0, -1, 0}, 4},
+        {{{-1, 1, -1}, {1, 1, -1}, {1, 1, 1}, {-1, 1, 1}}, {0, 1, 0}, 5},
+    };
+    const float mirror_span = H * 0.42f;
+    for (const Face& face : faces) {
+        BoxVertex v[4];
+        for (int i = 0; i < 4; ++i) {
+            v[i] = project(face.corner[i][0], face.corner[i][1], face.corner[i][2]);
+        }
+        // Clockwise on screen means it faces the eye.
+        const float facing =
+            (v[1].x - v[0].x) * (v[2].y - v[0].y) - (v[1].y - v[0].y) * (v[2].x - v[0].x);
+        if (facing <= 0.5f) {
+            continue;
+        }
+        const P3 n = turn(static_cast<float>(face.normal[0]), static_cast<float>(face.normal[1]),
+                          static_cast<float>(face.normal[2]));
+        // Faces turned away from the eye take less light.
+        const float light = 0.62f + 0.38f * std::clamp(-n.z, 0.0f, 1.0f);
+        const float shade = std::min(1.0f, pose.shade + (1.0f - light) * 0.75f);
+
+        const Image* img = nullptr;
+        u32 solid = plastic;
+        float u0 = 0.0f, u1 = 1.0f;
+        switch (face.kind) {
+        case 0:
+            img = art;
+            solid = card;
+            u0 = wrap ? 1.0f - kWrapFace : 0.0f;
+            break;
+        case 1:
+            img = wrap ? art : nullptr;
+            solid = g_theme_light ? MakeColor(236, 238, 242) : MakeColor(44, 48, 58);
+            u1 = wrap ? kWrapFace : 1.0f;
+            break;
+        case 2:
+            img = art;
+            solid = card;
+            // The spine of a wrap; otherwise a strip off the cover's edge, so the spine
+            // carries the game's colours.
+            u0 = wrap ? kWrapFace : 0.0f;
+            u1 = wrap ? 1.0f - kWrapFace : 0.04f;
+            break;
+        case 3:
+            solid = plastic;
+            break;
+        default:
+            solid = face.kind == 4 ? plastic : plastic_dark;
+            break;
+        }
+        if (img != nullptr) {
+            const float iw = static_cast<float>(img->w - 1), ih = static_cast<float>(img->h - 1);
+            v[0].u = v[3].u = u0 * iw;
+            v[1].u = v[2].u = u1 * iw;
+            v[0].v = v[1].v = 0.0f;
+            v[2].v = v[3].v = ih;
+        }
+        if (mirror_floor >= 0.0f) {
+            for (BoxVertex& vertex : v) {
+                vertex.y = 2.0f * mirror_floor - vertex.y;
+            }
+        }
+        FillBoxTriangle(c, img, solid, v[0], v[1], v[2], shade, shade_to, smooth, mirror_floor,
+                        mirror_span);
+        FillBoxTriangle(c, img, solid, v[0], v[2], v[3], shade, shade_to, smooth, mirror_floor,
+                        mirror_span);
+
+        // A back with nothing printed on it says what is known about the game, once it is
+        // square on and large enough to read.
+        if (face.kind == 1 && !wrap && mirror_floor < 0.0f && std::abs(v[1].y - v[0].y) < 2.5f &&
+            std::abs(v[3].x - v[0].x) < 2.5f && v[1].x - v[0].x > 150.0f) {
+            DrawTextBack(c, font, item, static_cast<int>(v[0].x), static_cast<int>(v[0].y),
+                         static_cast<int>(v[1].x - v[0].x), static_cast<int>(v[3].y - v[0].y));
+        }
+    }
+}
+
 /// The back of a case that has no back artwork: what is known about the game, as text.
 inline void DrawTextBack(Canvas& c, Font& font, const ShelfItem& item, int x, int y, int w, int h) {
     c.FillRoundRect(x, y, w, h, 10, kColSurface);
@@ -453,6 +721,9 @@ struct ShelfView {
     int count{};
     float flip{}; // 0 = front, 1 = back, in between while turning.
     float time{}; // Seconds; drives the gentle bobbing of the games that are not selected.
+    float zoom{};       // 0..1: the selected case brought forward, before it is started.
+    float spin_yaw{};   // The selected case turned by hand (the right stick), radians.
+    float spin_pitch{};
 };
 
 inline float ShelfCaseHeight(const ShelfView& v) {
@@ -464,11 +735,189 @@ inline float ShelfFloorY(const ShelfView& v) {
     return v.y + v.h * 0.47f + ShelfCaseHeight(v) / 2;
 }
 
+/// A number between -1 and 1 that is always the same for the same game: the small
+/// irregularities of things stacked by hand.
+inline float ShelfJitter(int index, int salt) {
+    u32 h = static_cast<u32>(index) * 2654435761u + static_cast<u32>(salt) * 40503u;
+    h ^= h >> 15;
+    h *= 2246822519u;
+    h ^= h >> 13;
+    return static_cast<float>(h & 0xFFFF) / 32767.5f - 1.0f;
+}
+
+/// Where the selected case goes when it is brought forward (`zoom` 0..1) and turned by hand.
+inline BoxPose ForwardPose(const ShelfView& v, BoxPose pose) {
+    if (v.zoom > 0.0f) {
+        const float t = v.zoom * v.zoom * (3.0f - 2.0f * v.zoom);
+        const float big = std::min(v.h * 0.80f, pose.h * 1.42f);
+        pose.cx += (v.x + v.w / 2.0f - pose.cx) * t;
+        pose.cy += (v.y + v.h * 0.50f - pose.cy) * t;
+        pose.h += (big - pose.h) * t;
+        pose.shade *= 1.0f - t;
+        pose.roll *= 1.0f - t;
+        // Square on once it is forward, whatever the shelf had it doing.
+        pose.yaw *= 1.0f - t;
+        pose.pitch *= 1.0f - t;
+    }
+    pose.yaw += -3.14159265f * v.flip + v.spin_yaw;
+    pose.pitch += v.spin_pitch;
+    return pose;
+}
+
+/// Darkens the shelf behind a case that has been brought forward.
+inline void DimShelf(Canvas& c, const ShelfView& v, u32 towards) {
+    if (v.zoom <= 0.01f) {
+        return;
+    }
+    const u32 lose = static_cast<u32>(std::clamp(v.zoom, 0.0f, 1.0f) * 150.0f);
+    const u32 keep = 256 - lose;
+    const u32 tr = (towards & 0xFF) * lose, tg = ((towards >> 8) & 0xFF) * lose,
+              tb = ((towards >> 16) & 0xFF) * lose;
+    u32* const pixels = c.Data();
+    const int y1 = std::min(c.Height(), v.y + v.h + 40);
+    for (int y = std::max(0, v.y); y < y1; ++y) {
+        u32* row = pixels + static_cast<std::size_t>(y) * c.Width();
+        for (int x = 0; x < c.Width(); ++x) {
+            const u32 p = row[x];
+            const u32 r = ((p & 0xFF) * keep + tr) >> 8;
+            const u32 g = (((p >> 8) & 0xFF) * keep + tg) >> 8;
+            const u32 b = (((p >> 16) & 0xFF) * keep + tb) >> 8;
+            row[x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+        }
+    }
+}
+
+/// The styles made of real cases: a bookshelf of spines, a pile the selected game is drawn
+/// out of, and a showroom row.
+inline void DrawShelfCases(Canvas& c, Font& font, const ShelfView& v,
+                           const std::function<ShelfItem(int)>& get) {
+    const float case_h = ShelfCaseHeight(v);
+    const float case_w = case_h * kCaseAspect;
+    const float cx = v.x + v.w / 2.0f;
+    const float floor = ShelfFloorY(v);
+    const int centre = static_cast<int>(std::lround(v.position));
+    const u32 shade_to = g_theme_light ? kColShelfHorizon : MakeColor(0, 0, 0);
+    const float wobble_on = g_shelf_floating ? 1.0f : 0.0f;
+    constexpr float half_pi = 1.5707963f;
+
+    const auto pose_for = [&](int index) {
+        const float d = index - v.position;
+        const float ad = std::abs(d);
+        const float sign = d < 0 ? -1.0f : 1.0f;
+        const float t = std::min(ad, 1.0f);
+        const float ease = t * t * (3.0f - 2.0f * t);
+        const float beyond = std::max(0.0f, ad - 1.0f);
+        const float sway = wobble_on * std::sin(v.time * 1.2f + index * 2.1f);
+        BoxPose p;
+        switch (v.style) {
+        case ShelfStyle::Bookshelf: {
+            // Spines side by side, each turned just enough to show a sliver of its front;
+            // the selected one is pulled out and faces the room.
+            p.h = case_h * (1.0f - 0.10f * ease);
+            const float thick = p.h * kCaseDepth;
+            p.cx = cx + sign * (ease * (case_w * 0.5f + 22.0f + thick * 0.5f) +
+                                beyond * (thick + 5.0f));
+            p.cy = floor - p.h / 2;
+            p.yaw = -ease * (half_pi - 0.16f) + 0.012f * sway * t;
+            p.shade = std::min(0.45f, 0.05f * t + 0.025f * beyond);
+            break;
+        }
+        case ShelfStyle::Pile: {
+            // Lying flat one on another, spines to the room. The selected game is drawn
+            // out of the pile and stood up beside it.
+            const float len = case_h * 0.80f;
+            const float thick = len * kCaseDepth;
+            BoxPose lying;
+            lying.h = len;
+            lying.cx = v.x + v.w * 0.24f + ShelfJitter(index, 1) * 12.0f;
+            lying.cy = floor - thick / 2 - (d + 4.0f) * (thick + 1.5f);
+            lying.yaw = -half_pi + ShelfJitter(index, 2) * 0.05f;
+            lying.roll = -half_pi;
+            lying.pitch = 0.17f;
+            lying.shade = std::min(0.40f, 0.04f + 0.03f * ad);
+            BoxPose standing;
+            standing.h = case_h;
+            standing.cx = v.x + v.w * 0.62f;
+            standing.cy = floor - case_h / 2;
+            standing.yaw = -0.40f + 0.03f * sway;
+            standing.pitch = 0.05f;
+            p = MixPose(lying, standing, 1.0f - ease);
+            break;
+        }
+        default: { // Showroom: a row of cases, each turned towards the one in the middle.
+            p.h = case_h * (1.0f - 0.20f * ease);
+            p.cx = cx + sign * case_w * (0.98f * ease + 0.80f * beyond);
+            p.cy = floor - p.h / 2 - wobble_on * t * case_h * 0.012f * (1.0f + sway);
+            p.yaw = sign * 0.66f * ease + 0.05f * sway * t;
+            p.pitch = 0.06f * t;
+            p.shade = std::min(0.50f, 0.07f * t + 0.10f * beyond);
+            break;
+        }
+        }
+        return p;
+    };
+
+    const bool pile = v.style == ShelfStyle::Pile;
+    const int reach = v.style == ShelfStyle::Bookshelf ? 18 : pile ? 9 : 3;
+    const auto draw = [&](int index, bool mirror) {
+        if (index < 0 || index >= v.count) {
+            return;
+        }
+        const bool selected = index == centre;
+        BoxPose p = pose_for(index);
+        if (pile && !selected && index - v.position + 4.0f < -0.4f) {
+            return; // Under the floor: the pile goes on, out of sight.
+        }
+        if (selected) {
+            p = ForwardPose(v, p);
+        }
+        if (p.cx < v.x - p.h || p.cx > v.x + v.w + p.h) {
+            return;
+        }
+        const ShelfItem item = get(index);
+        if (mirror) {
+            DrawCase3D(c, font, item, p, shade_to, false, floor);
+        } else {
+            DrawCase3D(c, font, item, p, shade_to, selected);
+        }
+    };
+
+    if (pile) {
+        // Bottom to top, so each case covers the one under it.
+        for (int k = -reach; k <= reach; ++k) {
+            if (centre + k != centre) {
+                draw(centre + k, false);
+            }
+        }
+    } else {
+        if (g_shelf_reflections) {
+            for (int k = reach; k >= 1; --k) {
+                draw(centre - k, true);
+                draw(centre + k, true);
+            }
+        }
+        for (int k = reach; k >= 1; --k) {
+            draw(centre - k, false);
+            draw(centre + k, false);
+        }
+    }
+    DimShelf(c, v, shade_to);
+    if (g_shelf_reflections && v.zoom < 0.5f) {
+        draw(centre, true);
+    }
+    draw(centre, false);
+}
+
 /// Draws the shelf. `get` supplies each game on demand, so nothing is built for games that are
 /// off screen.
 inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
                       const std::function<ShelfItem(int)>& get) {
     if (v.count <= 0) {
+        return;
+    }
+    if (v.style == ShelfStyle::Bookshelf || v.style == ShelfStyle::Pile ||
+        v.style == ShelfStyle::Showroom) {
+        DrawShelfCases(c, font, v, get);
         return;
     }
     const float case_h = ShelfCaseHeight(v);
@@ -503,9 +952,33 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
         const bool has_art = item.cover != nullptr && !item.cover->Empty();
         const bool has_icon = item.icon != nullptr && !item.icon->empty() && item.icon_size > 0;
 
+        if (selected && g_shelf_cases && has_art) {
+            // The selected game is a real case: it can be turned over, turned by hand and
+            // brought forward. Its place and lean come from the flat pose it stands in for.
+            BoxPose box;
+            box.h = p.h_near;
+            box.cx = p.cx;
+            box.cy = floor - gap - p.h_near / 2;
+            box.shade = p.shade;
+            const float lean = v.style == ShelfStyle::Coverflow ? 1.10f
+                               : v.style == ShelfStyle::Shelf   ? 0.42f
+                                                                : 0.0f;
+            box.yaw = -d * lean;
+            const BoxPose forward = ForwardPose(v, box);
+            if (g_shelf_reflections && v.zoom < 0.5f) {
+                DrawCase3D(c, font, item, forward, shade_to, false, floor);
+            }
+            DrawCase3D(c, font, item, forward, shade_to, true);
+            return;
+        }
+
         if (!has_art) {
             // No cover: the game's icon on its own, standing on the floor like the cases do.
-            const float side = p.h_near * 0.62f;
+            // Brought forward, it grows and rises to the middle like a case does.
+            const float forward = selected ? v.zoom * v.zoom * (3.0f - 2.0f * v.zoom) : 0.0f;
+            const float side = p.h_near * 0.62f * (1.0f + 0.55f * forward);
+            const float rise =
+                forward * std::max(0.0f, floor - gap - side / 2 - (v.y + v.h * 0.50f));
             if (show_back) {
                 const float w = case_h * kCaseAspect * squash;
                 DrawTextBack(c, font, item, static_cast<int>(p.cx - w / 2),
@@ -517,11 +990,13 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
             q.x0 = p.cx - side * squash / 2;
             q.x1 = p.cx + side * squash / 2;
             q.h0 = q.h1 = side;
-            q.top0 = q.top1 = floor - gap - side;
+            q.top0 = q.top1 = floor - gap - side - rise;
             if (has_icon) {
                 icon_image.w = icon_image.h = item.icon_size;
                 icon_image.px = *item.icon;
-                BlitQuad(c, icon_image, q, 0.0f, 1.0f, p.shade, shade_to, true, false, gap);
+                if (forward < 0.5f) {
+                    BlitQuad(c, icon_image, q, 0.0f, 1.0f, p.shade, shade_to, true, false, gap);
+                }
                 BlitQuad(c, icon_image, q, 0.0f, 1.0f, p.shade, shade_to, false, selected);
             } else {
                 // Not even an icon: a soft disc with the first letter of the title.
@@ -547,6 +1022,12 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
         const float h_right = left_side ? p.h_near : p.h_far;
         q.h0 = p.h_near + (h_left - p.h_near) * away;
         q.h1 = p.h_near + (h_right - p.h_near) * away;
+        if (g_shelf_floating && g_shelf_cases && !selected) {
+            // Hovering turns them a touch to and fro, enough to catch a side.
+            const float lean = 0.022f * away * std::sin(v.time * 1.25f + index * 2.1f);
+            q.h0 *= 1.0f + lean;
+            q.h1 *= 1.0f - lean;
+        }
         q.top0 = floor - gap - q.h0;
         q.top1 = floor - gap - q.h1;
 
@@ -615,6 +1096,7 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
             draw_one(centre + k);
         }
     }
+    DimShelf(c, v, shade_to);
     if (centre >= 0 && centre < v.count) {
         draw_one(centre);
     }
@@ -824,6 +1306,10 @@ struct HomeView {
     bool show_arrows{true};     // The two arrows beside the title.
     bool show_title{true};      // The selected game's name and publisher.
     int bar_style{};            // Button hints: 0 buttons, 1 plain text, 2 hidden.
+    float zoom{};               // The selected case brought forward (0..1).
+    float spin_yaw{};           // ...and turned by hand.
+    float spin_pitch{};
+    bool forward{};             // A case is forward: A starts it, B puts it back.
 };
 
 /// One pill of the bar, with where it ended up (for touch).
@@ -874,6 +1360,9 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     shelf.count = v.count;
     shelf.flip = v.flip;
     shelf.time = v.time;
+    shelf.zoom = v.zoom;
+    shelf.spin_yaw = v.spin_yaw;
+    shelf.spin_pitch = v.spin_pitch;
 
     // Backdrop: a wall that brightens towards the horizon, then a floor that takes the
     // reflections and falls away into the bottom of the screen.
@@ -906,7 +1395,10 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     if (!v.show_arrows) {
         l.prev_x = l.next_x = -10000; // Nothing there to touch either.
     }
-    if (v.count > 1 && v.show_arrows) {
+    if (v.forward) {
+        l.prev_x = l.next_x = -10000;
+    }
+    if (v.count > 1 && v.show_arrows && !v.forward) {
         for (const int dir : {-1, 1}) {
             const int ax = dir < 0 ? l.prev_x : l.next_x;
             FillDisc(c, static_cast<float>(ax), static_cast<float>(l.arrows_y), l.arrow_radius + 1.5f,
@@ -932,8 +1424,10 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     const Pill full[] = {{"A", "Play", 'A'},     {"X", "Flip", 'X'},  {"Y", "Search", 'Y'},
                          {"L R", "Style", 'S'}, {"+", "Details", 'D'}};
     const Pill narrow[] = {{"A", "Play", 'A'}, {"X", "Flip", 'X'}, {"Y", "Search", 'Y'}};
-    const std::span<const Pill> pills = v.compact ? std::span<const Pill>{narrow}
-                                                  : std::span<const Pill>{full};
+    const Pill brought[] = {{"A", "Start", 'A'}, {"X", "Flip", 'X'}, {"B", "Back", 'B'}};
+    const std::span<const Pill> pills = v.forward   ? std::span<const Pill>{brought}
+                                        : v.compact ? std::span<const Pill>{narrow}
+                                                    : std::span<const Pill>{full};
     if (v.count > 0 && v.bar_style == 1) {
         // Plain text: the button in the bright colour, what it does beside it.
         constexpr int size = 17, inner = 8, between = 30;

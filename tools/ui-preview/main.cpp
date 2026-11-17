@@ -153,6 +153,7 @@ int main(int argc, char** argv) {
     };
 
     Canvas c;
+    float pv_zoom = 0.0f, pv_yaw = 0.0f, pv_pitch = 0.0f;
     const auto home = [&](const std::string& name, ShelfStyle style, float position, float flip,
                           int w, int h) {
         c.Resize(w, h);
@@ -164,6 +165,10 @@ int main(int argc, char** argv) {
         v.position = position;
         v.count = static_cast<int>(games.size());
         v.flip = flip;
+        v.zoom = pv_zoom;
+        v.spin_yaw = pv_yaw;
+        v.spin_pitch = pv_pitch;
+        v.forward = pv_zoom > 0.5f;
         v.time = 1.3f;
         v.app_name = "Toronja";
         v.app_tag = "for Switch 2";
@@ -236,6 +241,21 @@ int main(int argc, char** argv) {
         home(tag + "-08-sliding", ShelfStyle::Shelf, 2.45f, 0.0f, 1280, 720);
         home(tag + "-09-flip-wrap", ShelfStyle::Shelf, 0.0f, 1.0f, 1280, 720);
         home(tag + "-10-flip-text", ShelfStyle::Shelf, 3.0f, 1.0f, 1280, 720);
+        home(tag + "-12-bookshelf", ShelfStyle::Bookshelf, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-13-bookshelf-sliding", ShelfStyle::Bookshelf, 4.5f, 0.0f, 1280, 720);
+        home(tag + "-14-pile", ShelfStyle::Pile, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-15-pile-sliding", ShelfStyle::Pile, 4.4f, 0.0f, 1280, 720);
+        home(tag + "-16-showroom", ShelfStyle::Showroom, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-17-flip-halfway", ShelfStyle::Coverflow, 0.0f, 0.35f, 1280, 720);
+        pv_yaw = -0.9f;
+        pv_pitch = 0.35f;
+        home(tag + "-18-turned-by-hand", ShelfStyle::Shelf, 2.0f, 0.0f, 1280, 720);
+        pv_zoom = 1.0f;
+        home(tag + "-19-forward-turned", ShelfStyle::Coverflow, 2.0f, 0.0f, 1280, 720);
+        pv_yaw = pv_pitch = 0.0f;
+        home(tag + "-20-forward", ShelfStyle::Coverflow, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-21-forward-back", ShelfStyle::Coverflow, 4.0f, 1.0f, 1280, 720);
+        pv_zoom = 0.0f;
         options(tag + "-11");
     }
     return 0;
