@@ -25,7 +25,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build the toolchain image
-        run: docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .
+        run: |
+          # pkg.devkitpro.org answers 403 now and then: try again before giving up.
+          for attempt in 1 2 3 4 5 6; do
+            docker build -t dekopon-switch2 -f docker/switch2/Dockerfile . && exit 0
+            echo "toolchain image build failed (attempt $attempt), retrying in 60 s"
+            sleep 60
+          done
+          exit 1
 
       - name: Build for Switch 1
         run: >

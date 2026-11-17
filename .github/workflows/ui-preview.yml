@@ -1,0 +1,56 @@
+name: ui-preview
+
+# Renders the launcher's views to pictures on a PC (tools/ui-preview), so a change to the UI
+# can be looked at without a console.
+on:
+  push:
+    branches: [switch2-gameshare]
+    paths:
+      - 'src/citra_switch/ui_canvas.h'
+      - 'src/citra_switch/ui_views.h'
+      - 'tools/ui-preview/**'
+      - '.github/workflows/ui-preview.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ui-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FreeType, a font and an image converter
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libfreetype-dev fonts-dejavu-core pkg-config python3-pil
+
+      - name: Build
+        run: >
+          g++ -std=c++20 -O2 -Wall -I src $(pkg-config --cflags freetype2)
+          tools/ui-preview/main.cpp $(pkg-config --libs freetype2) -o ui-preview
+
+      - name: Render
+        run: |
+          mkdir -p preview
+          ./ui-preview /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf preview
+          python3 -c "
+          import glob
+          from PIL import Image
+          for path in sorted(glob.glob('preview/*.ppm')):
+              Image.open(path).save(path[:-4] + '.png')
+          "
+          rm preview/*.ppm
+          ls -la preview
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: preview/*.png

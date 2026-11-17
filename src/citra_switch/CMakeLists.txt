@@ -52,6 +52,8 @@ add_executable(citra_switch
     settings_menu.h
     settings_registry.cpp
     settings_registry.h
+    ui_canvas.h
+    ui_views.h
     updater.cpp
     updater.h
     usb_storage.cpp

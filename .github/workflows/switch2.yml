@@ -9,7 +9,8 @@ on:
   push:
     branches: [master, switch2-ounce-devkit, switch2-async-shaders, switch2-gameshare]
     # Docs-only pushes do not build (and so do not cancel a build in progress).
-    paths-ignore: ['**.md', 'tools/gameshare/**', '.github/workflows/gameshare-receiver.yml']
+    paths-ignore: ['**.md', 'tools/gameshare/**', 'tools/ui-preview/**', 'tools/branding/**',
+                   '.github/workflows/gameshare-receiver.yml', '.github/workflows/ui-preview.yml']
   # Manual run. Give it a release tag to also publish the build as a GitHub
   # release: that is what the in-app updater (Check for Updates) installs.
   workflow_dispatch:
@@ -45,7 +46,14 @@ jobs:
           submodules: recursive
 
       - name: Build the Switch 2 toolchain image
-        run: docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .
+        run: |
+          # pkg.devkitpro.org answers 403 now and then: try again before giving up.
+          for attempt in 1 2 3 4 5 6; do
+            docker build -t dekopon-switch2 -f docker/switch2/Dockerfile . && exit 0
+            echo "toolchain image build failed (attempt $attempt), retrying in 60 s"
+            sleep 60
+          done
+          exit 1
 
       # Compiler cache (docker/switch2/build.sh points ccache at .ccache in the
       # workspace). Compiling is ~20 of the ~23 minutes of a cold build.
