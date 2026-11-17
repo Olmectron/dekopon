@@ -36,6 +36,7 @@ struct OverlayMenuState {
     std::string description; // What the selected row is for; shown above the hint.
     std::vector<OverlayMenuSection> sections; // Empty: no side list.
     int active_section{-1};
+    bool light{}; // Light theme.
 };
 
 // Clockwise rotation the renderer applies to everything it draws over the game.
@@ -47,6 +48,17 @@ void SetOverlayMenuState(const OverlayMenuState& state);
 
 // Snapshots the current overlay description (called from the renderer/emulation thread).
 OverlayMenuState GetOverlayMenuState();
+
+// Where the parts of the menu ended up on screen, as fractions of its width and height,
+// so a touch can be matched to them. Published by the renderer each time it lays the
+// menu out.
+struct OverlayHit {
+    float x0{}, y0{}, x1{}, y1{};
+    int kind{};  // 0 a row, 1 a page in the side list, 2 the panel itself
+    int index{}; // Row on screen / page in the list.
+};
+void SetOverlayHitMap(std::vector<OverlayHit> hits);
+std::vector<OverlayHit> GetOverlayHitMap();
 
 // Skip the copy above when nothing is shown.
 bool IsOverlayMenuVisible();

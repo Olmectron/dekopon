@@ -20,6 +20,7 @@
 #include "citra_switch/game_share.h"
 #include "citra_switch/amiibo_session.h"
 #include "citra_switch/settings_registry.h"
+#include "citra_switch/ui_sound.h"
 #include "video_core/rasterizer_cache/cache_stats.h"
 #include "citra_switch/updater.h"
 #include "common/settings.h"
@@ -763,8 +764,9 @@ SettingEntry GyroSensitivityEntry(bool horizontal) {
         100, 10, 500, 10, "%");
 }
 
-constexpr std::array<const char*, 4> kLibraryStyleNames{"Coverflow", "Carousel", "Stack",
-                                                        "Grid"};
+constexpr std::array<const char*, 6> kLibraryStyleNames{"Coverflow", "Shelf", "Carousel",
+                                                        "Arc",       "Stack", "Spotlight"};
+constexpr std::array<const char*, 2> kThemeNames{"Dark", "Light"};
 constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
 constexpr std::array<const char*, 3> kAmiiboRequestNames{"Scan a real Amiibo", "Choose a file",
                                                          "Do nothing"};
@@ -801,13 +803,23 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
         [](int value) { SetAmiiboRequestMode(value); }, 0, kAmiiboRequestNames);
 
     t.Page(Category::General);
+    t.Group("Appearance");
+    t.Ini("Switch");
+    t << LocalChoice(
+        "ui_theme",
+        {"Theme", "Dark or light, for the launcher and the in-game menu."},
+        [] { return GetUiTheme(); }, [](int value) { SetUiTheme(value); }, 0, kThemeNames);
+    t << LocalBool("ui_sounds",
+                   {"Menu Sounds", "Short ticks when moving through the launcher."},
+                   UiSound::IsEnabled, UiSound::SetEnabled, true);
+
     t.Group("Library");
     t.Ini("Switch");
     t << LocalChoice(
         "library_style",
         {"Library Style",
-         "How the games are laid out: three kinds of cover shelf, or the plain grid. "
-         "L and R switch between them in the library."},
+         "How the games stand on the shelf. L and R switch between the styles in the "
+         "library."},
         [] { return GetLibraryStyle(); }, [](int value) { SetLibraryStyle(value); }, 0,
         kLibraryStyleNames);
     t << LocalChoice(

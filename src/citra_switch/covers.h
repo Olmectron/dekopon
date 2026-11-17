@@ -47,6 +47,10 @@ void ResetCoverCache();
 int GetLibraryStyle();
 void SetLibraryStyle(int style);
 
+/// The look of the launcher and the in-game menu: 0 dark, 1 light.
+int GetUiTheme();
+void SetUiTheme(int theme);
+
 enum class CoverSource { Off, GameTdb, Count };
 
 int GetCoverSource();

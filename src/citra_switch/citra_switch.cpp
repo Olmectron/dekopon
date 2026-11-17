@@ -472,6 +472,19 @@ void RunGame(PadState& pad, const std::string& rom) {
                                                                 : state);
 
             if (menu_open && !chord_edge) {
+                // Handheld: the menu answers to a finger as well as to the buttons.
+                static bool menu_touching = false;
+                HidTouchScreenState menu_touch{};
+                const bool menu_finger =
+                    hidGetTouchScreenStates(&menu_touch, 1) != 0 && menu_touch.count > 0;
+                if (menu_finger && !menu_touching &&
+                    SwitchFrontend::QuickMenuTouch(menu_touch.touches[0].x / 1280.0f,
+                                                   menu_touch.touches[0].y / 720.0f) ==
+                        SwitchFrontend::QuickMenuAction::ExitGame) {
+                    break;
+                }
+                menu_touching = menu_finger;
+
                 const SwitchFrontend::MenuDirections dpad = SwitchFrontend::RotateMenuDirections({
                     .up = (pressed & HidNpadButton_Up) != 0,
                     .down = (pressed & HidNpadButton_Down) != 0,

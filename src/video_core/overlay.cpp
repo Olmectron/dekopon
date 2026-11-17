@@ -2,6 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vector>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -76,6 +77,21 @@ std::string GetOverlayToast() {
         return {};
     }
     return s_toast;
+}
+
+namespace {
+std::mutex g_hit_mutex;
+std::vector<OverlayHit> g_hits;
+} // namespace
+
+void SetOverlayHitMap(std::vector<OverlayHit> hits) {
+    std::scoped_lock lock{g_hit_mutex};
+    g_hits = std::move(hits);
+}
+
+std::vector<OverlayHit> GetOverlayHitMap() {
+    std::scoped_lock lock{g_hit_mutex};
+    return g_hits;
 }
 
 } // namespace VideoCore

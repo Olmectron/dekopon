@@ -44,6 +44,9 @@ void CloseQuickMenu();
 void OpenQuickMenuOnAmiibo();
 void ToggleQuickMenu();
 
+// A tap at (x, y), each 0..1 across the screen.
+QuickMenuAction QuickMenuTouch(float x, float y);
+
 // Applies one navigation frame, updates the live settings, and repaints the overlay.
 QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav);
 

@@ -2038,18 +2038,33 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         }
     };
 
-    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.55f};
-    // The launcher's palette: dark surfaces, one warm accent.
-    constexpr std::array<float, 4> c_panel = {0.141f, 0.149f, 0.169f, 0.97f};
-    constexpr std::array<float, 4> c_side = {0.106f, 0.110f, 0.125f, 0.97f};
-    constexpr std::array<float, 4> c_accent = {0.227f, 0.235f, 0.259f, 1.0f};
-    constexpr std::array<float, 4> c_highlight = {0.980f, 0.667f, 0.286f, 1.0f};
-    constexpr std::array<float, 4> c_title = {0.945f, 0.949f, 0.957f, 1.0f};
-    constexpr std::array<float, 4> c_row = {0.839f, 0.851f, 0.871f, 1.0f};
-    constexpr std::array<float, 4> c_header = {0.980f, 0.667f, 0.286f, 1.0f};
-    constexpr std::array<float, 4> c_sel = {0.090f, 0.094f, 0.106f, 1.0f};
-    constexpr std::array<float, 4> c_footer = {0.608f, 0.627f, 0.651f, 1.0f};
-    constexpr std::array<float, 4> c_warn = {0.910f, 0.604f, 0.290f, 1.0f};
+    // The launcher's palette, dark or light.
+    using Rgba = std::array<float, 4>;
+    const bool light = state.light;
+    const Rgba c_dim = {0.0f, 0.0f, 0.0f, light ? 0.35f : 0.55f};
+    const Rgba c_panel = light ? Rgba{0.922f, 0.922f, 0.922f, 0.98f}
+                               : Rgba{0.176f, 0.176f, 0.176f, 0.97f};
+    const Rgba c_side = light ? Rgba{0.957f, 0.957f, 0.957f, 0.98f}
+                              : Rgba{0.212f, 0.212f, 0.212f, 0.97f};
+    const Rgba c_accent = light ? Rgba{0.804f, 0.804f, 0.804f, 1.0f}
+                                : Rgba{0.306f, 0.306f, 0.306f, 1.0f};
+    const Rgba c_highlight = light ? Rgba{0.184f, 0.310f, 0.933f, 1.0f}
+                                   : Rgba{0.000f, 0.878f, 0.753f, 1.0f};
+    const Rgba c_title = light ? Rgba{0.176f, 0.176f, 0.176f, 1.0f}
+                               : Rgba{1.0f, 1.0f, 1.0f, 1.0f};
+    const Rgba c_row = light ? Rgba{0.176f, 0.176f, 0.176f, 1.0f}
+                             : Rgba{0.920f, 0.920f, 0.920f, 1.0f};
+    const Rgba c_header = c_highlight;
+    const Rgba c_sel = light ? Rgba{1.0f, 1.0f, 1.0f, 1.0f}
+                             : Rgba{0.102f, 0.102f, 0.102f, 1.0f};
+    const Rgba c_footer = light ? Rgba{0.424f, 0.424f, 0.424f, 1.0f}
+                                : Rgba{0.659f, 0.659f, 0.659f, 1.0f};
+    const Rgba c_warn = light ? Rgba{0.478f, 0.322f, 0.0f, 1.0f}
+                              : Rgba{1.0f, 0.843f, 0.431f, 1.0f};
+
+    // For touch: where each part is, as fractions of the menu's canvas.
+    std::vector<VideoCore::OverlayHit> hits;
+    hits.push_back({panel_x0 / w, panel_y0 / h, panel_x1 / w, panel_y1 / h, 2, 0});
 
     // Dim the running game.
     {
@@ -2079,6 +2094,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
                 pen += side_heading_h;
             }
             tops[static_cast<std::size_t>(i)] = pen;
+            hits.push_back({panel_x0 / w, pen / h, content_x0 / w, (pen + side_row_h) / h, 1, i});
             pen += side_row_h;
         }
         const float text_x = panel_x0 + em * 1.3f;
@@ -2231,6 +2247,14 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         builder.AddText(content_x0 + pad, footer_y, state.hint, small_scale * 1.05f);
         emit(c_footer, s);
     }
+
+    for (int i = 0; i < n; ++i) {
+        if (!state.items[i].is_header) {
+            const float top = rows_top + static_cast<float>(i) * row_h;
+            hits.push_back({content_x0 / w, top / h, panel_x1 / w, (top + row_h) / h, 0, i});
+        }
+    }
+    VideoCore::SetOverlayHitMap(std::move(hits));
 
     if (batches.empty()) {
         return {};

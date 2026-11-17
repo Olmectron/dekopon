@@ -339,6 +339,17 @@ void SetLibraryStyle(int style) {
     s_library_style.store(std::clamp(style, 0, static_cast<int>(Ui::ShelfStyle::Count) - 1));
 }
 
+std::atomic<int> s_ui_theme{0};
+
+int GetUiTheme() {
+    return s_ui_theme.load();
+}
+
+void SetUiTheme(int theme) {
+    s_ui_theme.store(theme != 0 ? 1 : 0);
+    Ui::ApplyTheme(theme != 0);
+}
+
 int GetCoverSource() {
     return s_source.load();
 }

@@ -51,6 +51,7 @@ struct Settings {
     bool fps_there = false;
     int tab_opacity = 2; // 0 hidden, 1 faint, 2 visible
     int tab_corner = 1;  // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+    bool light = false;  // Light theme.
 
     void Load() {
         std::FILE* file = std::fopen(SETTINGS_FILE, "r");
@@ -75,6 +76,8 @@ struct Settings {
                 tab_opacity = std::clamp(value, 0, 2);
             } else if (name == "tab_corner") {
                 tab_corner = std::clamp(value, 0, 3);
+            } else if (name == "light") {
+                light = value != 0;
             }
         }
         std::fclose(file);
@@ -87,9 +90,9 @@ struct Settings {
         }
         std::fprintf(file,
                      "screens=%d\nboth_layout=%d\naudio=%d\nfps_here=%d\nfps_there=%d\n"
-                     "tab_opacity=%d\ntab_corner=%d\n",
+                     "tab_opacity=%d\ntab_corner=%d\nlight=%d\n",
                      screens, both_layout, audio ? 1 : 0, fps_here ? 1 : 0, fps_there ? 1 : 0,
-                     tab_opacity, tab_corner);
+                     tab_opacity, tab_corner, light ? 1 : 0);
         std::fclose(file);
     }
 };
@@ -108,6 +111,7 @@ public:
 
     void Init() {
         settings.Load();
+        ApplyTheme(settings.light);
         canvas.Resize(SCREEN_W, SCREEN_H);
         if (R_SUCCEEDED(plInitialize(PlServiceType_User)) && font.InitLibrary()) {
             for (const PlSharedFontType type :
@@ -396,12 +400,12 @@ public:
     /// The screen shown until the first picture arrives: the ways to connect on the left,
     /// what is happening on the right.
     void ComposeStartup(u32* pixels, u32 row_pixels, u64 now_ns) {
-        FillGradientV(canvas, 0, 0, SCREEN_W, SCREEN_H, MakeColor(0x14, 0x15, 0x18),
-                      MakeColor(0x1E, 0x20, 0x26));
+        FillGradientV(canvas, 0, 0, SCREEN_W, SCREEN_H, kColShelfTop,
+                      kColShelfHorizon);
         if (font_ready) {
-            font.Draw(canvas, 64, 104, "Toronja Link", 44, MakeColor(0xF1, 0xF2, 0xF4));
+            font.Draw(canvas, 64, 104, "Toronja Link", 44, kColText);
             font.Draw(canvas, 64, 138, "Play here what is running on the other console", 18,
-                      MakeColor(0x9B, 0xA0, 0xA6));
+                      kColTextDim);
             struct Card {
                 const char* hint;
                 const char* title;
@@ -417,30 +421,30 @@ public:
                 const Rect r = CardRect(i);
                 const bool active = startup_mode == i + 1;
                 if (active) {
-                    canvas.RoundBorder(r.x, r.y, r.w, r.h, 18, 3, MakeColor(0xFA, 0xAA, 0x49),
-                                       MakeColor(0x30, 0x2A, 0x22));
+                    canvas.RoundBorder(r.x, r.y, r.w, r.h, 18, 3, kColAccent,
+                                       kColSurfaceHi);
                 } else {
-                    canvas.FillRoundRect(r.x, r.y, r.w, r.h, 18, MakeColor(0x26, 0x28, 0x2E));
+                    canvas.FillRoundRect(r.x, r.y, r.w, r.h, 18, kColSurface);
                 }
                 FillDisc(canvas, r.x + 46.0f, r.y + r.h / 2.0f, 22.0f,
-                         active ? MakeColor(0xFA, 0xAA, 0x49) : MakeColor(0x3A, 0x3D, 0x45));
+                         active ? kColAccent : kColBadge);
                 const int hw = font.Measure(cards[i].hint, 22);
                 font.Draw(canvas, r.x + 46 - hw / 2, r.y + r.h / 2 + 8, cards[i].hint, 22,
-                          active ? MakeColor(0x17, 0x18, 0x1B) : MakeColor(0xF1, 0xF2, 0xF4));
-                font.Draw(canvas, r.x + 86, r.y + 38, cards[i].title, 22, MakeColor(0xF1, 0xF2, 0xF4));
+                          active ? kColOnAccent : kColText);
+                font.Draw(canvas, r.x + 86, r.y + 38, cards[i].title, 22, kColText);
                 int ty = r.y + 62;
                 for (const std::string& line : WrapLines(font, cards[i].text, 15, r.w - 110)) {
-                    font.Draw(canvas, r.x + 86, ty, line, 15, MakeColor(0x9B, 0xA0, 0xA6));
+                    font.Draw(canvas, r.x + 86, ty, line, 15, kColTextDim);
                     ty += 19;
                 }
             }
             font.Draw(canvas, 64, SCREEN_H - 40,
                       "While playing: hold + and - for the menu, click both sticks for the other screen",
-                      15, MakeColor(0x7A, 0x7F, 0x88));
+                      15, kColTextDim);
 
             // Status card.
             constexpr int sx = 688, sy = 72, sw = 528, sh = 576;
-            canvas.FillRoundRect(sx, sy, sw, sh, 22, MakeColor(0x1B, 0x1C, 0x21));
+            canvas.FillRoundRect(sx, sy, sw, sh, 22, kColSurface);
             const char* title = startup_mode == 0   ? "Choose how to connect"
                                 : startup_mode == 1 ? "Looking for the other console"
                                                     : "Joining the other console";
@@ -448,17 +452,17 @@ public:
             if (startup_mode != 0) {
                 heading.append(static_cast<std::size_t>((now_ns / 400'000'000ULL) % 4), '.');
             }
-            font.Draw(canvas, sx + 28, sy + 46, heading, 22, MakeColor(0xFA, 0xAA, 0x49));
+            font.Draw(canvas, sx + 28, sy + 46, heading, 22, kColAccent);
             const char* tip = startup_mode == 0
                                   ? "On the other console: turn GameShare on and start a game."
                                   : "Start a game on the other console, with GameShare on.";
-            font.Draw(canvas, sx + 28, sy + 72, tip, 15, MakeColor(0x9B, 0xA0, 0xA6));
-            canvas.FillRect(sx + 28, sy + 90, sw - 56, 1, MakeColor(0x30, 0x33, 0x39));
+            font.Draw(canvas, sx + 28, sy + 72, tip, 15, kColTextDim);
+            canvas.FillRect(sx + 28, sy + 90, sw - 56, 1, kColLine);
             int ly = sy + 120;
             for (std::size_t i = 0; i < log.size(); ++i) {
                 const bool newest = i + 1 == log.size();
                 font.Draw(canvas, sx + 28, ly, font.Truncate(log[i], 15, sw - 56), 15,
-                          newest ? MakeColor(0xE6, 0xE8, 0xEB) : MakeColor(0x8A, 0x8F, 0x98));
+                          newest ? kColText : kColTextDim);
                 ly += 30;
             }
         }
@@ -539,6 +543,8 @@ private:
                         "The tab that opens this menu. Hidden, it still works: tap its corner or "
                         "swipe away from it. Holding + and - opens the menu too."});
         rows.push_back({"Tab corner", corner[settings.tab_corner], "Where the tab sits."});
+        rows.push_back({"Theme", settings.light ? "Light" : "Dark",
+                        "The look of this app's own screens."});
         rows.push_back({"Close Toronja Link", "", "Stops and returns to the Homebrew Menu.", true});
         return rows;
     }
@@ -574,6 +580,10 @@ private:
             settings.tab_corner = cycle(settings.tab_corner, 4);
             break;
         case 7:
+            settings.light = !settings.light;
+            ApplyTheme(settings.light);
+            break;
+        case 8:
             quit = true;
             break;
         default:
@@ -603,21 +613,21 @@ private:
     void DrawMenu() {
         const std::vector<Row> rows = Rows();
         canvas.FillRect(0, 0, MENU_X, SCREEN_H, WithAlpha(MakeColor(0, 0, 0), 110));
-        canvas.FillRect(MENU_X, 0, MENU_W, SCREEN_H, MakeColor(0x1E, 0x20, 0x24));
-        canvas.FillRect(MENU_X, 0, 1, SCREEN_H, MakeColor(0x30, 0x33, 0x39));
-        font.Draw(canvas, MENU_X + 28, 52, "Toronja Link", 28, MakeColor(0xF1, 0xF2, 0xF4));
+        canvas.FillRect(MENU_X, 0, MENU_W, SCREEN_H, kColRail);
+        canvas.FillRect(MENU_X, 0, 1, SCREEN_H, kColLine);
+        font.Draw(canvas, MENU_X + 28, 52, "Toronja Link", 28, kColText);
         font.Draw(canvas, MENU_X + 28, 76, "The game keeps running on the other console", 15,
-                  MakeColor(0x9B, 0xA0, 0xA6));
+                  kColTextDim);
         for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
             const Row& row = rows[i];
             const int y = ROW_TOP + i * ROW_H;
             const bool on = i == selected;
             if (on) {
                 canvas.FillRoundRect(MENU_X + 14, y + 3, MENU_W - 28, ROW_H - 6, 14,
-                                     MakeColor(0xFA, 0xAA, 0x49));
+                                     kColAccent);
             }
-            const u32 fg = on ? MakeColor(0x17, 0x18, 0x1B) : MakeColor(0xE6, 0xE8, 0xEB);
-            const u32 dim = on ? MakeColor(0x3A, 0x2A, 0x12) : MakeColor(0xFA, 0xAA, 0x49);
+            const u32 fg = on ? kColOnAccent : kColText;
+            const u32 dim = on ? kColOnAccent : kColAccent;
             font.Draw(canvas, MENU_X + 32, CenterBaseline(y, ROW_H, 19), row.label, 19, fg);
             if (!row.value.empty()) {
                 const std::string value = font.Truncate(row.value, 16, MENU_W * 58 / 100);
@@ -627,15 +637,15 @@ private:
         }
         // What the selected row does.
         int ty = ROW_TOP + static_cast<int>(rows.size()) * ROW_H + 30;
-        canvas.FillRect(MENU_X + 28, ty - 22, MENU_W - 56, 1, MakeColor(0x30, 0x33, 0x39));
+        canvas.FillRect(MENU_X + 28, ty - 22, MENU_W - 56, 1, kColLine);
         if (selected >= 0 && selected < static_cast<int>(rows.size())) {
             for (const std::string& line : WrapLines(font, rows[selected].help, 16, MENU_W - 56)) {
-                font.Draw(canvas, MENU_X + 28, ty, line, 16, MakeColor(0xB4, 0xB8, 0xBF));
+                font.Draw(canvas, MENU_X + 28, ty, line, 16, kColTextDim);
                 ty += 22;
             }
         }
         font.Draw(canvas, MENU_X + 28, SCREEN_H - 22, "Left / Right  Change      B  Close", 15,
-                  MakeColor(0x9B, 0xA0, 0xA6));
+                  kColTextDim);
     }
 
     Rect TabRect() const {
@@ -654,11 +664,11 @@ private:
         const bool right = r.x > 0;
         // A tongue sticking out of the edge: square against it, round on the other side.
         canvas.FillRoundRect(right ? r.x : r.x - 16, r.y, r.w + 16, r.h, 16,
-                             WithAlpha(MakeColor(0x2A, 0x2D, 0x33), alpha));
+                             WithAlpha(kColSurfaceHi, alpha));
         const int cx = r.x + r.w / 2 + (right ? 2 : -2);
         for (int i = -1; i <= 1; ++i) {
             canvas.FillRoundRect(cx - 2, r.y + r.h / 2 + i * 12 - 2, 4, 4, 2,
-                                 WithAlpha(MakeColor(0xFA, 0xAA, 0x49), alpha));
+                                 WithAlpha(kColAccent, alpha));
         }
     }
 
@@ -681,15 +691,15 @@ private:
         if (backing) {
             canvas.FillRoundRect(x - 8, y - 2, tw + 16, 28, 8, WithAlpha(MakeColor(0, 0, 0), 150));
         }
-        font.Draw(canvas, x, y + 19, text, 18, MakeColor(0xFA, 0xAA, 0x49));
+        font.Draw(canvas, x, y + 19, text, 18, kColAccent);
     }
 
     void DrawNotice() {
         const std::string text = font.Truncate(notice, 18, SCREEN_W - 160);
         const int tw = font.Measure(text, 18);
         const int w = tw + 48, x = (SCREEN_W - w) / 2, y = SCREEN_H - 78;
-        canvas.FillRoundRect(x, y, w, 44, 22, WithAlpha(MakeColor(0x2A, 0x2D, 0x33), 235));
-        font.Draw(canvas, x + 24, CenterBaseline(y, 44, 18), text, 18, MakeColor(0xF1, 0xF2, 0xF4));
+        canvas.FillRoundRect(x, y, w, 44, 22, WithAlpha(kColSurfaceHi, 235));
+        font.Draw(canvas, x + 24, CenterBaseline(y, 44, 18), text, 18, kColText);
     }
 
     /// Largest rectangle of aspect w:h inside `area`, centred.

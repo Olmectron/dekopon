@@ -55,6 +55,8 @@ add_executable(citra_switch
     settings_registry.cpp
     settings_registry.h
     ui_canvas.h
+    ui_sound.cpp
+    ui_sound.h
     ui_views.h
     updater.cpp
     updater.h

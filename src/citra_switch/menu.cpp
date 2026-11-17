@@ -30,6 +30,7 @@
 #include "citra_switch/save_manager.h"
 #include "citra_switch/settings_menu.h"
 #include "citra_switch/ui_canvas.h"
+#include "citra_switch/ui_sound.h"
 #include "citra_switch/ui_views.h"
 #include "citra_switch/updater.h"
 #include "citra_switch/usb_storage.h"
@@ -887,6 +888,7 @@ class Menu {
 public:
     MenuResult Run(PadState& pad) {
         pad_state = &pad;
+        UiSound::Init();
         // Put a frame up before the ROM scan
         EnsureFramebuffer();
         ApplyRotation();
@@ -901,7 +903,8 @@ public:
         while (appletMainLoop()) {
             padUpdate(&pad);
             ApplyRotation();
-            const u64 down = padGetButtonsDown(&pad);
+            // A tap on a dialog counts as the button it stands for.
+            const u64 down = padGetButtonsDown(&pad) | ModalTap();
             held = padGetButtons(&pad);
             PumpUpdater();
 
@@ -941,6 +944,18 @@ public:
             const u32 dpad_nav = NavMask(dpad);
             const u32 nav =
                 dpad_nav | repeater.Step(stick.up, stick.down, stick.left, stick.right);
+
+            if (nav != 0) {
+                UiSound::Play(UiSound::Kind::Move);
+            }
+            if (down & HidNpadButton_A) {
+                UiSound::Play(UiSound::Kind::Select);
+            } else if (down & HidNpadButton_B) {
+                UiSound::Play(UiSound::Kind::Back);
+            } else if (down & (HidNpadButton_L | HidNpadButton_R | HidNpadButton_X |
+                               HidNpadButton_Y)) {
+                UiSound::Play(UiSound::Kind::Page);
+            }
 
             MenuResult result;
             bool done = false;
@@ -1046,6 +1061,8 @@ public:
         }
         // Not while a game runs: it would compete for the network and the SD card.
         StopCoverDownload();
+        // The emulator takes the audio output from here.
+        UiSound::Exit();
         if (fb_ready) {
             framebufferClose(&fb);
         }
@@ -1070,13 +1087,19 @@ private:
     HomeLayout home_layout{};
     std::vector<std::shared_ptr<const CoverArt>> frame_covers; // Keeps this frame's art alive.
 
+    // Seconds, wrapped so a float keeps its precision however long the console is on.
+    static float UiTime() {
+        return static_cast<float>(armTicksToNs(armGetSystemTick()) % 3'600'000'000'000ULL) /
+               1e9f;
+    }
+
     static ShelfStyle LibraryStyle() {
         return static_cast<ShelfStyle>(GetLibraryStyle());
     }
 
     // The library as a full-screen shelf of covers. The Grid style keeps the classic page.
     bool ShelfMode() const {
-        return tab == Tab::Library && !PerGameOpen() && LibraryStyle() != ShelfStyle::Grid;
+        return tab == Tab::Library && !PerGameOpen();
     }
 
     void GoHome() {
@@ -1218,12 +1241,118 @@ private:
         return false;
     }
 
+    // A new contact, turned onto the canvas. False while a finger stays down.
+    bool PollTap(int& tx, int& ty) {
+        HidTouchScreenState ts{};
+        if (hidGetTouchScreenStates(&ts, 1) == 0 || ts.count == 0) {
+            touch_was_down = false;
+            return false;
+        }
+        if (touch_was_down) {
+            return false;
+        }
+        touch_was_down = true;
+        const int px = static_cast<int>(ts.touches[0].x);
+        const int py = static_cast<int>(ts.touches[0].y);
+        tx = px;
+        ty = py;
+        switch (g_rotation) {
+        case 90:
+            tx = py;
+            ty = g_screen_h - 1 - px;
+            break;
+        case 180:
+            tx = g_screen_w - 1 - px;
+            ty = g_screen_h - 1 - py;
+            break;
+        case 270:
+            tx = g_screen_w - 1 - py;
+            ty = px;
+            break;
+        default:
+            break;
+        }
+        return true;
+    }
+
+    struct TapRect {
+        int x{}, y{}, w{}, h{};
+        bool Contains(int px, int py) const {
+            return px >= x && py >= y && px < x + w && py < y + h;
+        }
+    };
+    TapRect confirm_accept_rect{};
+    TapRect confirm_cancel_rect{};
+
+    // The buttons a tap stands for while something is open over the page. Lists inside
+    // pickers are still pad-only.
+    u64 ModalTap() {
+        const bool modal = info_sheet_open || info_card || confirm || details_open;
+        if (!modal) {
+            return 0;
+        }
+        int tx = 0, ty = 0;
+        if (!PollTap(tx, ty)) {
+            return 0;
+        }
+        if (info_sheet_open) {
+            return HidNpadButton_B; // Anywhere closes it.
+        }
+        if (info_card) {
+            const int last = static_cast<int>(info_card->pages.size()) - 1;
+            if (tx < g_screen_w / 3) {
+                return HidNpadButton_L;
+            }
+            return info_card->page >= last ? HidNpadButton_A : HidNpadButton_R;
+        }
+        if (confirm) {
+            if (confirm_accept_rect.Contains(tx, ty)) {
+                return HidNpadButton_A;
+            }
+            if (confirm_cancel_rect.Contains(tx, ty)) {
+                return HidNpadButton_B;
+            }
+            return 0;
+        }
+        return HidNpadButton_B; // The details panel.
+    }
+
     void HandleShelfTouch(int tx, int ty) {
         const HomeLayout& l = home_layout;
         const auto within = [&](int cx, int cy, int radius) {
             return (tx - cx) * (tx - cx) + (ty - cy) * (ty - cy) <= (radius + 10) * (radius + 10);
         };
         const int count = static_cast<int>(filtered.size());
+        for (int i = 0; i < l.pill_count; ++i) {
+            const HomePill& pill = l.pills[i];
+            if (tx < pill.x || tx >= pill.x + pill.w || ty < pill.y - 6 ||
+                ty >= pill.y + pill.h + 6 || count == 0) {
+                continue;
+            }
+            switch (pill.action) {
+            case 'A':
+                pending_launch = games[filtered[selected]].path;
+                break;
+            case 'X':
+                shelf_back = !shelf_back;
+                break;
+            case 'Y':
+                search = PromptSearch(search);
+                ApplyFilter();
+                shelf_back = false;
+                break;
+            case 'S':
+                CycleLibraryStyle(+1);
+                break;
+            case 'D':
+                details = GetTitleDetails(games[filtered[selected]]);
+                details_open = true;
+                break;
+            default:
+                break;
+            }
+            return;
+        }
         if (within(l.options_cx, l.options_cy, l.button_radius)) {
             OpenOptions();
         } else if (within(l.exit_cx, l.exit_cy, l.button_radius)) {
@@ -1307,6 +1436,7 @@ private:
         view.position = shelf_pos;
         view.count = count;
         view.flip = shelf_flip;
+        view.time = UiTime();
         view.app_name = "Toronja";
 #if defined(__SWITCH2__)
         view.app_tag = "for Switch 2";
@@ -1348,7 +1478,8 @@ private:
         const std::vector<DrawerItem> items = DrawerItems();
         const std::string version = std::string{"Version "} + CurrentVersion();
         DrawDrawer(c, g_font, 0, 0, g_screen_h, "Toronja", version, items,
-                   DrawerIndexFor(tab, settings_page), drawer_cursor, focused, drawer_scroll);
+                   DrawerIndexFor(tab, settings_page), drawer_cursor, focused, drawer_scroll,
+                   UiTime());
     }
 
     // The sheet X brings up: what the focused option is for.
@@ -3900,11 +4031,11 @@ private:
             const int note_x = std::min(kContentX + 44 + title_w + 24,
                                         g_screen_w - 28 - note_w);
             c.FillRoundRect(note_x, kTabStripTop + 2, note_w, kTabStripH - 4,
-                            (kTabStripH - 4) / 2, MakeColor(0x4A, 0x30, 0x16));
+                            (kTabStripH - 4) / 2, kColWarnBg);
             DrawIcon(c, Icon::Warning, note_x + 22.0f, kTabStripTop + kTabStripH / 2.0f, 17.0f,
-                     MakeColor(0xFF, 0xC4, 0x7A));
+                     kColWarnText);
             g_font.Draw(c, note_x + 40, CenterBaseline(kTabStripTop + 2, kTabStripH - 4, 16), note,
-                        16, MakeColor(0xFF, 0xD8, 0xA8));
+                        16, kColWarnText);
         }
     }
 
@@ -3933,10 +4064,11 @@ private:
                 continue;
             }
             const bool on = i == sel;
-            if (on) {
-                c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
-                c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2,
-                                content_focus ? kColAccent : kColBadge);
+            c.FillRect(x + 12, y + kRowH + 3, w - 24, 1, kColLine);
+            if (on && content_focus) {
+                DrawFocusRing(c, x, y, w, kRowH, 6, UiTime(), kColSurfaceHi);
+            } else if (on) {
+                c.FillRoundRect(x, y, w, kRowH, 6, kColSurface);
             }
             g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), row.label, 22, kColText);
             const bool overridden = row.using_global && !row.using_global();
@@ -4026,8 +4158,12 @@ private:
 
         int hx = x + 24;
         const int hy = y + hint_y;
-        hx += DrawHint(c, hx, hy, "A", confirm->accept) + 22;
-        DrawHint(c, hx, hy, "B", "Cancel");
+        // The two hints double as touch buttons (with room round them for a finger).
+        const int accept_w = DrawHint(c, hx, hy, "A", confirm->accept);
+        confirm_accept_rect = {hx - 12, hy - 14, accept_w + 24, 54};
+        hx += accept_w + 22;
+        const int cancel_w = DrawHint(c, hx, hy, "B", "Cancel");
+        confirm_cancel_rect = {hx - 10, hy - 14, cancel_w + 24, 54};
     }
 
     // A centred modal to choose which bundle of settings the reset row applies.

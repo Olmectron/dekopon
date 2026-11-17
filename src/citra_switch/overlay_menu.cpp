@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "citra_switch/amiibo_session.h"
+#include "citra_switch/covers.h"
 #include "citra_switch/game_share.h"
 #include "citra_switch/camera/still_image_camera.h"
 #include "citra_switch/config.h"
@@ -611,6 +612,7 @@ void Repaint() {
                                   IsAdvancedPage(listed)});
     }
     state.active_section = PageOrderIndex(page);
+    state.light = GetUiTheme() != 0;
     if (s_selected >= 0 && s_selected < static_cast<int>(s_rows.size())) {
         const Row& focused = s_rows[static_cast<std::size_t>(s_selected)];
         if (focused.item == Item::Setting && focused.index >= 0 &&
@@ -1007,6 +1009,52 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
     if (changed) {
         RebuildRows();
         Repaint();
+    }
+    return QuickMenuAction::None;
+}
+
+// A tap on the overlay: a page in the side list opens it, a row is selected (and acted on when
+// it already was), anywhere outside the panel is "back".
+QuickMenuAction QuickMenuTouch(float x, float y) {
+    if (!IsQuickMenuOpen()) {
+        return QuickMenuAction::None;
+    }
+    const std::vector<VideoCore::OverlayHit> hits = VideoCore::GetOverlayHitMap();
+    bool inside = false;
+    for (const VideoCore::OverlayHit& hit : hits) {
+        if (x < hit.x0 || x >= hit.x1 || y < hit.y0 || y >= hit.y1) {
+            continue;
+        }
+        if (hit.kind == 2) {
+            inside = true;
+        } else if (hit.kind == 1 && hit.index >= 0 && hit.index < NumPages) {
+            s_overwrite_armed = false;
+            EnterPage(kPageOrder[static_cast<std::size_t>(hit.index)]);
+            Repaint();
+            return QuickMenuAction::None;
+        } else if (hit.kind == 0) {
+            const int count = static_cast<int>(s_rows.size());
+            const int visible = std::min(count, kMaxVisibleRows);
+            const int first = std::clamp(s_scroll, 0, std::max(0, count - visible));
+            const int target = first + hit.index;
+            if (target < 0 || target >= count) {
+                return QuickMenuAction::None;
+            }
+            if (target == s_selected) {
+                QuickMenuNav nav{};
+                nav.confirm = true;
+                return UpdateQuickMenu(nav);
+            }
+            s_selected = target;
+            s_overwrite_armed = false;
+            Repaint();
+            return QuickMenuAction::None;
+        }
+    }
+    if (!inside) {
+        QuickMenuNav nav{};
+        nav.cancel = true;
+        return UpdateQuickMenu(nav);
     }
     return QuickMenuAction::None;
 }
