@@ -2926,7 +2926,10 @@ private:
         InfoCard card;
 #if defined(__SWITCH2__) && defined(DEKOPON_UPSTREAM_VERSION)
         card.title = "Toronja for Switch 2 " + std::string{CurrentVersion()} +
-                     " (based on Toronja " DEKOPON_UPSTREAM_VERSION ")";
+                     " (based on Dekopon " DEKOPON_UPSTREAM_VERSION ")";
+#elif defined(DEKOPON_UPSTREAM_VERSION)
+        card.title = "Toronja " + std::string{CurrentVersion()} +
+                     " (based on Dekopon " DEKOPON_UPSTREAM_VERSION ")";
 #else
         card.title = "Toronja " + std::string{CurrentVersion()};
 #endif

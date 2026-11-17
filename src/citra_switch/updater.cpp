@@ -31,14 +31,16 @@
 namespace SwitchFrontend {
 namespace {
 
-#if defined(__SWITCH2__)
-// The Switch 2 port updates from its own repository: upstream's releases are
-// Switch 1 builds (NXVK) and must never be installed over this one.
+// Toronja updates from its own repository on both consoles: upstream's releases are
+// Dekopon, and must never be installed over this.
 constexpr std::string_view kReleasesApi =
     "https://api.github.com/repos/Olmectron/dekopon/releases?per_page=20";
+// Each console takes its own file from a release, so a Switch 1 can never install the
+// Switch 2 build or the other way round.
+#if defined(__SWITCH2__)
+constexpr std::string_view kAssetName = "dekopon.nro";
 #else
-constexpr std::string_view kReleasesApi =
-    "https://api.github.com/repos/PalindromicBreadLoaf/dekopon/releases?per_page=20";
+constexpr std::string_view kAssetName = "dekopon-switch1.nro";
 #endif
 constexpr std::string_view kUserAgent = "Dekopon-Updater/" DEKOPON_VERSION;
 constexpr long kConnectTimeoutSeconds = 15;
@@ -303,7 +305,7 @@ std::optional<UpdateRelease> ParseRelease(const nlohmann::json& release) try {
         return std::nullopt;
     }
     for (const auto& asset : *assets_it) {
-        if (!asset.is_object() || asset.value("name", "") != "dekopon.nro") {
+        if (!asset.is_object() || asset.value("name", "") != kAssetName) {
             continue;
         }
         out.download_url = asset.value("browser_download_url", "");
