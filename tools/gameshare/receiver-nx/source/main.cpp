@@ -400,6 +400,16 @@ int main(int, char**) {
     padInitializeDefault(&pad);
     hidInitializeTouchScreen();
 
+    // Motion, for games that aim with it. 0: handheld, 1: Pro Controller, 2-3: Joy-Con pair.
+    HidSixAxisSensorHandle sensors[4]{};
+    hidGetSixAxisSensorHandles(&sensors[0], 1, HidNpadIdType_Handheld,
+                               HidNpadStyleTag_NpadHandheld);
+    hidGetSixAxisSensorHandles(&sensors[1], 1, HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey);
+    hidGetSixAxisSensorHandles(&sensors[2], 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual);
+    for (const HidSixAxisSensorHandle& sensor : sensors) {
+        hidStartSixAxisSensor(sensor);
+    }
+
     consoleInit(nullptr);
     std::printf("Dekopon Link\n\n");
     std::printf("Looking for a Dekopon host on this network...\n");
@@ -596,7 +606,7 @@ int main(int, char**) {
                     }
                 }
 
-                u8 packet[HEADER + 25];
+                u8 packet[HEADER + 50];
                 std::memcpy(packet, MAGIC, sizeof(MAGIC));
                 packet[4] = PacketType::Input;
                 WriteU32(packet + HEADER, ++input_seq);
@@ -609,6 +619,22 @@ int main(int, char**) {
                 WriteU16(packet + HEADER + 17, static_cast<u16>(static_cast<s16>(right.x)));
                 WriteU16(packet + HEADER + 19, static_cast<u16>(static_cast<s16>(right.y)));
                 WriteU32(packet + HEADER + 21, ack_id);
+                HidSixAxisSensorState motion{};
+                const u32 style = padGetStyleSet(&pad);
+                bool has_motion = false;
+                if (style & HidNpadStyleTag_NpadHandheld) {
+                    has_motion = hidGetSixAxisSensorStates(sensors[0], &motion, 1) > 0;
+                } else if (style & HidNpadStyleTag_NpadFullKey) {
+                    has_motion = hidGetSixAxisSensorStates(sensors[1], &motion, 1) > 0;
+                } else if (style & HidNpadStyleTag_NpadJoyDual) {
+                    has_motion = hidGetSixAxisSensorStates(sensors[3], &motion, 1) > 0 ||
+                                 hidGetSixAxisSensorStates(sensors[2], &motion, 1) > 0;
+                }
+                const float values[6] = {motion.acceleration.x,     motion.acceleration.y,
+                                         motion.acceleration.z,     motion.angular_velocity.x,
+                                         motion.angular_velocity.y, motion.angular_velocity.z};
+                packet[HEADER + 25] = has_motion ? 1 : 0;
+                std::memcpy(packet + HEADER + 26, values, sizeof(values));
                 if (usb_mode) {
                     GameShareUsb::Send(packet, sizeof(packet));
                 } else {

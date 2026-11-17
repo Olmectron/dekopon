@@ -15,4 +15,8 @@ bool StartLocalWirelessHost(char* log, std::size_t log_size);
 /// Tears the local network down.
 void StopLocalWirelessHost();
 
+/// Tells the system somebody is using the console (resets screen dimming / auto sleep).
+/// Here only because this is the file that may include <switch.h>.
+void ReportUserActivity();
+
 } // namespace SwitchFrontend::GameShare

@@ -83,4 +83,8 @@ void StopLocalWirelessHost() {
     ldnExit();
 }
 
+void ReportUserActivity() {
+    appletReportUserIsActive();
+}
+
 } // namespace SwitchFrontend::GameShare

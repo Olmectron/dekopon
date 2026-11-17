@@ -21,7 +21,9 @@ struct InputState;
 //                                 s16 stick x, s16 stick y, u8 touching, u16 touch x, u16 touch y
 //                                 (touch in bottom-screen pixels, 320x240), then optionally
 //                                 s16 right stick x, s16 right stick y, then optionally
-//                                 u32 newest frame id seen (drives congestion control)
+//                                 u32 newest frame id seen (drives congestion control),
+//                                 then optionally u8 has motion, float[3] acceleration,
+//                                 float[3] angular velocity (libnx six-axis units)
 //   3 FRAME   host -> receiver   u32 frame id, u16 chunk index, u16 chunk count, u32 jpeg size,
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)

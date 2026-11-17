@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -66,6 +67,8 @@ struct RemoteInput {
     bool touching{};
     u16 touch_x{};
     u16 touch_y{};
+    bool has_motion{};
+    float motion[6]{}; // acceleration x y z, angular velocity x y z
     Clock::time_point when{};
 };
 
@@ -206,11 +209,14 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
                    sizeof(from));
         }
     } else if (type == PacketType::Input && body_size >= 17) {
+        bool acted = false;
+        {
         std::lock_guard lock{s.mutex};
         if (!s.client_active || s.client_addr.sin_addr.s_addr != from.sin_addr.s_addr) {
             return;
         }
         s.client_seen = now;
+        const RemoteInput before = s.input;
         s.input.buttons = ReadU32(body + 4);
         s.input.stick_x = static_cast<s16>(ReadU16(body + 8));
         s.input.stick_y = static_cast<s16>(ReadU16(body + 10));
@@ -228,7 +234,23 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
             s_acked.store(ReadU32(body + 21));
             s_ack_seen.store(true);
         }
+        s.input.has_motion = body_size >= 50 && body[25] != 0;
+        if (s.input.has_motion) {
+            std::memcpy(s.input.motion, body + 26, sizeof(s.input.motion));
+        }
         s.input.when = now;
+        constexpr int MOVED = 8000;
+        acted = s.input.buttons != before.buttons || s.input.touching ||
+                std::abs(s.input.stick_x) > MOVED || std::abs(s.input.stick_y) > MOVED ||
+                std::abs(s.input.right_x) > MOVED || std::abs(s.input.right_y) > MOVED;
+        }
+        // Playing from the other console counts as using this one: without this the
+        // system dims the screen, since nobody touches this console's own controls.
+        static Clock::time_point last_report{};
+        if (acted && now - last_report > std::chrono::seconds{1}) {
+            last_report = now;
+            ReportUserActivity();
+        }
     }
 }
 
@@ -564,6 +586,37 @@ void MergeRemoteInput(InputState& state) {
         (std::abs(input.right_x) >= DEADZONE || std::abs(input.right_y) >= DEADZONE)) {
         state.right_x = input.right_x;
         state.right_y = input.right_y;
+    }
+
+    // Motion: whichever console is being moved is the one that aims. Sticky, so the
+    // source does not flip back while the hands are still for a moment.
+    if (input.has_motion) {
+        const auto magnitude = [](float x, float y, float z) {
+            return std::sqrt(x * x + y * y + z * z);
+        };
+        constexpr float MOVING = 0.05f;
+        const float remote = magnitude(input.motion[3], input.motion[4], input.motion[5]);
+        const float local =
+            state.motion.active
+                ? magnitude(state.motion.gyro_x, state.motion.gyro_y, state.motion.gyro_z)
+                : 0.0f;
+        static bool use_remote = false;
+        if (remote > MOVING && remote > local) {
+            use_remote = true;
+        } else if (local > MOVING && local > remote) {
+            use_remote = false;
+        }
+        if (use_remote || !state.motion.active) {
+            state.motion = {
+                .active = true,
+                .accel_x = input.motion[0],
+                .accel_y = input.motion[1],
+                .accel_z = input.motion[2],
+                .gyro_x = input.motion[3],
+                .gyro_y = input.motion[4],
+                .gyro_z = input.motion[5],
+            };
+        }
     }
 
     // Touch arrives in bottom-screen pixels; the emulator window wants window coordinates, so
