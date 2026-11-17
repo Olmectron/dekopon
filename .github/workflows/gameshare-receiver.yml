@@ -24,15 +24,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Restore the toolchain image
+        id: toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
+
       - name: Build the toolchain image
         run: |
-          # pkg.devkitpro.org answers 403 now and then: try again before giving up.
+          # The image is kept in the Actions cache: pkg.devkitpro.org refuses GitHub's
+          # runners (403) often enough that building it on every run is not workable.
+          if [ -f /tmp/toolchain-image.tar ]; then
+            docker load -i /tmp/toolchain-image.tar && exit 0
+          fi
           for attempt in 1 2 3 4 5 6; do
-            docker build -t dekopon-switch2 -f docker/switch2/Dockerfile . && exit 0
+            if docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .; then
+              docker save dekopon-switch2 -o /tmp/toolchain-image.tar
+              exit 0
+            fi
             echo "toolchain image build failed (attempt $attempt), retrying in 60 s"
             sleep 60
           done
           exit 1
+
+      - name: Keep the toolchain image for later runs
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
 
       - name: Build for Switch 1
         run: >
