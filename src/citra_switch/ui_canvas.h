@@ -35,18 +35,80 @@ constexpr u32 MakeColor(u8 r, u8 g, u8 b, u8 a = 0xFF) {
     return (u32{a} << 24) | (u32{b} << 16) | (u32{g} << 8) | u32{r};
 }
 
-constexpr u32 kColBg = MakeColor(0x17, 0x18, 0x1B);
-constexpr u32 kColRail = MakeColor(0x1E, 0x20, 0x24);
-constexpr u32 kColSurface = MakeColor(0x24, 0x26, 0x2B);
-constexpr u32 kColSurfaceHi = MakeColor(0x30, 0x33, 0x39);
-constexpr u32 kColBadge = MakeColor(0x3A, 0x3C, 0x42);
-constexpr u32 kColAccent = MakeColor(0xFA, 0xAA, 0x49);
-constexpr u32 kColAccentDim = MakeColor(0x8C, 0x5F, 0x29);
-constexpr u32 kColText = MakeColor(0xF1, 0xF2, 0xF4);
-constexpr u32 kColTextDim = MakeColor(0x9B, 0xA0, 0xA6);
-constexpr u32 kColOnAccent = MakeColor(0x17, 0x18, 0x1B);
-constexpr u32 kColError = MakeColor(0xE0, 0x5A, 0x4A);
-constexpr u32 kColHintBar = MakeColor(0x1B, 0x1C, 0x20);
+// The palette. Variables, not constants: there is a dark and a light theme (ApplyTheme), in
+// the manner of a console's own settings screens - flat surfaces, one cool accent, and a
+// bright ring round whatever has the focus.
+inline u32 kColBg = 0;        // Page background.
+inline u32 kColRail = 0;      // The drawer.
+inline u32 kColSurface = 0;   // Cards and rows.
+inline u32 kColSurfaceHi = 0; // The same, raised or focused.
+inline u32 kColBadge = 0;     // Chips and other small fills.
+inline u32 kColAccent = 0;
+inline u32 kColAccentDim = 0;
+inline u32 kColText = 0;
+inline u32 kColTextDim = 0;
+inline u32 kColOnAccent = 0;  // Text on an accent fill.
+inline u32 kColError = 0;
+inline u32 kColHintBar = 0;
+inline u32 kColLine = 0;      // Hairlines between rows and sections.
+inline u32 kColFocus = 0;     // The focus ring.
+inline u32 kColWarnBg = 0;
+inline u32 kColWarnText = 0;
+inline u32 kColShelfTop = 0;  // Backdrop of the library, top to horizon...
+inline u32 kColShelfHorizon = 0;
+inline u32 kColFloorNear = 0; // ...and its floor, horizon to the bottom edge.
+inline u32 kColFloorFar = 0;
+inline bool g_theme_light = false;
+
+inline void ApplyTheme(bool light) {
+    g_theme_light = light;
+    if (light) {
+        kColBg = MakeColor(0xEB, 0xEB, 0xEB);
+        kColRail = MakeColor(0xF4, 0xF4, 0xF4);
+        kColSurface = MakeColor(0xFB, 0xFB, 0xFB);
+        kColSurfaceHi = MakeColor(0xFF, 0xFF, 0xFF);
+        kColBadge = MakeColor(0xD6, 0xD6, 0xD6);
+        kColAccent = MakeColor(0x2F, 0x4F, 0xEE);
+        kColAccentDim = MakeColor(0xC3, 0xCC, 0xF8);
+        kColText = MakeColor(0x2D, 0x2D, 0x2D);
+        kColTextDim = MakeColor(0x6C, 0x6C, 0x6C);
+        kColOnAccent = MakeColor(0xFF, 0xFF, 0xFF);
+        kColError = MakeColor(0xD6, 0x30, 0x30);
+        kColHintBar = MakeColor(0xEB, 0xEB, 0xEB);
+        kColLine = MakeColor(0xCD, 0xCD, 0xCD);
+        kColFocus = MakeColor(0x00, 0xBE, 0xDC);
+        kColWarnBg = MakeColor(0xFF, 0xEE, 0xC2);
+        kColWarnText = MakeColor(0x7A, 0x52, 0x00);
+        kColShelfTop = MakeColor(0xFC, 0xFC, 0xFC);
+        kColShelfHorizon = MakeColor(0xDE, 0xDE, 0xDE);
+        kColFloorNear = MakeColor(0xCF, 0xCF, 0xCF);
+        kColFloorFar = MakeColor(0xF2, 0xF2, 0xF2);
+    } else {
+        kColBg = MakeColor(0x2D, 0x2D, 0x2D);
+        kColRail = MakeColor(0x32, 0x32, 0x32);
+        kColSurface = MakeColor(0x39, 0x39, 0x39);
+        kColSurfaceHi = MakeColor(0x46, 0x46, 0x46);
+        kColBadge = MakeColor(0x58, 0x58, 0x58);
+        kColAccent = MakeColor(0x00, 0xE0, 0xC0);
+        kColAccentDim = MakeColor(0x0C, 0x5E, 0x54);
+        kColText = MakeColor(0xFF, 0xFF, 0xFF);
+        kColTextDim = MakeColor(0xA8, 0xA8, 0xA8);
+        kColOnAccent = MakeColor(0x1A, 0x1A, 0x1A);
+        kColError = MakeColor(0xFF, 0x5C, 0x5C);
+        kColHintBar = MakeColor(0x2D, 0x2D, 0x2D);
+        kColLine = MakeColor(0x4E, 0x4E, 0x4E);
+        kColFocus = MakeColor(0x5C, 0xE6, 0xFF);
+        kColWarnBg = MakeColor(0x4A, 0x3C, 0x14);
+        kColWarnText = MakeColor(0xFF, 0xD7, 0x6E);
+        kColShelfTop = MakeColor(0x16, 0x16, 0x16);
+        kColShelfHorizon = MakeColor(0x3C, 0x3C, 0x3C);
+        kColFloorNear = MakeColor(0x30, 0x30, 0x30);
+        kColFloorFar = MakeColor(0x0E, 0x0E, 0x0E);
+    }
+}
+
+// The dark theme until something says otherwise.
+inline const bool g_theme_initialised = (ApplyTheme(false), true);
 
 class Canvas {
 public:

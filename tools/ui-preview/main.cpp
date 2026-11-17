@@ -153,8 +153,8 @@ int main(int argc, char** argv) {
     };
 
     Canvas c;
-    const auto home = [&](const char* name, ShelfStyle style, float position, float flip, int w,
-                          int h) {
+    const auto home = [&](const std::string& name, ShelfStyle style, float position, float flip,
+                          int w, int h) {
         c.Resize(w, h);
         const int sel = static_cast<int>(std::lround(position));
         HomeView v;
@@ -164,6 +164,7 @@ int main(int argc, char** argv) {
         v.position = position;
         v.count = static_cast<int>(games.size());
         v.flip = flip;
+        v.time = 1.3f;
         v.app_name = "Toronja";
         v.app_tag = "for Switch 2";
         v.title = games[sel].title;
@@ -175,58 +176,67 @@ int main(int argc, char** argv) {
         DrawHome(c, font, v, get);
         Save(c, out + "/" + name + ".ppm");
     };
-    home("01-home-coverflow", ShelfStyle::Coverflow, 4.0f, 0.0f, 1280, 720);
-    home("02-home-coverflow-sliding", ShelfStyle::Coverflow, 2.45f, 0.0f, 1280, 720);
-    home("03-home-coverflow-placeholder", ShelfStyle::Coverflow, 3.0f, 0.0f, 1280, 720);
-    home("04-home-flip-wrap", ShelfStyle::Coverflow, 0.0f, 1.0f, 1280, 720);
-    home("05-home-flip-text", ShelfStyle::Coverflow, 3.0f, 1.0f, 1280, 720);
-    home("06-home-flip-midway", ShelfStyle::Coverflow, 4.0f, 0.3f, 1280, 720);
-    home("07-home-carousel", ShelfStyle::Carousel, 5.0f, 0.0f, 1280, 720);
-    home("08-home-stack", ShelfStyle::Stack, 5.0f, 0.0f, 1280, 720);
-    home("09-home-portrait", ShelfStyle::Coverflow, 4.0f, 0.0f, 720, 1280);
 
-    // Options: drawer, a page with the Advanced banner, and the info sheet.
-    c.Resize(1280, 720);
-    c.Clear(MakeColor(0x17, 0x18, 0x1B));
-    const DrawerItem items[] = {
-        {"Back to games"},     {"SETTINGS", true},  {"General"},     {"Display"},
-        {"Audio"},             {"Controls"},        {"Amiibo"},      {"GameShare"},
-        {"System"},            {"TOOLS", true},     {"Install titles"}, {"Folders"},
-        {"Artic Base"},        {"ADVANCED", true, true}, {"Graphics", false, true},
-        {"Enhancements", false, true}, {"Stereoscopic 3D", false, true},
+    const auto options = [&](const std::string& prefix) {
+        c.Resize(1280, 720);
+        c.Clear(kColBg);
+        const DrawerItem items[] = {
+            {"Games"},          {"SETTINGS", true}, {"General"},     {"Display"},
+            {"Audio"},          {"Controls"},       {"Amiibo"},      {"GameShare"},
+            {"System"},         {"TOOLS", true},    {"Install Titles"}, {"Folders"},
+            {"Artic Base"},     {"ADVANCED", true, true}, {"Graphics", false, true},
+            {"Enhancements", false, true},
+        };
+        DrawDrawer(c, font, 0, 0, 720, "Toronja", "Version 0.9.5", items, 3, 3, false, 0, 0.4f);
+        const int px = kDrawerW + 44, pw = 1280 - kDrawerW - 88;
+        font.Draw(c, px, 56, "Display", 28, kColText);
+        const char* rows[][2] = {{"Internal Resolution", "2x (800x480)"}, {"Integer Scaling", "Off"},
+                                 {"Screen Layout", "Large Screen"}, {"Swap Screens", "Off"},
+                                 {"Async Shader Compilation (Experimental)", "On"},
+                                 {"Theme", "Dark"}};
+        int y = 96;
+        for (int i = 0; i < 6; ++i) {
+            if (i == 2) {
+                DrawFocusRing(c, px - 8, y + 2, pw + 16, 48, 6, 0.4f, kColSurfaceHi);
+            }
+            font.Draw(c, px + 12, CenterBaseline(y, 52, 21), rows[i][0], 21, kColText);
+            font.Draw(c, px + pw - 12 - font.Measure(rows[i][1], 21), CenterBaseline(y, 52, 21),
+                      rows[i][1], 21, kColAccent);
+            c.FillRect(px, y + 52, pw, 1, kColLine);
+            y += 53;
+        }
+        y += 20;
+        DrawBanner(c, font, px, y, pw, "Advanced settings",
+                   "Only change these if you know what they do. A wrong value here can make games "
+                   "slow, glitchy or unable to start.");
+        Save(c, out + "/" + prefix + "-options.ppm");
+
+        const std::string facts[] = {"Now: Large Screen", "Takes effect at once"};
+        DrawInfoSheet(c, font, 1280, 720, kDrawerW, "Screen Layout",
+                      "How the two 3DS screens are arranged on this console's screen. The right "
+                      "stick click cycles through the layouts while a game runs.",
+                      facts, "A / B / X  Close");
+        Save(c, out + "/" + prefix + "-options-info.ppm");
+
+        c.Clear(kColBg);
+        DrawDrawer(c, font, 0, 0, 720, "Toronja", "Version 0.9.5", items, 3, 6, true, 0, 0.9f);
+        Save(c, out + "/" + prefix + "-options-drawer-focused.ppm");
     };
-    DrawDrawer(c, font, 0, 0, 720, "Options", "Toronja 0.9.4", items, 14, 14, false, 0);
-    const int px = kDrawerW + 28, pw = 1280 - kDrawerW - 56;
-    font.Draw(c, px, 48, "Graphics", 28, MakeColor(0xF1, 0xF2, 0xF4));
-    int y = 70;
-    y += DrawBanner(c, font, px, y, pw, "Advanced settings",
-                    "Only change these if you know what they do. A wrong value here can make games "
-                    "slow, glitchy or unable to start. Reset All Settings (General) puts everything "
-                    "back.") + 14;
-    const char* rows[][2] = {{"Graphics API", "Vulkan"}, {"SPIR-V Shader Generation", "On"},
-                             {"Hardware Shader", "On"}, {"Accurate Shader Multiplication", "Off"},
-                             {"Shader JIT", "On"}, {"Disk Shader Cache", "On"}};
-    for (int i = 0; i < 6; ++i) {
-        const bool sel = i == 2;
-        c.FillRoundRect(px, y, pw, 41, 12,
-                        sel ? MakeColor(0x30, 0x33, 0x39) : MakeColor(0x24, 0x26, 0x2B));
-        font.Draw(c, px + 18, CenterBaseline(y, 41, 19), rows[i][0], 19, MakeColor(0xF1, 0xF2, 0xF4));
-        font.Draw(c, px + pw - 18 - font.Measure(rows[i][1], 19), CenterBaseline(y, 41, 19),
-                  rows[i][1], 19, MakeColor(0xFA, 0xAA, 0x49));
-        y += 49;
+
+    for (const bool light : {false, true}) {
+        ApplyTheme(light);
+        const std::string tag = light ? "light" : "dark";
+        home(tag + "-01-coverflow", ShelfStyle::Coverflow, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-02-shelf", ShelfStyle::Shelf, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-03-shelf-icons", ShelfStyle::Shelf, 3.0f, 0.0f, 1280, 720);
+        home(tag + "-04-carousel", ShelfStyle::Carousel, 5.0f, 0.0f, 1280, 720);
+        home(tag + "-05-arc", ShelfStyle::Arc, 5.0f, 0.0f, 1280, 720);
+        home(tag + "-06-stack", ShelfStyle::Stack, 5.0f, 0.0f, 1280, 720);
+        home(tag + "-07-spotlight", ShelfStyle::Spotlight, 4.0f, 0.0f, 1280, 720);
+        home(tag + "-08-sliding", ShelfStyle::Shelf, 2.45f, 0.0f, 1280, 720);
+        home(tag + "-09-flip-wrap", ShelfStyle::Shelf, 0.0f, 1.0f, 1280, 720);
+        home(tag + "-10-flip-text", ShelfStyle::Shelf, 3.0f, 1.0f, 1280, 720);
+        options(tag + "-11");
     }
-    Save(c, out + "/10-options-advanced.ppm");
-
-    const std::string facts[] = {"Applies the next time a game starts", "Default: On"};
-    DrawInfoSheet(c, font, 1280, 720, kDrawerW, "Hardware Shader",
-                  "Runs the 3DS's vertex shaders on the console's graphics chip instead of the "
-                  "processor. Much faster. Turn it off only to check whether a graphical glitch "
-                  "comes from it.",
-                  facts, "Press X or B to close");
-    Save(c, out + "/11-options-info-sheet.ppm");
-
-    c.Clear(MakeColor(0x17, 0x18, 0x1B));
-    DrawDrawer(c, font, 0, 0, 720, "Options", "Toronja 0.9.4", items, 3, 6, true, 0);
-    Save(c, out + "/12-options-drawer-focused.ppm");
     return 0;
 }

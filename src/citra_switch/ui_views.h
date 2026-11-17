@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Azahar Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The launcher's larger views: the cover library (a WiiFlow-style shelf), the bar under it,
-// the navigation drawer of the options screen, and the small sheets shared with it.
+// The launcher's larger views: the library (a shelf of covers standing on a reflective floor),
+// the bar under it, the navigation drawer of the options screen, and the small sheets shared
+// with it. Colours come from the theme in ui_canvas.h.
 //
 // Everything here draws on a Ui::Canvas from plain data and knows nothing about the console,
 // which is what lets tools/ui-preview render these views on a PC.
@@ -91,6 +92,14 @@ inline void StrokeLine(Canvas& c, float ax, float ay, float bx, float by, float 
     }
 }
 
+/// The ring round whatever has the focus. It breathes: `time` is in seconds.
+inline void DrawFocusRing(Canvas& c, int x, int y, int w, int h, int radius, float time,
+                          u32 inner) {
+    const float pulse = 0.5f + 0.5f * std::sin(time * 4.2f);
+    const u32 ring = MixColor(kColFocus, kColAccent, pulse * 0.55f);
+    c.RoundBorder(x - 3, y - 3, w + 6, h + 6, radius + 3, 3, ring, inner);
+}
+
 /// Bilinear sample of `img` at (u, v) in pixels.
 inline u32 SampleImage(const Image& img, float u, float v) {
     u = std::clamp(u, 0.0f, static_cast<float>(img.w - 1));
@@ -112,24 +121,28 @@ inline u32 SampleImage(const Image& img, float u, float v) {
 /// Where a picture lands on screen: a quad whose left and right edges are vertical, which is
 /// all a shelf of covers turned about a vertical axis needs.
 struct Quad {
-    float x0{}, x1{};      // Left and right edge.
-    float top0{}, h0{};    // Top and height at the left edge.
-    float top1{}, h1{};    // Top and height at the right edge.
+    float x0{}, x1{};   // Left and right edge.
+    float top0{}, h0{}; // Top and height at the left edge.
+    float top1{}, h1{}; // Top and height at the right edge.
 };
 
 /// Draws the part of `img` between `u0` and `u1` (0..1 across the picture) into `q`.
-/// `shade` darkens (0 = as is, 1 = black). With `mirror` the picture is drawn upside down
-/// under the quad and fades out downwards, as a reflection. `smooth` filters the picture;
-/// without it the nearest pixel is taken, which is several times cheaper and is what the
-/// covers at the sides and the reflections get - a shelf redraws every frame, in software.
-inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0 = 0.0f, float u1 = 1.0f,
-                     float shade = 0.0f, bool mirror = false, bool smooth = true) {
+/// `shade` moves the picture towards `shade_to` (0 = as is, 1 = that colour). With `mirror`
+/// the picture is drawn upside down under the quad and fades out downwards, as a reflection
+/// in the floor; `mirror_gap` is how far above the floor the picture hangs. `smooth` filters
+/// the picture; without it the nearest pixel is taken, which is several times cheaper and is
+/// what the covers at the sides and the reflections get - a shelf redraws every frame, in
+/// software.
+inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0, float u1, float shade,
+                     u32 shade_to, bool mirror, bool smooth, float mirror_gap = 0.0f) {
     if (img.Empty() || q.x1 <= q.x0) {
         return;
     }
     const int xa = std::max(0, static_cast<int>(std::floor(q.x0)));
     const int xb = std::min(c.Width(), static_cast<int>(std::ceil(q.x1)));
     const u32 keep = static_cast<u32>((1.0f - std::clamp(shade, 0.0f, 1.0f)) * 256.0f);
+    const u32 lose = 256 - keep;
+    const u32 tr = shade_to & 0xFF, tg = (shade_to >> 8) & 0xFF, tb = (shade_to >> 16) & 0xFF;
     u32* const pixels = c.Data();
     const int stride = c.Width();
     for (int x = xa; x < xb; ++x) {
@@ -141,29 +154,39 @@ inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0 = 0.0f
         }
         const float u = (u0 + (u1 - u0) * t) * (img.w - 1);
         const int ui = std::clamp(static_cast<int>(u + 0.5f), 0, img.w - 1);
-        const float y_begin = mirror ? top + h : top;
-        const float y_end = mirror ? top + h + h * 0.34f : top + h;
+        // The reflection hangs as far below the floor as the picture does above it.
+        const float floor = top + h + mirror_gap;
+        const float y_begin = mirror ? floor + mirror_gap : top;
+        const float y_end = mirror ? y_begin + h * 0.42f : top + h;
         const int ya = std::max(0, static_cast<int>(std::floor(y_begin)));
         const int yb = std::min(c.Height(), static_cast<int>(std::ceil(y_end)));
         const float v_step = (img.h - 1) / h;
         for (int y = ya; y < yb; ++y) {
-            float v = (y + 0.5f - top) * v_step; // Row of the picture, 0 at its top.
+            float v;
             u32 fade = 256;
             if (mirror) {
-                v = 2.0f * (img.h - 1) - v; // Fold back up from the bottom edge.
-                fade = static_cast<u32>(
-                    77.0f * std::clamp(1.0f - (y + 0.5f - y_begin) / (y_end - y_begin), 0.0f, 1.0f));
+                v = (img.h - 1) - (y + 0.5f - y_begin) * v_step; // Bottom row first.
+                const float f = 1.0f - (y + 0.5f - y_begin) / (y_end - y_begin);
+                fade = static_cast<u32>(64.0f * std::clamp(f * f, 0.0f, 1.0f));
+            } else {
+                v = (y + 0.5f - top) * v_step;
             }
             if (v < 0.0f || v > static_cast<float>(img.h - 1)) {
                 continue;
             }
-            u32 color = smooth ? SampleImage(img, u, v)
-                               : img.px[static_cast<std::size_t>(static_cast<int>(v + 0.5f)) * img.w + ui];
+            const u32 color =
+                smooth ? SampleImage(img, u, v)
+                       : img.px[static_cast<std::size_t>(static_cast<int>(v + 0.5f)) * img.w + ui];
+            // A see-through pixel (round icons have them) leaves what is behind it alone.
+            const u32 alpha = color >> 24;
+            if (alpha < 32) {
+                continue;
+            }
             u32 r = color & 0xFF, g = (color >> 8) & 0xFF, b = (color >> 16) & 0xFF;
             if (keep < 256) {
-                r = r * keep >> 8;
-                g = g * keep >> 8;
-                b = b * keep >> 8;
+                r = (r * keep + tr * lose) >> 8;
+                g = (g * keep + tg * lose) >> 8;
+                b = (b * keep + tb * lose) >> 8;
             }
             u32& dst = pixels[static_cast<std::size_t>(y) * stride + x];
             if (fade < 256) {
@@ -280,26 +303,30 @@ inline std::vector<std::string> WrapLines(Font& font, std::string_view text, int
 }
 
 // ---------------------------------------------------------------------------------------------
-// The cover shelf
+// The shelf
 
-enum class ShelfStyle { Coverflow, Carousel, Stack, Grid, Count };
+enum class ShelfStyle { Coverflow, Shelf, Carousel, Arc, Stack, Spotlight, Count };
 
 inline const char* ShelfStyleName(ShelfStyle style) {
     switch (style) {
     case ShelfStyle::Coverflow:
         return "Coverflow";
+    case ShelfStyle::Shelf:
+        return "Shelf";
     case ShelfStyle::Carousel:
         return "Carousel";
+    case ShelfStyle::Arc:
+        return "Arc";
     case ShelfStyle::Stack:
         return "Stack";
-    case ShelfStyle::Grid:
-        return "Grid";
+    case ShelfStyle::Spotlight:
+        return "Spotlight";
     default:
         return "";
     }
 }
 
-/// One game on the shelf. A game without artwork still gets a case, built from its icon.
+/// One game on the shelf: its cover if there is one, its icon otherwise.
 struct ShelfItem {
     const Image* cover{}; // Front, or the full wrap (back + spine + front) when `full_wrap`.
     bool full_wrap{};
@@ -321,6 +348,7 @@ struct ShelfPose {
     float width{};  // On-screen width.
     float h_near{}; // Height of the edge towards the middle of the shelf.
     float h_far{};  // Height of the edge away from it.
+    float lift{};   // How far above the floor it hangs.
     float shade{};
 };
 
@@ -331,107 +359,75 @@ inline ShelfPose PoseFor(ShelfStyle style, float d, float cx, float case_h) {
     const float ad = std::abs(d);
     const float sign = d < 0 ? -1.0f : 1.0f;
     const float t = std::min(ad, 1.0f); // 0 in the middle, 1 once fully to the side.
+    const float beyond = std::max(0.0f, ad - 1.0f);
     ShelfPose p;
     switch (style) {
-    case ShelfStyle::Carousel: {
+    case ShelfStyle::Shelf: // Upright cases side by side, the outer ones turned a little inwards.
+        p.cx = cx + sign * case_w * (0.96f * t + 0.70f * beyond);
+        p.width = case_w * (1.0f - 0.26f * t);
+        p.h_near = case_h * (1.0f - 0.20f * t);
+        p.h_far = case_h * (1.0f - 0.27f * t);
+        p.shade = std::min(0.45f, 0.06f * t + 0.10f * beyond);
+        break;
+    case ShelfStyle::Carousel: { // Flat, shrinking with distance.
         const float scale = std::max(0.42f, 1.0f - 0.20f * ad);
-        p.cx = cx + sign * case_w * (0.94f * t + 0.74f * std::max(0.0f, ad - 1.0f));
+        p.cx = cx + sign * case_w * (0.94f * t + 0.74f * beyond);
         p.width = case_w * scale;
         p.h_near = p.h_far = case_h * scale;
         p.shade = std::min(0.55f, 0.16f * ad);
         break;
     }
-    case ShelfStyle::Stack: {
+    case ShelfStyle::Arc: { // Flat, rising towards the sides like the rim of a bowl.
+        const float scale = std::max(0.46f, 1.0f - 0.16f * ad);
+        p.cx = cx + sign * case_w * (0.86f * t + 0.62f * beyond);
+        p.width = case_w * scale;
+        p.h_near = p.h_far = case_h * scale;
+        p.lift = case_h * 0.055f * ad * ad;
+        p.shade = std::min(0.50f, 0.12f * ad);
+        break;
+    }
+    case ShelfStyle::Stack: { // A fanned hand of cards.
         const float scale = std::max(0.50f, 1.0f - 0.10f * ad);
-        p.cx = cx + sign * case_w * (0.46f * t + 0.20f * std::max(0.0f, ad - 1.0f));
+        p.cx = cx + sign * case_w * (0.46f * t + 0.20f * beyond);
         p.width = case_w * scale;
         p.h_near = p.h_far = case_h * scale;
         p.shade = std::min(0.70f, 0.22f * ad);
         break;
     }
-    default: { // Coverflow: side covers turn away and close ranks.
-        p.cx = cx + sign * case_w * (0.70f * t + 0.30f * std::max(0.0f, ad - 1.0f));
+    case ShelfStyle::Spotlight: { // One large case, the rest small along the floor.
+        const float scale = 1.18f - 0.74f * t;
+        p.cx = cx + sign * case_w * (1.02f * t + 0.52f * beyond);
+        p.width = case_w * scale;
+        p.h_near = p.h_far = case_h * scale;
+        p.shade = std::min(0.50f, 0.30f * t + 0.05f * beyond);
+        break;
+    }
+    default: // Coverflow: side covers turn away and close ranks.
+        p.cx = cx + sign * case_w * (0.70f * t + 0.30f * beyond);
         p.width = case_w * (1.0f - 0.60f * t);
         p.h_near = case_h * (1.0f - 0.14f * t);
         p.h_far = case_h * (1.0f - 0.30f * t);
-        p.shade = std::min(0.60f, 0.12f * t + 0.10f * std::max(0.0f, ad - 1.0f));
+        p.shade = std::min(0.60f, 0.12f * t + 0.10f * beyond);
         break;
-    }
     }
     return p;
 }
 
-/// A case for a game with no artwork: its icon on a plate, the title underneath.
-inline void DrawPlaceholderCase(Canvas& c, Font& font, const ShelfItem& item, const Quad& q,
-                                float shade) {
-    const int x = static_cast<int>(q.x0), w = static_cast<int>(q.x1 - q.x0);
-    const float top_f = std::min(q.top0, q.top1);
-    const float h_f = std::max(q.h0, q.h1);
-    const int y = static_cast<int>(top_f), h = static_cast<int>(h_f);
-    if (w < 6 || h < 6) {
-        return;
-    }
-    const u32 plate_top = MixColor(MakeColor(0x3A, 0x3E, 0x47), MakeColor(0, 0, 0), shade);
-    const u32 plate_bottom = MixColor(MakeColor(0x22, 0x24, 0x2A), MakeColor(0, 0, 0), shade);
-    // The skewed outline: one column at a time, like a blit.
-    for (int col = 0; col < w; ++col) {
-        const float t = (col + 0.5f) / w;
-        const float top = q.top0 + (q.top1 - q.top0) * t;
-        const float hh = q.h0 + (q.h1 - q.h0) * t;
-        FillGradientV(c, x + col, static_cast<int>(top), 1, static_cast<int>(hh), plate_top,
-                      plate_bottom);
-    }
-    // A coloured band along the spine edge, as the cases have.
-    c.FillRect(x, y + h / 14, std::max(2, w / 28), h - h / 7,
-               MixColor(MakeColor(0xFA, 0xAA, 0x49), MakeColor(0, 0, 0), shade));
-    if (w < 70) {
-        return; // Too narrow (turned away) for the icon and the text to read.
-    }
-    const int icon = std::min(w * 46 / 100, h * 46 / 100);
-    const int ix = x + (w - icon) / 2, iy = y + h * 16 / 100;
-    if (item.icon != nullptr && !item.icon->empty() && item.icon_size > 0) {
-        c.BlitIcon(*item.icon, item.icon_size, ix, iy, icon);
-    } else {
-        c.FillRoundRect(ix, iy, icon, icon, icon / 8, MakeColor(0x4A, 0x4E, 0x58));
-        DrawIcon(c, Icon::Shelf, ix + icon / 2.0f, iy + icon / 2.0f, icon * 0.5f,
-                 MakeColor(0x9B, 0xA0, 0xA6));
-    }
-    const int size = std::clamp(w / 13, 13, 24);
-    const std::vector<std::string> lines = WrapLines(font, item.title, size, w - w / 6);
-    int ty = iy + icon + size + h / 20;
-    for (std::size_t i = 0; i < lines.size() && i < 2; ++i) {
-        const std::string text = font.Truncate(lines[i], size, w - w / 6);
-        font.Draw(c, x + (w - font.Measure(text, size)) / 2, ty, text, size,
-                  MixColor(MakeColor(0xF1, 0xF2, 0xF4), MakeColor(0, 0, 0), shade));
-        ty += size + 6;
-    }
-    if (!item.badge.empty()) {
-        const int bs = std::max(12, size - 4);
-        const int bw = font.Measure(item.badge, bs) + 14;
-        c.FillRoundRect(x + (w - bw) / 2, y + h - bs - h / 12, bw, bs + 8, 7,
-                        MakeColor(0x4A, 0x4E, 0x58));
-        font.Draw(c, x + (w - bw) / 2 + 7, y + h - h / 12 - 2, item.badge, bs,
-                  MakeColor(0xC8, 0xCC, 0xD2));
-    }
-}
-
 /// The back of a case that has no back artwork: what is known about the game, as text.
 inline void DrawTextBack(Canvas& c, Font& font, const ShelfItem& item, int x, int y, int w, int h) {
-    FillGradientV(c, x, y, w, h, MakeColor(0x30, 0x33, 0x3B), MakeColor(0x1E, 0x20, 0x26));
-    c.FillRect(x + w - std::max(2, w / 28), y + h / 14, std::max(2, w / 28), h - h / 7,
-               MakeColor(0xFA, 0xAA, 0x49));
+    c.FillRoundRect(x, y, w, h, 10, kColSurface);
+    c.FillRoundRect(x, y, std::max(3, w / 40), h, 2, kColAccent);
     if (w < 120) {
         return;
     }
     const int pad = w / 12;
     int ty = y + pad + 22;
     for (const std::string& line : WrapLines(font, item.title, 22, w - 2 * pad)) {
-        font.Draw(c, x + pad, ty, line, 22, MakeColor(0xF1, 0xF2, 0xF4));
+        font.Draw(c, x + pad, ty, line, 22, kColText);
         ty += 28;
     }
     if (!item.publisher.empty()) {
-        font.Draw(c, x + pad, ty, font.Truncate(item.publisher, 16, w - 2 * pad), 16,
-                  MakeColor(0xFA, 0xAA, 0x49));
+        font.Draw(c, x + pad, ty, font.Truncate(item.publisher, 16, w - 2 * pad), 16, kColAccent);
         ty += 26;
     }
     ty += 8;
@@ -439,20 +435,28 @@ inline void DrawTextBack(Canvas& c, Font& font, const ShelfItem& item, int x, in
         if (ty > y + h - pad) {
             break;
         }
-        font.Draw(c, x + pad, ty, font.Truncate(line, 16, w - 2 * pad), 16,
-                  MakeColor(0xB4, 0xB8, 0xBF));
+        font.Draw(c, x + pad, ty, font.Truncate(line, 16, w - 2 * pad), 16, kColTextDim);
         ty += 23;
     }
 }
 
 struct ShelfView {
-    int x{}, y{}, w{}, h{};  // Area the shelf may use.
+    int x{}, y{}, w{}, h{}; // Area the shelf may use.
     ShelfStyle style{ShelfStyle::Coverflow};
-    float position{};        // Eased index of the selected game.
+    float position{}; // Eased index of the selected game.
     int count{};
-    float flip{};            // 0 = front, 1 = back, in between while turning.
-    bool reflections{true};
+    float flip{}; // 0 = front, 1 = back, in between while turning.
+    float time{}; // Seconds; drives the gentle bobbing of the games that are not selected.
 };
+
+inline float ShelfCaseHeight(const ShelfView& v) {
+    return std::min(v.h * 0.58f, v.w * 0.40f / kCaseAspect * 1.6f);
+}
+
+/// Y of the floor the games stand on (and are reflected in).
+inline float ShelfFloorY(const ShelfView& v) {
+    return v.y + v.h * 0.47f + ShelfCaseHeight(v) / 2;
+}
 
 /// Draws the shelf. `get` supplies each game on demand, so nothing is built for games that are
 /// off screen.
@@ -461,65 +465,96 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
     if (v.count <= 0) {
         return;
     }
-    const float case_h = std::min(v.h * 0.60f, v.w * 0.40f / kCaseAspect * 1.6f);
+    const float case_h = ShelfCaseHeight(v);
     const float cx = v.x + v.w / 2.0f;
-    const float base = v.y + v.h * 0.46f + case_h / 2; // The shelf's floor.
+    const float floor = ShelfFloorY(v);
     const int centre = static_cast<int>(std::lround(v.position));
     constexpr int reach = 5;
+    // Covers darken into the backdrop: towards black on dark, towards the floor on light.
+    const u32 shade_to = g_theme_light ? kColShelfHorizon : MakeColor(0, 0, 0);
+    static Image icon_image; // Reused: an icon is copied into it to be drawn like a cover.
 
     const auto draw_one = [&](int index) {
         const float d = index - v.position;
+        const float away = std::min(std::abs(d), 1.0f);
         const ShelfPose p = PoseFor(v.style, d, cx, case_h);
+        // Games that are not selected hover, each to its own beat.
+        const float bob = away * case_h * 0.014f * (1.0f + std::sin(v.time * 1.7f + index * 1.9f));
+        const float gap = p.lift + bob;
         const bool left_side = d < 0;
-        Quad q;
-        q.x0 = p.cx - p.width / 2;
-        q.x1 = p.cx + p.width / 2;
-        // The edge towards the middle of the shelf is the tall one.
-        const float h_left = left_side ? p.h_far : p.h_near;
-        const float h_right = left_side ? p.h_near : p.h_far;
-        const float lean = std::min(std::abs(d), 1.0f);
-        q.h0 = p.h_near + (h_left - p.h_near) * lean;
-        q.h1 = p.h_near + (h_right - p.h_near) * lean;
-        q.top0 = base - q.h0;
-        q.top1 = base - q.h1;
 
         const ShelfItem item = get(index);
         const bool selected = index == centre;
-        float turn = selected ? v.flip : 0.0f;
-        bool show_back = false;
-        if (turn > 0.0f) {
-            // Turning about the vertical axis: the case narrows to nothing, then widens again
-            // showing its other side.
-            const float squash = std::abs(std::cos(turn * 3.14159265f));
-            show_back = turn > 0.5f;
-            const float mid = (q.x0 + q.x1) / 2, half = (q.x1 - q.x0) / 2 * std::max(squash, 0.02f);
-            q.x0 = mid - half;
-            q.x1 = mid + half;
-        }
+        const float turn = selected ? v.flip : 0.0f;
+        const bool show_back = turn > 0.5f;
+        // Turning about the vertical axis: the case narrows to nothing, then widens again
+        // showing its other side.
+        const float squash =
+            turn > 0.0f ? std::max(std::abs(std::cos(turn * 3.14159265f)), 0.02f) : 1.0f;
 
         const bool has_art = item.cover != nullptr && !item.cover->Empty();
-        if (has_art) {
-            float u0 = 0.0f, u1 = 1.0f;
-            if (item.full_wrap) {
-                // back | spine | front
-                u0 = show_back ? 0.0f : 1.0f - kWrapFace;
-                u1 = show_back ? kWrapFace : 1.0f;
+        const bool has_icon = item.icon != nullptr && !item.icon->empty() && item.icon_size > 0;
+
+        if (!has_art) {
+            // No cover: the game's icon on its own, standing on the floor like the cases do.
+            const float side = p.h_near * 0.62f;
+            if (show_back) {
+                const float w = case_h * kCaseAspect * squash;
+                DrawTextBack(c, font, item, static_cast<int>(p.cx - w / 2),
+                             static_cast<int>(floor - case_h), static_cast<int>(w),
+                             static_cast<int>(case_h));
+                return;
             }
-            if (show_back && !item.full_wrap) {
-                DrawTextBack(c, font, item, static_cast<int>(q.x0), static_cast<int>(q.top0),
-                             static_cast<int>(q.x1 - q.x0), static_cast<int>(q.h0));
+            Quad q;
+            q.x0 = p.cx - side * squash / 2;
+            q.x1 = p.cx + side * squash / 2;
+            q.h0 = q.h1 = side;
+            q.top0 = q.top1 = floor - gap - side;
+            if (has_icon) {
+                icon_image.w = icon_image.h = item.icon_size;
+                icon_image.px = *item.icon;
+                BlitQuad(c, icon_image, q, 0.0f, 1.0f, p.shade, shade_to, true, false, gap);
+                BlitQuad(c, icon_image, q, 0.0f, 1.0f, p.shade, shade_to, false, selected);
             } else {
-                if (v.reflections) {
-                    BlitQuad(c, *item.cover, q, u0, u1, p.shade, true, false);
+                // Not even an icon: a soft disc with the first letter of the title.
+                const float r = side / 2;
+                FillDisc(c, p.cx, floor - gap - r, r * squash, MixColor(kColBadge, shade_to, p.shade));
+                if (!item.title.empty() && squash > 0.6f) {
+                    const std::string letter{item.title.substr(0, 1)};
+                    const int size = static_cast<int>(r);
+                    font.Draw(c, static_cast<int>(p.cx) - font.Measure(letter, size) / 2,
+                              static_cast<int>(floor - gap - r + size * 0.35f), letter, size,
+                              MixColor(kColText, shade_to, p.shade));
                 }
-                BlitQuad(c, *item.cover, q, u0, u1, p.shade, false, selected);
             }
-        } else if (show_back) {
+            return;
+        }
+
+        Quad q;
+        const float half = p.width * squash / 2;
+        q.x0 = p.cx - half;
+        q.x1 = p.cx + half;
+        // The edge towards the middle of the shelf is the tall one.
+        const float h_left = left_side ? p.h_far : p.h_near;
+        const float h_right = left_side ? p.h_near : p.h_far;
+        q.h0 = p.h_near + (h_left - p.h_near) * away;
+        q.h1 = p.h_near + (h_right - p.h_near) * away;
+        q.top0 = floor - gap - q.h0;
+        q.top1 = floor - gap - q.h1;
+
+        float u0 = 0.0f, u1 = 1.0f;
+        if (item.full_wrap) {
+            // back | spine | front
+            u0 = show_back ? 0.0f : 1.0f - kWrapFace;
+            u1 = show_back ? kWrapFace : 1.0f;
+        }
+        if (show_back && !item.full_wrap) {
             DrawTextBack(c, font, item, static_cast<int>(q.x0), static_cast<int>(q.top0),
                          static_cast<int>(q.x1 - q.x0), static_cast<int>(q.h0));
-        } else {
-            DrawPlaceholderCase(c, font, item, q, p.shade);
+            return;
         }
+        BlitQuad(c, *item.cover, q, u0, u1, p.shade, shade_to, true, false, gap);
+        BlitQuad(c, *item.cover, q, u0, u1, p.shade, shade_to, false, selected);
     };
 
     // Far to near, so nearer covers overlap the ones behind; the selected one goes last.
@@ -540,11 +575,12 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
 // Buttons and bars
 
 /// A round button with an icon, and optionally the pad button that triggers it as a small
-/// chip. Returns nothing; hit-testing is the caller's (centre + radius).
+/// chip. Hit-testing is the caller's (centre + radius).
 inline void DrawRoundButton(Canvas& c, Font& font, Icon icon, int cx, int cy, int radius,
                             std::string_view pad_hint, bool highlighted) {
-    const u32 fill = highlighted ? MakeColor(0xFA, 0xAA, 0x49) : MakeColor(0x30, 0x33, 0x39);
-    const u32 fg = highlighted ? MakeColor(0x17, 0x18, 0x1B) : MakeColor(0xF1, 0xF2, 0xF4);
+    const u32 fill = highlighted ? kColAccent : kColSurfaceHi;
+    const u32 fg = highlighted ? kColOnAccent : kColText;
+    FillDisc(c, static_cast<float>(cx), static_cast<float>(cy), radius + 1.5f, kColLine);
     FillDisc(c, static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(radius), fill);
     DrawIcon(c, icon, static_cast<float>(cx), static_cast<float>(cy), radius * 1.05f, fg);
     if (!pad_hint.empty()) {
@@ -552,10 +588,9 @@ inline void DrawRoundButton(Canvas& c, Font& font, Icon icon, int cx, int cy, in
         const int chip_w = std::max(22, tw + 12);
         const int chip_x = cx + radius - chip_w / 2 - 2;
         const int chip_y = cy - radius - 6;
-        c.FillRoundRect(chip_x, chip_y, chip_w, 22, 11, MakeColor(0x17, 0x18, 0x1B));
-        c.FillRoundRect(chip_x + 1, chip_y + 1, chip_w - 2, 20, 10, MakeColor(0x4A, 0x4E, 0x58));
+        c.FillRoundRect(chip_x, chip_y, chip_w, 22, 11, kColBadge);
         font.Draw(c, chip_x + (chip_w - tw) / 2, CenterBaseline(chip_y, 22, 15), pad_hint, 15,
-                  MakeColor(0xF1, 0xF2, 0xF4));
+                  kColText);
     }
 }
 
@@ -570,19 +605,18 @@ inline int DrawPill(Canvas& c, Font& font, int x, int y, std::string_view pad_hi
                     std::string_view label, bool highlighted = false) {
     constexpr int h = 34;
     const int hint_w = pad_hint.empty() ? 0 : std::max(24, font.Measure(pad_hint, 16) + 14);
-    const int label_w = font.Measure(label, 17);
-    const int w = 14 + hint_w + (hint_w ? 8 : 0) + label_w + 16;
-    c.FillRoundRect(x, y, w, h, h / 2,
-                    highlighted ? MakeColor(0xFA, 0xAA, 0x49) : MakeColor(0x2A, 0x2D, 0x33));
+    const int w = PillWidth(font, pad_hint, label);
+    c.FillRoundRect(x, y, w, h, h / 2, highlighted ? kColAccent : kColSurfaceHi);
     int pen = x + 14;
     if (hint_w) {
-        c.FillRoundRect(pen - 6, y + 5, hint_w, h - 10, (h - 10) / 2, MakeColor(0x4A, 0x4E, 0x58));
+        c.FillRoundRect(pen - 6, y + 5, hint_w, h - 10, (h - 10) / 2,
+                        highlighted ? kColOnAccent : kColBadge);
         font.Draw(c, pen - 6 + (hint_w - font.Measure(pad_hint, 16)) / 2,
-                  CenterBaseline(y + 5, h - 10, 16), pad_hint, 16, MakeColor(0xF1, 0xF2, 0xF4));
+                  CenterBaseline(y + 5, h - 10, 16), pad_hint, 16,
+                  highlighted ? kColAccent : kColText);
         pen += hint_w + 2;
     }
-    font.Draw(c, pen, CenterBaseline(y, h, 17), label, 17,
-              highlighted ? MakeColor(0x17, 0x18, 0x1B) : MakeColor(0xD6, 0xD9, 0xDE));
+    font.Draw(c, pen, CenterBaseline(y, h, 17), label, 17, highlighted ? kColOnAccent : kColText);
     return w;
 }
 
@@ -596,7 +630,7 @@ struct DrawerItem {
 };
 
 constexpr int kDrawerW = 268;
-constexpr int kDrawerItemH = 44;
+constexpr int kDrawerItemH = 46;
 constexpr int kDrawerHeaderH = 38;
 
 inline int DrawerItemHeight(const DrawerItem& item) {
@@ -613,15 +647,11 @@ inline int DrawerItemOffset(std::span<const DrawerItem> items, int index) {
 }
 
 /// Draws the drawer. `active` is the page on screen, `cursor` the highlighted item while the
-/// drawer has the focus. `scroll` is in pixels.
+/// drawer has the focus. `scroll` is in pixels, `time` in seconds (the focus ring breathes).
 inline void DrawDrawer(Canvas& c, Font& font, int x, int y, int h, std::string_view title,
                        std::string_view subtitle, std::span<const DrawerItem> items, int active,
-                       int cursor, bool focused, int scroll) {
-    c.FillRect(x, y, kDrawerW, h, MakeColor(0x1E, 0x20, 0x24));
-    font.Draw(c, x + 24, y + 44, title, 26, MakeColor(0xF1, 0xF2, 0xF4));
-    if (!subtitle.empty()) {
-        font.Draw(c, x + 24, y + 66, subtitle, 14, MakeColor(0x9B, 0xA0, 0xA6));
-    }
+                       int cursor, bool focused, int scroll, float time) {
+    c.FillRect(x, y, kDrawerW, h, kColRail);
     const int list_top = y + 84;
     const int list_bottom = y + h - 8;
     int iy = list_top - scroll;
@@ -631,10 +661,9 @@ inline void DrawDrawer(Canvas& c, Font& font, int x, int y, int h, std::string_v
         if (iy + ih > list_top && iy < list_bottom) {
             if (item.header) {
                 if (iy + 8 > list_top) {
-                    c.FillRect(x + 20, iy + 8, kDrawerW - 40, 1, MakeColor(0x30, 0x33, 0x39));
+                    c.FillRect(x + 20, iy + 8, kDrawerW - 40, 1, kColLine);
                 }
-                const u32 color =
-                    item.advanced ? MakeColor(0xE8, 0x9A, 0x4A) : MakeColor(0x9B, 0xA0, 0xA6);
+                const u32 color = item.advanced ? kColWarnText : kColTextDim;
                 int tx = x + 24;
                 if (item.advanced) {
                     DrawIcon(c, Icon::Warning, tx + 7.0f, iy + 24.0f, 15.0f, color);
@@ -645,23 +674,27 @@ inline void DrawDrawer(Canvas& c, Font& font, int x, int y, int h, std::string_v
                 const bool on_cursor = focused && i == cursor;
                 const bool is_active = i == active;
                 if (on_cursor) {
-                    c.FillRoundRect(x + 12, iy + 2, kDrawerW - 24, ih - 4, (ih - 4) / 2,
-                                    MakeColor(0xFA, 0xAA, 0x49));
-                } else if (is_active) {
-                    c.FillRoundRect(x + 12, iy + 2, kDrawerW - 24, ih - 4, (ih - 4) / 2,
-                                    MakeColor(0x3A, 0x32, 0x26));
+                    DrawFocusRing(c, x + 14, iy + 4, kDrawerW - 28, ih - 8, 6, time, kColSurfaceHi);
                 }
-                const u32 fg = on_cursor   ? MakeColor(0x17, 0x18, 0x1B)
-                               : is_active ? MakeColor(0xFA, 0xAA, 0x49)
-                                           : MakeColor(0xD6, 0xD9, 0xDE);
-                font.Draw(c, x + 32, CenterBaseline(iy, ih, 18), item.label, 18, fg);
+                if (is_active) {
+                    // The page on screen: accent text and a bar at its left, as a console's
+                    // settings list marks it.
+                    c.FillRoundRect(x + 22, iy + 11, 4, ih - 22, 2, kColAccent);
+                }
+                font.Draw(c, x + 38, CenterBaseline(iy, ih, 19), item.label, 19,
+                          is_active ? kColAccent : kColText);
             }
         }
         iy += ih;
     }
-    // Fade the list out under the title so scrolled items do not run into it.
-    c.FillRect(x, y + 72, kDrawerW, 12, MakeColor(0x1E, 0x20, 0x24));
-    c.FillRect(x + kDrawerW - 1, y, 1, h, MakeColor(0x2A, 0x2D, 0x33));
+    // The title stays put; the list scrolls under it.
+    c.FillRect(x, y, kDrawerW, 84, kColRail);
+    font.Draw(c, x + 24, y + 44, title, 26, kColText);
+    if (!subtitle.empty()) {
+        font.Draw(c, x + 24, y + 66, subtitle, 14, kColTextDim);
+    }
+    c.FillRect(x + 20, y + 83, kDrawerW - 40, 1, kColLine);
+    c.FillRect(x + kDrawerW - 1, y, 1, h, kColLine);
 }
 
 /// A notice across the top of a page. Returns its height.
@@ -669,22 +702,28 @@ inline int DrawBanner(Canvas& c, Font& font, int x, int y, int w, std::string_vi
                       std::string_view text) {
     const std::vector<std::string> lines = WrapLines(font, text, 16, w - 76);
     const int h = 40 + static_cast<int>(lines.size()) * 21 + 10;
-    c.FillRoundRect(x, y, w, h, 14, MakeColor(0x4A, 0x30, 0x16));
-    c.FillRoundRect(x, y, 6, h, 3, MakeColor(0xE8, 0x9A, 0x4A));
-    DrawIcon(c, Icon::Warning, x + 34.0f, y + 26.0f, 24.0f, MakeColor(0xFF, 0xC4, 0x7A));
-    font.Draw(c, x + 58, y + 30, title, 18, MakeColor(0xFF, 0xD8, 0xA8));
+    c.FillRoundRect(x, y, w, h, 8, kColWarnBg);
+    c.FillRoundRect(x, y, 6, h, 3, kColWarnText);
+    DrawIcon(c, Icon::Warning, x + 34.0f, y + 26.0f, 24.0f, kColWarnText);
+    font.Draw(c, x + 58, y + 30, title, 18, kColWarnText);
     int ty = y + 54;
     for (const std::string& line : lines) {
-        font.Draw(c, x + 58, ty, line, 16, MakeColor(0xE6, 0xC9, 0xA6));
+        font.Draw(c, x + 58, ty, line, 16, kColWarnText);
         ty += 21;
     }
     return h;
 }
 
+/// Geometry of the info sheet, for hit-testing a tap outside it.
+struct SheetRect {
+    int x{}, y{}, w{}, h{};
+};
+
 /// A sheet rising from the bottom that explains the focused option.
-inline void DrawInfoSheet(Canvas& c, Font& font, int screen_w, int screen_h, int left,
-                          std::string_view title, std::string_view body,
-                          std::span<const std::string> facts, std::string_view dismiss_hint) {
+inline SheetRect DrawInfoSheet(Canvas& c, Font& font, int screen_w, int screen_h, int left,
+                               std::string_view title, std::string_view body,
+                               std::span<const std::string> facts,
+                               std::string_view dismiss_hint) {
     const int w = std::min(screen_w - left - 48, 860);
     const int x = left + (screen_w - left - w) / 2;
     const std::vector<std::string> lines = WrapLines(font, body, 19, w - 64);
@@ -692,25 +731,27 @@ inline void DrawInfoSheet(Canvas& c, Font& font, int screen_w, int screen_h, int
                   (facts.empty() ? 0 : 14) + 44;
     const int y = screen_h - h - 28;
     // Scrim.
-    c.FillRect(left, 0, screen_w - left, screen_h, WithAlpha(MakeColor(0, 0, 0), 120));
-    c.FillRoundRect(x, y, w, h, 24, MakeColor(0x2A, 0x2D, 0x33));
-    c.FillRoundRect(x + w / 2 - 24, y + 10, 48, 4, 2, MakeColor(0x5A, 0x5E, 0x68));
-    DrawIcon(c, Icon::Info, x + 44.0f, y + 54.0f, 26.0f, MakeColor(0xFA, 0xAA, 0x49));
-    font.Draw(c, x + 70, y + 62, font.Truncate(title, 24, w - 110), 24, MakeColor(0xF1, 0xF2, 0xF4));
+    c.FillRect(left, 0, screen_w - left, screen_h, WithAlpha(MakeColor(0, 0, 0), 110));
+    c.FillRoundRect(x - 1, y - 1, w + 2, h + 2, 13, kColLine);
+    c.FillRoundRect(x, y, w, h, 12, kColSurfaceHi);
+    c.FillRoundRect(x + w / 2 - 24, y + 10, 48, 4, 2, kColBadge);
+    DrawIcon(c, Icon::Info, x + 44.0f, y + 54.0f, 26.0f, kColAccent);
+    font.Draw(c, x + 70, y + 62, font.Truncate(title, 24, w - 110), 24, kColText);
     int ty = y + 104;
     for (const std::string& line : lines) {
-        font.Draw(c, x + 32, ty, line, 19, MakeColor(0xD6, 0xD9, 0xDE));
+        font.Draw(c, x + 32, ty, line, 19, kColText);
         ty += 27;
     }
     if (!facts.empty()) {
         ty += 6;
         for (const std::string& fact : facts) {
-            font.Draw(c, x + 32, ty, font.Truncate(fact, 16, w - 64), 16, MakeColor(0x9B, 0xA0, 0xA6));
+            font.Draw(c, x + 32, ty, font.Truncate(fact, 16, w - 64), 16, kColTextDim);
             ty += 24;
         }
     }
     const int hw = font.Measure(dismiss_hint, 15);
-    font.Draw(c, x + w - 32 - hw, y + h - 18, dismiss_hint, 15, MakeColor(0x9B, 0xA0, 0xA6));
+    font.Draw(c, x + w - 32 - hw, y + h - 18, dismiss_hint, 15, kColTextDim);
+    return {x, y, w, h};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -723,6 +764,7 @@ struct HomeView {
     float position{};
     int count{};
     float flip{};
+    float time{};
     std::string_view app_name;
     std::string_view app_tag;   // "for Switch 2"
     std::string_view title;     // Selected game.
@@ -732,6 +774,12 @@ struct HomeView {
     bool compact{};             // Narrow (rotated) screen: fewer pills.
 };
 
+/// One pill of the bar, with where it ended up (for touch).
+struct HomePill {
+    int x{}, y{}, w{}, h{};
+    char action{}; // 'A' play, 'X' flip, 'Y' search, 'S' style, 'D' details
+};
+
 /// Where the touchable parts of the home screen ended up.
 struct HomeLayout {
     int options_cx{}, options_cy{};
@@ -739,6 +787,8 @@ struct HomeLayout {
     int button_radius{};
     int prev_x{}, next_x{}, arrows_y{}, arrow_radius{}; // The two arrows beside the title.
     int shelf_x{}, shelf_y{}, shelf_w{}, shelf_h{};
+    HomePill pills[5]{};
+    int pill_count{};
 };
 
 inline HomeLayout LayoutHome(int screen_w, int screen_h) {
@@ -760,24 +810,7 @@ inline HomeLayout LayoutHome(int screen_w, int screen_h) {
 
 inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
                            const std::function<ShelfItem(int)>& get) {
-    const HomeLayout l = LayoutHome(v.screen_w, v.screen_h);
-    // Backdrop: dark, a little lighter where the shelf stands.
-    FillGradientV(c, 0, 0, v.screen_w, v.screen_h * 62 / 100, MakeColor(0x14, 0x15, 0x18),
-                  MakeColor(0x24, 0x26, 0x2C));
-    FillGradientV(c, 0, v.screen_h * 62 / 100, v.screen_w, v.screen_h - v.screen_h * 62 / 100,
-                  MakeColor(0x1B, 0x1C, 0x21), MakeColor(0x10, 0x11, 0x13));
-
-    // Top line: the app on the left, where we are in the library on the right.
-    const int name_w = font.Draw(c, 28, 40, v.app_name, 24, MakeColor(0xF1, 0xF2, 0xF4));
-    if (!v.app_tag.empty()) {
-        font.Draw(c, 28 + name_w + 10, 40, v.app_tag, 15, MakeColor(0x9B, 0xA0, 0xA6));
-    }
-    std::string right{v.counter};
-    if (!v.search.empty()) {
-        right = "\"" + std::string{v.search} + "\"   " + right;
-    }
-    font.Draw(c, v.screen_w - 28 - font.Measure(right, 17), 38, right, 17,
-              MakeColor(0x9B, 0xA0, 0xA6));
+    HomeLayout l = LayoutHome(v.screen_w, v.screen_h);
 
     ShelfView shelf;
     shelf.x = l.shelf_x;
@@ -788,28 +821,48 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     shelf.position = v.position;
     shelf.count = v.count;
     shelf.flip = v.flip;
+    shelf.time = v.time;
+
+    // Backdrop: a wall that brightens towards the horizon, then a floor that takes the
+    // reflections and falls away into the bottom of the screen.
+    const int floor = static_cast<int>(ShelfFloorY(shelf));
+    FillGradientV(c, 0, 0, v.screen_w, floor, kColShelfTop, kColShelfHorizon);
+    FillGradientV(c, 0, floor, v.screen_w, v.screen_h - floor, kColFloorNear, kColFloorFar);
+
+    // Top line: the app on the left, where we are in the library on the right.
+    const int name_w = font.Draw(c, 28, 40, v.app_name, 24, kColText);
+    if (!v.app_tag.empty()) {
+        font.Draw(c, 28 + name_w + 10, 40, v.app_tag, 15, kColTextDim);
+    }
+    std::string right{v.counter};
+    if (!v.search.empty()) {
+        right = "\"" + std::string{v.search} + "\"   " + right;
+    }
+    font.Draw(c, v.screen_w - 28 - font.Measure(right, 17), 38, right, 17, kColTextDim);
+
     DrawShelf(c, font, shelf, get);
 
-    // Title block, centred under the shelf, with the two arrows WiiFlow puts beside it.
+    // Title block, centred under the shelf, with an arrow either side of it.
     const int text_w = l.next_x - l.prev_x - 2 * l.arrow_radius - 40;
     const std::string title = font.Truncate(v.title, 28, text_w);
-    font.Draw(c, (v.screen_w - font.Measure(title, 28)) / 2, v.screen_h - 126, title, 28,
-              MakeColor(0xF1, 0xF2, 0xF4));
+    font.Draw(c, (v.screen_w - font.Measure(title, 28)) / 2, v.screen_h - 126, title, 28, kColText);
     if (!v.publisher.empty()) {
         const std::string pub = font.Truncate(v.publisher, 17, text_w);
         font.Draw(c, (v.screen_w - font.Measure(pub, 17)) / 2, v.screen_h - 100, pub, 17,
-                  MakeColor(0x9B, 0xA0, 0xA6));
+                  kColTextDim);
     }
     if (v.count > 1) {
         for (const int dir : {-1, 1}) {
             const int ax = dir < 0 ? l.prev_x : l.next_x;
+            FillDisc(c, static_cast<float>(ax), static_cast<float>(l.arrows_y), l.arrow_radius + 1.5f,
+                     kColLine);
             FillDisc(c, static_cast<float>(ax), static_cast<float>(l.arrows_y),
-                     static_cast<float>(l.arrow_radius), MakeColor(0x2A, 0x2D, 0x33));
+                     static_cast<float>(l.arrow_radius), kColSurfaceHi);
             const float tip = ax + dir * 7.0f, tail = ax - dir * 5.0f;
             StrokeLine(c, tail, l.arrows_y - 9.0f, tip, static_cast<float>(l.arrows_y), 3.0f,
-                       MakeColor(0xD6, 0xD9, 0xDE));
+                       kColText);
             StrokeLine(c, tail, l.arrows_y + 9.0f, tip, static_cast<float>(l.arrows_y), 3.0f,
-                       MakeColor(0xD6, 0xD9, 0xDE));
+                       kColText);
         }
     }
 
@@ -819,22 +872,23 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     struct Pill {
         const char* hint;
         const char* label;
-        bool primary;
+        char action;
     };
-    const Pill full[] = {{"A", "Play", true},     {"X", "Flip", false},  {"Y", "Search", false},
-                         {"L R", "Style", false}, {"+", "Details", false}};
-    const Pill narrow[] = {{"A", "Play", true}, {"X", "Flip", false}, {"Y", "Search", false}};
+    const Pill full[] = {{"A", "Play", 'A'},     {"X", "Flip", 'X'},  {"Y", "Search", 'Y'},
+                         {"L R", "Style", 'S'}, {"+", "Details", 'D'}};
+    const Pill narrow[] = {{"A", "Play", 'A'}, {"X", "Flip", 'X'}, {"Y", "Search", 'Y'}};
     const std::span<const Pill> pills = v.compact ? std::span<const Pill>{narrow}
                                                   : std::span<const Pill>{full};
     if (v.count > 0) {
-        // Measure first so the row can be centred.
         int total = 0;
         for (const Pill& p : pills) {
             total += PillWidth(font, p.hint, p.label) + 10;
         }
         int px = (v.screen_w - (total - 10)) / 2;
         for (const Pill& p : pills) {
-            px += DrawPill(c, font, px, l.options_cy - 17, p.hint, p.label, p.primary) + 10;
+            const int w = DrawPill(c, font, px, l.options_cy - 17, p.hint, p.label, p.action == 'A');
+            l.pills[l.pill_count++] = {px, l.options_cy - 17, w, 34, p.action};
+            px += w + 10;
         }
     }
     return l;
