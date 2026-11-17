@@ -382,6 +382,7 @@ enum class CellKind {
     LoadState,
     GameShare,
     Fps,
+    Resolution,
     Amiibo,
     Cheats,
     Settings,
@@ -435,9 +436,10 @@ void BuildHomeCells() {
 
     const float quick_top = layout_top + rows * (tile_h + row_gap) + 40.0f;
     s_quick_label_y = (quick_top - 28.0f) / H;
-    constexpr CellKind quick[] = {CellKind::SaveState, CellKind::LoadState, CellKind::GameShare,
-                                  CellKind::Fps,       CellKind::Amiibo,    CellKind::Cheats};
-    constexpr int quick_count = 6;
+    constexpr CellKind quick[] = {CellKind::SaveState,  CellKind::LoadState, CellKind::GameShare,
+                                  CellKind::Resolution, CellKind::Fps,       CellKind::Amiibo,
+                                  CellKind::Cheats};
+    constexpr int quick_count = 7;
     const float quick_w = (width - (quick_count - 1) * gap) / quick_count;
     for (int i = 0; i < quick_count; ++i) {
         add(quick[i], 0, left + i * (quick_w + gap), quick_top, quick_w, 62.0f);
@@ -819,6 +821,16 @@ void PaintHome(VideoCore::OverlayMenuState& state) {
             out.label = "GameShare";
             out.sub = GameShare::IsEnabled() ? std::string{"On: "} + GameShare::ModeName() : "Off";
             break;
+        case CellKind::Resolution: {
+            // The render scale, with what it makes of the top screen's 400 x 240.
+            const int factor = static_cast<int>(Settings::values.resolution_factor.GetValue());
+            out.label = "Resolution";
+            out.sub = factor == 0 ? std::string{"Auto (fits the screen)"}
+                                  : std::to_string(factor) + "x   " +
+                                        std::to_string(400 * factor) + " x " +
+                                        std::to_string(240 * factor);
+            break;
+        }
         case CellKind::Fps:
             out.label = "FPS Counter";
             out.sub = Settings::values.show_fps.GetValue() ? "On" : "Off";
@@ -1137,6 +1149,12 @@ QuickMenuAction ActivateCell() {
     case CellKind::Fps:
         Settings::values.show_fps = !Settings::values.show_fps.GetValue();
         break;
+    case CellKind::Resolution: {
+        // 1x, 2x, 3x, 4x and round again; Auto stays in the settings.
+        const u32 factor = Settings::values.resolution_factor.GetValue();
+        Settings::values.resolution_factor = factor >= 4 ? 1 : factor + 1;
+        break;
+    }
     case CellKind::Amiibo:
         // A switch, not a page: what happens the next time the game asks for one.
         SetAmiiboRequestMode((GetAmiiboRequestMode() + 1) % 3);

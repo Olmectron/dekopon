@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,9 @@
 // input thread and the active renderer reads it back on the emulation thread to draw it on top of
 // the game.
 namespace VideoCore {
+
+/// Shows the render scale and the size it comes to, where the FPS counter goes.
+inline std::atomic<bool> g_show_resolution{false};
 
 struct OverlayMenuItem {
     std::string label;

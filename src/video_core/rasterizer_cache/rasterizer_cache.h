@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstring>
 #include <limits>
+#include <vector>
 #include <type_traits>
 #include <boost/container/small_vector.hpp>
 #include <boost/range/iterator_range.hpp>
@@ -1187,6 +1189,17 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
         }
         const auto download_dest = dest_ptr.GetWriteBytes(flush_end - flush_start);
         CacheStats::ScopedMicros timer{CacheStats::flush_encode_micros};
+#if defined(__SWITCH__) && !defined(__SWITCH2__)
+        // The Switch 1 driver has no host-cached memory to download into (and cannot
+        // import ours), so `source` is uncached: converting straight out of it, a pixel
+        // at a time in tile order, took 19 ms for one depth buffer - every frame while
+        // the sun is in view in the Zelda games. One sequential copy into ordinary
+        // memory first is far cheaper than that.
+        static std::vector<u8> scratch;
+        scratch.resize(source.size());
+        std::memcpy(scratch.data(), source.data(), source.size());
+        source = std::span<u8>{scratch};
+#endif
         EncodeTexture(flush_info, flush_start, flush_end, source, download_dest,
                       runtime.NeedsConversion(surface));
     };

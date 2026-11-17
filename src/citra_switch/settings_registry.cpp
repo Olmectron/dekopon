@@ -21,6 +21,7 @@
 #include "citra_switch/amiibo_session.h"
 #include "citra_switch/settings_registry.h"
 #include "citra_switch/ui_sound.h"
+#include "video_core/overlay.h"
 #include "video_core/rasterizer_cache/cache_stats.h"
 #include "citra_switch/updater.h"
 #include "common/settings.h"
@@ -787,6 +788,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
     t << Toggle({"Show FPS Counter", "Draws a framerate counter over the game.", EntryFlag::None,
                  QuickSection::Display},
                 Settings::values.show_fps);
+    t << LocalBool(
+        "show_resolution",
+        {"Show Resolution",
+         "Notes the render scale and the size it comes to (2x 800x480) in the corner, "
+         "where the FPS counter goes.",
+         EntryFlag::None, QuickSection::Display},
+        [] { return VideoCore::g_show_resolution.load(); },
+        [](bool on) { VideoCore::g_show_resolution.store(on); }, false);
     t << Toggle({"Shader Compile Notice",
                  "Note on screen while shaders are being compiled (uses some performance).", EntryFlag::None,
                  QuickSection::Display},

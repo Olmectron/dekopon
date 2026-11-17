@@ -14,7 +14,7 @@ index 817ec51..bfea274 100644
  using namespace oaknut::util;
  
  void EmitSpinLockLock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
-+#if defined(__SWITCH2__)
++#if defined(__SWITCH__)
 +    // No SEVL/WFE here. Measured on Switch 2: the pair costs about 20 ns, and every guest
 +    // LDREX/STREX takes this lock twice. In a scene that leans on atomics (Majora's Mask
 +    // 3D, the Sheikah stone's visions list: ~170 000 pairs per frame) dropping it was

@@ -1754,7 +1754,9 @@ private:
 
 OverlayDraw RendererVulkan::PrepareFpsOverlay(const Layout::FramebufferLayout& layout,
                                               Frame* frame) {
-    if (!Settings::values.show_fps.GetValue()) {
+    const bool show_fps = Settings::values.show_fps.GetValue();
+    const bool show_resolution = VideoCore::g_show_resolution.load(std::memory_order_relaxed);
+    if (!show_fps && !show_resolution) {
         return {};
     }
 
@@ -1770,9 +1772,19 @@ OverlayDraw RendererVulkan::PrepareFpsOverlay(const Layout::FramebufferLayout& l
         overlay_last_update = now;
     }
 
-    char text[16];
-    const int fps = std::clamp(static_cast<int>(std::lround(overlay_game_fps)), 0, 999);
-    std::snprintf(text, sizeof(text), "FPS %d", fps);
+    char text[64];
+    int length = 0;
+    if (show_fps) {
+        const int fps = std::clamp(static_cast<int>(std::lround(overlay_game_fps)), 0, 999);
+        length = std::snprintf(text, sizeof(text), "FPS %d", fps);
+    }
+    if (show_resolution) {
+        // The render scale and what it makes of the top screen's 400 x 240.
+        const int factor = static_cast<int>(GetResolutionScaleFactor());
+        std::snprintf(text + length, sizeof(text) - static_cast<std::size_t>(length),
+                      "%s%dx %dx%d", length > 0 ? "  " : "", factor, 400 * factor,
+                      240 * factor);
+    }
 
     const OverlayCanvas canvas = MakeOverlayCanvas(layout);
     const float w = canvas.width;
