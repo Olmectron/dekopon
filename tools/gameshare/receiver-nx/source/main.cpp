@@ -174,8 +174,15 @@ constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0
 ///    the homebrew through the same title, so the scan also looks for the scene id alone and,
 ///    failing that, lists whatever local networks are in range.
 bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
-    Result rc = ldnInitialize(LdnServiceType_User);
-    std::printf("ldnInitialize: 0x%x\n", rc);
+    // The system flavour of the service first: the user one only lets an application join
+    // networks whose local communication id is listed by the title it runs as, and the host
+    // runs as a different title (ldnConnect then fails with 0xc2cb, "invalid object").
+    Result rc = ldnInitialize(LdnServiceType_System);
+    std::printf("ldnInitialize(system): 0x%x\n", rc);
+    if (R_FAILED(rc)) {
+        rc = ldnInitialize(LdnServiceType_User);
+        std::printf("ldnInitialize(user): 0x%x\n", rc);
+    }
     consoleUpdate(nullptr);
     if (R_FAILED(rc)) {
         return false;
@@ -226,12 +233,12 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
             filter.network_id.intent_id.local_communication_id = -1;
             filter.network_id.intent_id.scene_id = LDN_SCENE_ID;
             filter.flags = LdnScanFilterFlag_SceneId |
-                           (pass == 0 ? LdnScanFilterFlag_LocalCommunicationId : 0);
+                           (pass == 1 ? LdnScanFilterFlag_LocalCommunicationId : 0);
             s32 total = 0;
             rc = ldnScan(0, &filter, networks, 0x18, &total);
             if (R_FAILED(rc) || total > 0) {
                 std::printf("scan %s: 0x%x, %d network(s)\n",
-                            pass == 0 ? "scene+id" : "scene only", rc, total);
+                            pass == 1 ? "scene+id" : "scene only", rc, total);
                 consoleUpdate(nullptr);
             }
             if (R_SUCCEEDED(rc) && total > 0) {
