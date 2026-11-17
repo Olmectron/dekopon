@@ -101,9 +101,11 @@ constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0
 /// code: whether the loader grants ldn at all, and whether a Switch 1 can see a network
 /// made by a Switch 2, are both unknown until tried on hardware.
 bool StartLocalWirelessHost() {
-    Result rc = ldnInitialize(LdnServiceType_User);
+    // Plain u32 result codes here: core/hle/result.h redefines Result and R_FAILED for the
+    // emulated 3DS, which shadows libnx's in this file.
+    u32 rc = ldnInitialize(LdnServiceType_User);
     LOG_INFO(Frontend, "GameShare/LDN: ldnInitialize(User) = {:#x}", rc);
-    if (R_FAILED(rc)) {
+    if (rc != 0) {
         return false;
     }
     // Mixed Switch 1 / Switch 2 networks appear to need this protocol; harmless if refused.
@@ -112,7 +114,7 @@ bool StartLocalWirelessHost() {
 
     rc = ldnOpenAccessPoint();
     LOG_INFO(Frontend, "GameShare/LDN: ldnOpenAccessPoint = {:#x}", rc);
-    if (R_FAILED(rc)) {
+    if (rc != 0) {
         ldnExit();
         return false;
     }
@@ -134,7 +136,7 @@ bool StartLocalWirelessHost() {
 
     rc = ldnCreateNetwork(&security, &user, &network);
     LOG_INFO(Frontend, "GameShare/LDN: ldnCreateNetwork = {:#x}", rc);
-    if (R_FAILED(rc)) {
+    if (rc != 0) {
         ldnExit();
         return false;
     }
