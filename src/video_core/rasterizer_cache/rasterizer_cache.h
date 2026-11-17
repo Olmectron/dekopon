@@ -1408,8 +1408,35 @@ void RasterizerCache<T>::FlushRegion(PAddr addr, u32 size, SurfaceId flush_surfa
         // Small sizes imply that this most likely comes from the cpu, flush the entire region
         // the point is to avoid thousands of small writes every frame if the cpu decides to
         // access that region, anything higher than 8 you're guaranteed it comes from a service
-        const auto interval = size <= 8 ? region : region & flush_interval;
+        auto interval = size <= 8 ? region : region & flush_interval;
         Surface& surface = slot_surfaces[surface_id];
+#if defined(__SWITCH__)
+        // The whole region is a megabyte when it is a depth buffer, and a game that tests
+        // a few pixels of it every frame (the Zelda games, with the sun in view) paid for
+        // reading all of it back: on Switch 1 some 6 ms a frame in copying and converting.
+        // Serve such a read a window round the address instead. A reader that then asks
+        // outside the window in the same frame is roaming: it gets the whole region, from
+        // then on, as before.
+        if (size <= 8 && !flush_surface_id) {
+            constexpr u32 WINDOW = 96 * 1024;
+            if (!small_read_wide.contains(surface.addr)) {
+                if (small_read_frame == frame_counter && small_read_surface == surface_id) {
+                    if (small_read_wide.size() > 64) {
+                        small_read_wide.clear();
+                    }
+                    small_read_wide.insert(surface.addr);
+                } else {
+                    const PAddr lower = addr > WINDOW ? addr - WINDOW : 0;
+                    const auto narrowed = region & SurfaceInterval(lower, addr + size + WINDOW);
+                    if (!boost::icl::is_empty(narrowed)) {
+                        interval = narrowed;
+                        small_read_frame = frame_counter;
+                        small_read_surface = surface_id;
+                    }
+                }
+            }
+        }
+#endif
         ASSERT_MSG(surface.IsRegionValid(interval), "Region owner has invalid regions");
 
         const DebugScope scope{runtime, Common::Vec4f{0.f, 0.f, 0.f, 1.f},

@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <boost/icl/interval_map.hpp>
 #include <tsl/robin_map.h>
@@ -250,6 +251,11 @@ private:
         u32 format{};
     };
     std::unordered_map<u64, DelayedDownload> delayed_downloads;
+    /// Small guest reads (see FlushRegion): the last surface one was served a window of,
+    /// and the surfaces whose reader roams too far for a window to be worth it.
+    u64 small_read_frame{};
+    SurfaceId small_read_surface{};
+    std::unordered_set<PAddr> small_read_wide;
     u64 frame_counter{1};
     PageMap cached_pages;
     u32 resolution_scale_factor;

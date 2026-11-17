@@ -60,18 +60,30 @@ index 817ec51..bfea274 100644
  
  SpinLockImpl::SpinLockImpl()
          : mem{4096}
-@@ -74,12 +104,12 @@ void SpinLockImpl::Initialize() {
+@@ -74,12 +104,24 @@ void SpinLockImpl::Initialize() {
  }  // namespace
  
  void SpinLock::Lock() {
 -    std::call_once(flag, &SpinLockImpl::Initialize, impl);
++#if defined(__SWITCH__)
++    // The only user of this lock is the exclusive monitor, and on the consoles every
++    // emulated core runs on the one emulation thread, in turn: there is nobody to keep
++    // out. Taking it cost two calls into generated code and two atomic round trips per
++    // guest LDREX or STREX - 170 000 pairs a frame in Majora's Mask 3D's visions list.
++    return;
++#else
 +    EnsureInitialized();
      impl.lock(&storage);
++#endif
  }
  
  void SpinLock::Unlock() {
 -    std::call_once(flag, &SpinLockImpl::Initialize, impl);
++#if defined(__SWITCH__)
++    return;
++#else
 +    EnsureInitialized();
      impl.unlock(&storage);
++#endif
  }
  
