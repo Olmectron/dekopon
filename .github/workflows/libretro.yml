@@ -2,7 +2,7 @@ name: citra-libretro
 
 on:
   push:
-    branches: [ "*", "!master", "!switch2-ounce-devkit", "!switch2-async-shaders" ]
+    branches: [ "*", "!master", "!switch2-*" ]
     tags: [ "*" ]
   pull_request:
     branches: [ master ]
