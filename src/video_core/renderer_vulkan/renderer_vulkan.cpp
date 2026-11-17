@@ -2299,6 +2299,15 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
             return std::round(tops[static_cast<std::size_t>(i)] + (side_row_h - side_line_h) / 2.0f);
         };
         const int active = state.active_section;
+        // With the cursor in the list, a ring round the page it is on.
+        if (state.side_focused && active >= 0 && active < section_count) {
+            const u32 s = builder.VertexCount();
+            const float top = tops[static_cast<std::size_t>(active)];
+            const float ring = std::max(3.0f, std::round(em / 8.0f));
+            builder.AddRect(panel_x0 + em * 0.5f - ring, top + 2.0f - ring,
+                            content_x0 - em * 0.5f + ring, top + side_row_h - 2.0f + ring);
+            emit(light ? Rgba{0.0f, 0.745f, 0.863f, 1.0f} : Rgba{0.361f, 0.902f, 1.0f, 1.0f}, s);
+        }
         if (active >= 0 && active < section_count) {
             const u32 s = builder.VertexCount();
             const float top = tops[static_cast<std::size_t>(active)];

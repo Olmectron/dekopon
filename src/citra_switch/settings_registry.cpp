@@ -835,11 +835,7 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
     t << LocalBool("pause_in_quick_menu",
                    {"Pause In Quick Menu", "Freezes the game while the in-game menu is open.",
                     EntryFlag::None, QuickSection::System},
-#if defined(__SWITCH2__)
                    IsPauseInQuickMenu, SetPauseInQuickMenu, true);
-#else
-                   IsPauseInQuickMenu, SetPauseInQuickMenu, false);
-#endif
 
     t.Group("Updates");
     t << LocalChoice(
@@ -889,14 +885,9 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
                 v.use_shader_jit);
     t.Page(Category::Display);
     t.Group("Shaders");
-#if defined(__SWITCH2__)
     t << Toggle({"Async Shader Compilation (Experimental)",
                  "Builds shaders on spare cores while the game keeps running. Cuts hitching; objects "
                  "can show up a moment late the first time."},
-#else
-    t << Toggle({"Async Shader Compilation",
-                 "Builds shaders on a background thread. Cuts hitching at the cost of one-time visual bugs."},
-#endif
                 v.async_shader_compilation);
     t.Page(Category::Graphics);
     t.Group("Shaders");

@@ -60,6 +60,7 @@ struct OverlayMenuState {
     std::string description; // What the selected row is for; shown above the hint.
     std::vector<OverlayMenuSection> sections; // Empty: no side list.
     int active_section{-1};
+    bool side_focused{}; // The cursor is in the side list, not in the rows.
     bool light{}; // Light theme.
     // The home screen: full-screen buttons and tiles instead of the list.
     bool home{};

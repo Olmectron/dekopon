@@ -562,9 +562,10 @@ struct Values {
     SwitchableSetting<bool> skip_cpu_write{false, Keys::skip_cpu_write};
     SwitchableSetting<bool> async_gpu_emulation{false, Keys::async_gpu_emulation};
     SwitchableSetting<bool> strict_gpu_sync{false, Keys::strict_gpu_sync};
-#if defined(__SWITCH2__)
-    // Switch 2: on by default (experimental). Shaders build on spare cores and the game keeps
-    // running meanwhile; the "Default, no experimental async" preset turns it back off.
+#if defined(__SWITCH__)
+    // On the consoles: on by default (experimental). Shaders build off the render thread
+    // and the game keeps running meanwhile; the "Default, no experimental async" preset
+    // turns it back off.
     SwitchableSetting<bool> async_shader_compilation{true, Keys::async_shader_compilation};
 #else
     SwitchableSetting<bool> async_shader_compilation{false, Keys::async_shader_compilation};

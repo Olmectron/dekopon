@@ -395,6 +395,8 @@ struct Cell {
 
 std::vector<Cell> s_cells;
 int s_cell = 0;
+// List pages: the cursor is in the side list of pages rather than in the rows.
+bool s_side_focus = false;
 float s_layout_label_y = 0.0f;
 float s_quick_label_y = 0.0f;
 
@@ -764,7 +766,7 @@ const char* HintFor(Page page) {
     case Page::Camera:
         return "A Select   ZL/ZR List   B Back";
     default:
-        return "A Change   L/R Section   B Back";
+        return "Left/Right Change   B Pages   L/R Next page";
     }
 }
 
@@ -820,10 +822,14 @@ void PaintHome(VideoCore::OverlayMenuState& state) {
             out.label = "FPS Counter";
             out.sub = Settings::values.show_fps.GetValue() ? "On" : "Off";
             break;
-        case CellKind::Amiibo:
+        case CellKind::Amiibo: {
             out.label = "Amiibo";
-            out.sub = IsRealAmiiboActive() ? "On the reader" : "Files and reader";
+            static const char* const modes[] = {"When asked: scan a real one",
+                                                "When asked: choose a file",
+                                                "When asked: do nothing"};
+            out.sub = modes[std::clamp(GetAmiiboRequestMode(), 0, 2)];
             break;
+        }
         case CellKind::Cheats:
             out.label = "Cheats";
             out.sub = std::to_string(CheatCount()) + " loaded";
@@ -900,7 +906,12 @@ void Repaint() {
                       " of " + std::to_string(count);
     }
 
-    state.selected = s_selected - first;
+    state.selected = s_side_focus ? -1 : s_selected - first;
+    state.side_focused = s_side_focus;
+    if (s_side_focus) {
+        state.hint = "Up / Down  Page      A / Right  Open      B  Home";
+        state.description.clear();
+    }
     state.items.reserve(static_cast<std::size_t>(visible));
     for (int i = first; i < first + visible; ++i) {
         const Row& row = s_rows[static_cast<std::size_t>(i)];
@@ -908,6 +919,9 @@ void Repaint() {
         const bool no_value = value.empty();
         state.items.push_back({Label(row), std::move(value), no_value, IsSkippable(row)});
         state.items.back().locked = IsLocked(row);
+        if (state.items.back().locked) {
+            state.items.back().value += state.items.back().value.empty() ? "Locked" : "   Locked";
+        }
     }
     VideoCore::SetOverlayMenuState(state);
 }
@@ -932,6 +946,7 @@ void SetPauseInQuickMenu(bool enabled) {
 void OpenQuickMenu() {
     s_page = static_cast<int>(Page::Home);
     s_cell = 0;
+    s_side_focus = false;
     s_selected = 0;
     s_scroll = 0;
     s_cheat_page = 0;
@@ -1122,12 +1137,14 @@ QuickMenuAction ActivateCell() {
         Settings::values.show_fps = !Settings::values.show_fps.GetValue();
         break;
     case CellKind::Amiibo:
-        EnterPage(Page::Amiibo);
+        // A switch, not a page: what happens the next time the game asks for one.
+        SetAmiiboRequestMode((GetAmiiboRequestMode() + 1) % 3);
         break;
     case CellKind::Cheats:
         EnterPage(Page::Cheats);
         break;
     case CellKind::Settings:
+        s_side_focus = false;
         EnterNav(1); // The live options first; the launcher's pages follow in the side list.
         break;
     case CellKind::Exit:
@@ -1180,8 +1197,15 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
 
     if (nav.cancel) {
         s_overwrite_armed = false;
+        if (CurrentPage() != Page::Home && !s_side_focus) {
+            // First B: out of the rows, into the list of pages.
+            s_side_focus = true;
+            Repaint();
+            return QuickMenuAction::None;
+        }
         if (CurrentPage() != Page::Home) {
             const int came_from = s_page;
+            s_side_focus = false;
             EnterPage(Page::Home);
             for (int i = 0; i < static_cast<int>(s_rows.size()); ++i) {
                 const Row& row = s_rows[static_cast<std::size_t>(i)];
@@ -1204,6 +1228,24 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
         const int count = static_cast<int>(NavList().size());
         EnterNav((NavIndex() + (nav.tab_next ? 1 : -1) + count) % count);
         changed = true;
+    }
+
+    // Cursor in the side list: up and down change the page straight away, as a console's
+    // own settings do; A or right goes into it.
+    if (CurrentPage() != Page::Home && s_side_focus) {
+        const int count = static_cast<int>(NavList().size());
+        const int index = NavIndex();
+        if (nav.up && index > 1) {
+            EnterNav(index - 1); // Entry 0 is Home, reached with B.
+        }
+        if (nav.down && index + 1 < count) {
+            EnterNav(index + 1);
+        }
+        if (nav.confirm || nav.right) {
+            s_side_focus = false;
+        }
+        Repaint();
+        return QuickMenuAction::None;
     }
 
     // The home screen is a grid of cells, not a list.
@@ -1431,6 +1473,7 @@ QuickMenuAction QuickMenuTouch(float x, float y) {
         } else if (hit.kind == 1 && hit.index >= 0 &&
                    hit.index < static_cast<int>(NavList().size())) {
             s_overwrite_armed = false;
+            s_side_focus = false;
             EnterNav(hit.index);
             Repaint();
             return QuickMenuAction::None;

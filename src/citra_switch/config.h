@@ -136,22 +136,14 @@ enum class SettingsPreset {
     DefaultNoAsync,
 };
 
-#if defined(__SWITCH2__)
-// Switch 2: Default, and Default without the experimental async shaders. Performance
-// and Ultra Performance glitch there (they were tuned for the Switch 1 GPU driver)
-// and are not offered; see SettingsPresetAt.
+// Default, and Default without the experimental async shaders. Performance and Ultra
+// Performance are no longer offered on either console: they trade correctness for speed
+// in ways that glitch (see SettingsPresetAt).
 constexpr int NumSettingsPresets = 2;
-#else
-constexpr int NumSettingsPresets = 3;
-#endif
 
 // The preset shown at `index` of the reset picker.
 constexpr SettingsPreset SettingsPresetAt(int index) {
-#if defined(__SWITCH2__)
     return index == 1 ? SettingsPreset::DefaultNoAsync : SettingsPreset::Default;
-#else
-    return static_cast<SettingsPreset>(index);
-#endif
 }
 
 const char* SettingsPresetName(SettingsPreset preset);

@@ -104,17 +104,11 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
         });
     };
 
-#if defined(__SWITCH__) && !defined(__SWITCH2__)
-    // Keep the driver's cache lookup off the render thread in asynchronous mode.
-    // Not on Switch 2: there the lookup below is quick, and skipping it meant every new
-    // pipeline dropped its draws for at least a frame even when the driver already had
-    // it cached. Games that keep producing new vertex shader configurations for the same
-    // shader (Kirby: Planet Robobot) flickered constantly because of it.
-    if (!wait_built) {
-        queue_build();
-        return false;
-    }
-#endif
+    // The driver's cache is asked first, on this thread, on every console. The Switch 1 build
+    // used to skip that in asynchronous mode and queue every new pipeline, which dropped its
+    // draws for at least a frame even when the driver already had it: things that had been
+    // on screen vanished for a moment (Kirby: Planet Robobot flickered constantly). Both
+    // consoles run the same Mesa NVK, and the lookup only succeeds when it is a cache hit.
 
     // If the shaders haven't been compiled yet, we cannot proceed.
     const bool shaders_pending = std::any_of(

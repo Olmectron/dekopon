@@ -865,13 +865,8 @@ InfoCard BuildWelcomeCard() {
     card.pages.push_back(MakeInfoPage(
         "Settings",
         {"- Graphics chooses the renderer, the resolution and the shader options.",
-#if defined(__SWITCH2__)
          "- Reset All Settings puts every setting back to its default, with or without the "
          "experimental async shader compilation.",
-#else
-         "- Reset All Settings offers the Default, Performance and Ultra Performance presets."
-         "Performance is recommended for most titles.",
-#endif
          "- General holds the update channel, Check for Updates and the release notes.", "",
          "Press A to start."},
         max_w));
@@ -1173,7 +1168,10 @@ private:
         drawer_scroll = std::clamp(drawer_scroll, 0, std::max(0, total - visible));
     }
 
-    void ActivateDrawer(int index) {
+    // Puts the page of drawer entry `index` on screen. With `enter` the cursor goes into the
+    // page as well; without it the drawer keeps the cursor - moving through the drawer is
+    // enough to change the page, as in a console's own settings.
+    void ShowDrawerPage(int index, bool enter) {
         const auto& entries = DrawerEntries();
         if (index < 0 || index >= static_cast<int>(entries.size())) {
             return;
@@ -1183,27 +1181,42 @@ private:
         case DrawerKind::Header:
             return;
         case DrawerKind::Home:
-            GoHome();
+            // Leaving the options is a decision, not something the cursor does in passing.
+            if (enter) {
+                GoHome();
+            }
             return;
         case DrawerKind::Page:
-            SetTab(entry.tab);
+            if (tab != entry.tab) {
+                SetTab(entry.tab);
+            }
             break;
         case DrawerKind::Settings:
             if (entry.advanced && !advanced_ack) {
-                OpenAdvancedWarning(index);
+                OpenAdvancedWarning(index, enter);
                 return;
             }
-            SetTab(Tab::Settings);
-            SetSettingsPage(entry.category);
+            if (tab != Tab::Settings) {
+                SetTab(Tab::Settings);
+            }
+            if (settings_page != entry.category || settings_search_open) {
+                SetSettingsPage(entry.category);
+            }
             break;
         }
         drawer_cursor = index;
         ScrollDrawerIntoView();
-        focus = Focus::Content;
+        if (enter) {
+            focus = Focus::Content;
+        }
+    }
+
+    void ActivateDrawer(int index) {
+        ShowDrawerPage(index, true);
     }
 
     // Shown once per run, the first time an Advanced page is opened.
-    void OpenAdvancedWarning(int index) {
+    void OpenAdvancedWarning(int index, bool enter) {
         confirm = ConfirmPrompt{
             "Advanced settings",
             {"These pages are for people who know what each option does.",
@@ -1211,11 +1224,15 @@ private:
              "Press X on any option to read what it is for before changing it."},
             "General > Reset All Settings puts everything back.",
             "Continue",
-            [this, index] {
+            [this, index, enter] {
                 advanced_ack = true;
-                ActivateDrawer(index);
+                ShowDrawerPage(index, enter);
             },
-            {},
+            // Declined: the cursor goes back to the page that is on screen.
+            [this] {
+                drawer_cursor = DrawerIndexFor(tab, settings_page);
+                ScrollDrawerIntoView();
+            },
         };
     }
 
@@ -2198,6 +2215,7 @@ private:
                 drawer_cursor = index;
             }
         };
+        const int before = drawer_cursor;
         if (nav & DirUp) {
             step(-1);
         }
@@ -2205,8 +2223,11 @@ private:
             step(+1);
         }
         ScrollDrawerIntoView();
+        if (drawer_cursor != before) {
+            ShowDrawerPage(drawer_cursor, false); // The page follows the cursor.
+        }
         if ((down & HidNpadButton_A) || (nav & DirRight)) {
-            ActivateDrawer(drawer_cursor);
+            ShowDrawerPage(drawer_cursor, true);
             return;
         }
         // B leaves the options: back to the games.
@@ -4241,11 +4262,6 @@ private:
             g_font.Draw(c, rx + 20, ry + 24, SettingsPresetName(preset), 20, kColText);
             g_font.Draw(c, rx + 20, ry + 46, SettingsPresetSummary(preset), 16, kColTextDim);
         }
-
-#if !defined(__SWITCH2__)
-        g_font.Draw(c, x + 24, y + h - 62,
-                    "Performance and Ultra Performance can break some games.", 16, kColAccent);
-#endif
 
         int hx = x + 24;
         const int hy = y + h - 38;

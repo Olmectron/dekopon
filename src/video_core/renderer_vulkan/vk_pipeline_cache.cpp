@@ -856,7 +856,7 @@ bool PipelineCache::UseProgrammableVertexShader(const Pica::RegsInternal& regs,
 
     auto res = curr_disk_cache->UseProgrammableVertexShader(regs, setup, layout);
 
-#if defined(__SWITCH2__)
+#if defined(__SWITCH__)
     // Asynchronous mode: while this vertex shader is still compiling, decline the
     // accelerated draw. The caller then runs the vertex shader on the CPU and draws the
     // result with the trivial vertex shader, so the geometry is still drawn (correctly)
