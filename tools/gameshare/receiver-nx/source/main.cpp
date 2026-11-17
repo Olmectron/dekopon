@@ -411,12 +411,9 @@ int main(int, char**) {
     // local wireless join networks that title's NACP lists. Say so before it is tried.
     const AppletType applet = appletGetAppletType();
     if (applet == AppletType_Application || applet == AppletType_SystemApplication) {
-        Say("Running as a game title: local wireless is only allowed if that
-");
-        Say("title lists the host's network id (see the README about forwarders).
-");
-        Say("From the Album's Homebrew Menu it works as is.
-");
+        Say("Running as a game title: local wireless is only allowed if");
+        Say("that title lists the host's network id (README: forwarders).");
+        Say("From the Album's Homebrew Menu it works as is.");
     }
 
     // How to reach the host. The socket is created afterwards, so that with local wireless it
