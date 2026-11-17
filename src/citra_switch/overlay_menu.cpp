@@ -138,7 +138,8 @@ const std::vector<NavEntry>& NavList() {
         entries.push_back({Page::Live, Category::Count, false});
         for (int i = 0; i < NumCategories; ++i) {
             const auto category = static_cast<Category>(i);
-            if (!IsAdvancedCategory(category)) {
+            // The library's own page has nothing to say while a game runs.
+            if (!IsAdvancedCategory(category) && category != Category::Library) {
                 entries.push_back({Page::Settings, category, false});
             }
         }

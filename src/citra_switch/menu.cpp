@@ -1245,14 +1245,14 @@ private:
     }
 
     // Asks for the covers the library is missing. Quietly does nothing without internet access.
-    void RequestCovers() {
+    void RequestCovers(bool manual = false) {
         std::vector<CoverRequest> requests;
         for (const GameEntry& game : games) {
             if (!game.game_code.empty()) {
                 requests.push_back({game.game_code});
             }
         }
-        StartCoverDownload(std::move(requests));
+        StartCoverDownload(std::move(requests), manual);
     }
 
     bool HandleShelf(u64 down, u32 nav, MenuResult& result) {
@@ -1511,7 +1511,16 @@ private:
             view.publisher = game.publisher;
             counter = std::to_string(selected + 1) + " of " + std::to_string(count);
         }
-        if (IsCoverDownloadActive()) {
+        // The end of a download is said out loud, whatever came of it.
+        const bool downloading = IsCoverDownloadActive();
+        if (cover_download_seen && !downloading) {
+            const std::string detail = CoverDownloadDetail();
+            if (!detail.empty()) {
+                ShowNotice(detail, CoverDownloadStatus() == "No connection");
+            }
+        }
+        cover_download_seen = downloading;
+        if (downloading) {
             counter += (counter.empty() ? "" : "   ") + std::string{"Covers "} +
                        std::to_string(CoverDownloadDone()) + "/" +
                        std::to_string(CoverDownloadTotal());
@@ -1519,6 +1528,9 @@ private:
         view.counter = counter;
         view.search = search;
         view.compact = g_screen_w < 1000;
+        view.show_arrows = IsShelfArrowsShown();
+        view.show_title = IsShelfTitleShown();
+        view.bar_style = GetShelfBarStyle();
         home_layout = DrawHome(c, g_font, view, get);
 
         if (count == 0) {
@@ -1581,6 +1593,7 @@ private:
 
     // Settings tab.
     Category settings_page{Category::General};
+    bool cover_download_seen{}; // A cover download was running the last time we looked.
     std::vector<SettingsRow> settings_rows;
     // Kept per page so switching back lands where the cursor was left.
     std::array<int, NumCategories> settings_sel{};
@@ -2290,6 +2303,17 @@ private:
             break;
         case SettingsModal::ReleaseNotes:
             OpenReleaseNotes();
+            break;
+        case SettingsModal::DownloadCovers:
+            if (IsCoverDownloadActive()) {
+                ShowNotice("Covers are already being downloaded", false);
+            } else {
+                RequestCovers(true);
+                cover_download_seen = IsCoverDownloadActive();
+                ShowNotice(IsCoverDownloadActive() ? "Downloading covers..."
+                                                   : CoverDownloadDetail(),
+                           false);
+            }
             break;
         case SettingsModal::Username:
             if (const auto text = PromptSettingText("Username", "Name shown to other consoles",

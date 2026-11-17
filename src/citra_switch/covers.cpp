@@ -39,6 +39,14 @@ std::atomic<bool> s_active{false};
 std::atomic<bool> s_cancel{false};
 std::atomic<int> s_done{0};
 std::atomic<int> s_total{0};
+std::atomic<int> s_quality{1};
+std::mutex s_status_mutex;
+std::string s_status_brief;
+std::string s_status_detail;
+
+std::atomic<bool> s_shelf_arrows{true};
+std::atomic<bool> s_shelf_title{true};
+std::atomic<int> s_shelf_bar{0};
 
 std::string CoversDir() {
     return GetPaths().user_dir + "/covers";
@@ -117,39 +125,50 @@ int AbortWhenCancelled(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     return s_cancel.load() ? 1 : 0;
 }
 
-/// Fetches `url` into `path`. The file only appears once the download is complete.
-bool Download(const std::string& url, const std::string& path) {
+enum class Fetch { Ok, NotThere, Failed };
+
+/// Fetches `url` into `path`. The file only appears once the download is complete. `error`
+/// gets libcurl's words when the transfer itself failed (as opposed to the site saying no).
+Fetch Download(const std::string& url, const std::string& path, std::string& error) {
     const std::string partial = path + ".part";
     std::FILE* file = std::fopen(partial.c_str(), "wb");
     if (file == nullptr) {
-        return false;
+        error = "cannot write to the covers folder";
+        return Fetch::Failed;
     }
     CURL* curl = curl_easy_init();
-    bool ok = false;
+    CURLcode code = CURLE_FAILED_INIT;
+    char message[CURL_ERROR_SIZE]{};
     if (curl != nullptr) {
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "covers/1.0");
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 6L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 25L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 40L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, message);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteFile);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, AbortWhenCancelled);
-        ok = curl_easy_perform(curl) == CURLE_OK;
+        code = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
     }
     const long size = std::ftell(file);
     std::fclose(file);
-    if (ok && size > 1024) {
+    if (code == CURLE_OK && size > 1024) {
         std::remove(path.c_str());
-        return std::rename(partial.c_str(), path.c_str()) == 0;
+        return std::rename(partial.c_str(), path.c_str()) == 0 ? Fetch::Ok : Fetch::Failed;
     }
     std::remove(partial.c_str());
-    return false;
+    if (code == CURLE_OK || code == CURLE_HTTP_RETURNED_ERROR) {
+        return Fetch::NotThere; // The site answered: it has no such picture.
+    }
+    error = message[0] != '\0' ? message : curl_easy_strerror(code);
+    LOG_WARNING(Frontend, "Covers: {} failed: {} ({})", url, error, static_cast<int>(code));
+    return Fetch::Failed;
 }
 
 /// GameTDB files its art by region; the last letter of the code says which to try first.
@@ -173,54 +192,97 @@ std::vector<const char*> RegionsFor(const std::string& code) {
     }
 }
 
+void SetStatus(std::string brief, std::string detail) {
+    std::lock_guard lock{s_status_mutex};
+    s_status_brief = std::move(brief);
+    s_status_detail = std::move(detail);
+}
+
 void DownloadThread(std::vector<CoverRequest> requests) {
     const std::string dir = CoversDir();
     mkdir(dir.c_str(), 0777);
     mkdir((dir + "/full").c_str(), 0777);
-    bool reachable = true;
+
+    struct Kind {
+        const char* folder; // On GameTDB.
+        bool wrap;
+    };
+    // The whole wrap if GameTDB has it, the front otherwise; large files before small ones
+    // when those are wanted.
+    std::vector<Kind> kinds;
+    const bool large = s_quality.load() != 0;
+    if (large) {
+        kinds.push_back({"coverfullHQ", true});
+    }
+    kinds.push_back({"coverfull", true});
+    if (large) {
+        kinds.push_back({"coverM", false});
+    }
+    kinds.push_back({"cover", false});
+
+    // The site answers over both; a console whose clock or certificate store is off cannot
+    // do the secure one, and box art is not worth refusing over.
+    const char* scheme = "https";
+    int got_count = 0;
+    std::string failure;
     for (const CoverRequest& request : requests) {
-        if (s_cancel.load() || !reachable) {
+        if (s_cancel.load() || !failure.empty()) {
             break;
         }
         const std::string& code = request.game_code;
         bool got = false;
-        // The whole wrap if GameTDB has it, the front otherwise.
-        for (const bool wrap : {true, false}) {
+        for (const Kind& kind : kinds) {
             for (const char* region : RegionsFor(code)) {
-                if (got || s_cancel.load()) {
+                if (got || s_cancel.load() || !failure.empty()) {
                     break;
                 }
-                const std::string url = std::string{"https://art.gametdb.com/3ds/"} +
-                                        (wrap ? "coverfull" : "cover") + "/" + region + "/" + code +
-                                        ".jpg";
-                const std::string path = dir + (wrap ? "/full/" : "/") + code + ".jpg";
-                got = Download(url, path);
+                const std::string tail = std::string{"://art.gametdb.com/3ds/"} + kind.folder +
+                                         "/" + region + "/" + code + ".jpg";
+                const std::string path = dir + (kind.wrap ? "/full/" : "/") + code + ".jpg";
+                std::string error;
+                Fetch result = Download(scheme + tail, path, error);
+                if (result == Fetch::Failed && std::strcmp(scheme, "https") == 0 &&
+                    !s_cancel.load()) {
+                    LOG_INFO(Frontend, "Covers: secure connection failed, trying plain http");
+                    scheme = "http";
+                    result = Download(scheme + tail, path, error);
+                }
+                if (result == Fetch::Failed && !s_cancel.load()) {
+                    failure = error; // Neither way works: no point trying the rest.
+                }
+                got = result == Fetch::Ok;
             }
             if (got) {
                 break;
             }
         }
         if (got) {
+            ++got_count;
             ++s_generation;
-        } else if (s_done.load() == 0 && &request == &requests.front()) {
-            // Nothing at all for the first game: check that the site can be reached before
-            // working through the rest of the library with a timeout each.
-            CURL* probe = curl_easy_init();
-            if (probe != nullptr) {
-                curl_easy_setopt(probe, CURLOPT_URL, "https://art.gametdb.com/");
-                curl_easy_setopt(probe, CURLOPT_NOBODY, 1L);
-                curl_easy_setopt(probe, CURLOPT_CONNECTTIMEOUT, 5L);
-                curl_easy_setopt(probe, CURLOPT_TIMEOUT, 8L);
-                curl_easy_setopt(probe, CURLOPT_NOSIGNAL, 1L);
-                reachable = curl_easy_perform(probe) == CURLE_OK;
-                curl_easy_cleanup(probe);
-            }
-            if (!reachable) {
-                LOG_INFO(Frontend, "Covers: the cover site cannot be reached, not downloading");
-            }
         }
         ++s_done;
+        SetStatus(std::to_string(s_done.load()) + " / " + std::to_string(s_total.load()),
+                  "Downloading covers");
     }
+    const int total = s_total.load();
+    if (!failure.empty()) {
+        SetStatus("No connection", "Covers could not be downloaded: " + failure);
+    } else if (s_cancel.load()) {
+        SetStatus("Stopped", "The cover download was stopped.");
+    } else if (got_count == 0) {
+        SetStatus("None found", "GameTDB has no cover for the " + std::to_string(total) +
+                                    (total == 1 ? " game" : " games") + " still without one.");
+    } else {
+        SetStatus(std::to_string(got_count) + " new",
+                  std::to_string(got_count) + (got_count == 1 ? " cover" : " covers") +
+                      " downloaded" +
+                      (got_count < total
+                           ? "; GameTDB has none for the other " +
+                                 std::to_string(total - got_count) + "."
+                           : "."));
+    }
+    LOG_INFO(Frontend, "Covers: {} of {} downloaded{}{}", got_count, total,
+             failure.empty() ? "" : ", stopped by: ", failure);
     s_active = false;
 }
 
@@ -358,8 +420,9 @@ void SetCoverSource(int source) {
     s_source.store(std::clamp(source, 0, static_cast<int>(CoverSource::Count) - 1));
 }
 
-void StartCoverDownload(std::vector<CoverRequest> requests) {
-    if (s_source.load() == static_cast<int>(CoverSource::Off) || s_active.load()) {
+void StartCoverDownload(std::vector<CoverRequest> requests, bool manual) {
+    if (s_active.load() ||
+        (!manual && s_source.load() == static_cast<int>(CoverSource::Off))) {
         return;
     }
     // Only games with a code GameTDB can know, and no cover on the card yet.
@@ -374,6 +437,11 @@ void StartCoverDownload(std::vector<CoverRequest> requests) {
         }
     }
     if (missing.empty()) {
+        if (manual) {
+            SetStatus("Nothing missing", requests.empty()
+                                             ? "There are no games to find covers for."
+                                             : "Every game already has a cover.");
+        }
         return;
     }
     StopCoverDownload();
@@ -386,6 +454,7 @@ void StartCoverDownload(std::vector<CoverRequest> requests) {
     s_cancel = false;
     s_done = 0;
     s_total = static_cast<int>(missing.size());
+    SetStatus("0 / " + std::to_string(missing.size()), "Downloading covers");
     s_active = true;
     s_thread = std::thread{DownloadThread, std::move(missing)};
 }
@@ -408,6 +477,64 @@ int CoverDownloadDone() {
 
 int CoverDownloadTotal() {
     return s_total.load();
+}
+
+std::string CoverDownloadStatus() {
+    std::lock_guard lock{s_status_mutex};
+    return s_status_brief;
+}
+
+std::string CoverDownloadDetail() {
+    std::lock_guard lock{s_status_mutex};
+    return s_status_detail;
+}
+
+int GetCoverQuality() {
+    return s_quality.load();
+}
+
+void SetCoverQuality(int quality) {
+    s_quality.store(quality != 0 ? 1 : 0);
+}
+
+bool IsShelfArrowsShown() {
+    return s_shelf_arrows.load();
+}
+
+void SetShelfArrowsShown(bool shown) {
+    s_shelf_arrows.store(shown);
+}
+
+bool IsShelfTitleShown() {
+    return s_shelf_title.load();
+}
+
+void SetShelfTitleShown(bool shown) {
+    s_shelf_title.store(shown);
+}
+
+bool IsShelfReflectionOn() {
+    return Ui::g_shelf_reflections;
+}
+
+void SetShelfReflectionOn(bool on) {
+    Ui::g_shelf_reflections = on;
+}
+
+bool IsShelfFloatingOn() {
+    return Ui::g_shelf_floating;
+}
+
+void SetShelfFloatingOn(bool on) {
+    Ui::g_shelf_floating = on;
+}
+
+int GetShelfBarStyle() {
+    return s_shelf_bar.load();
+}
+
+void SetShelfBarStyle(int style) {
+    s_shelf_bar.store(std::clamp(style, 0, 2));
 }
 
 int CoverGeneration() {

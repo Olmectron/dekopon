@@ -16,6 +16,7 @@ namespace SwitchFrontend {
 // first, then the ones kept under "Advanced" (see IsAdvancedCategory).
 enum class Category {
     General,
+    Library,
     Display,
     Audio,
     Controls,
@@ -68,6 +69,7 @@ enum class SettingsModal {
     ClearShaderCache,
     CheckForUpdates,
     ReleaseNotes,
+    DownloadCovers,
     Username,
     Country,
     FixedClock,

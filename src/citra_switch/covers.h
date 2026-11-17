@@ -47,6 +47,19 @@ void ResetCoverCache();
 int GetLibraryStyle();
 void SetLibraryStyle(int style);
 
+/// What the library shows around the shelf.
+bool IsShelfArrowsShown();
+void SetShelfArrowsShown(bool shown);
+bool IsShelfTitleShown();
+void SetShelfTitleShown(bool shown);
+bool IsShelfReflectionOn();
+void SetShelfReflectionOn(bool on);
+bool IsShelfFloatingOn();
+void SetShelfFloatingOn(bool on);
+/// The bar of button hints: 0 buttons, 1 plain text, 2 hidden.
+int GetShelfBarStyle();
+void SetShelfBarStyle(int style);
+
 /// The look of the launcher and the in-game menu: 0 dark, 1 light.
 int GetUiTheme();
 void SetUiTheme(int theme);
@@ -60,10 +73,19 @@ struct CoverRequest {
     std::string game_code;
 };
 
-/// Downloads the covers that are missing, in the background. Does nothing when the source is
-/// Off or a download is already running. Failures are silent: a console without internet
-/// access simply gets none.
-void StartCoverDownload(std::vector<CoverRequest> requests);
+/// Which files to ask GameTDB for: 0 its small ones (340 x 144 for a whole wrap), 1 the
+/// large ones (1616 x 680), falling back to the small ones where there is no large one.
+int GetCoverQuality();
+void SetCoverQuality(int quality);
+
+/// Downloads the covers that are missing, in the background. Does nothing when a download
+/// is already running, or when the source is Off and nobody asked (`manual`). What came of
+/// it is in CoverDownloadStatus / CoverDownloadDetail.
+void StartCoverDownload(std::vector<CoverRequest> requests, bool manual = false);
+/// A few words on the current / last download ("2 / 5", "3 new", "No connection"); empty
+/// when none has run. The detail is a whole sentence, with the reason for a failure.
+std::string CoverDownloadStatus();
+std::string CoverDownloadDetail();
 void StopCoverDownload();
 bool IsCoverDownloadActive();
 /// Covers fetched so far by the current / last download, and how many it set out to try.

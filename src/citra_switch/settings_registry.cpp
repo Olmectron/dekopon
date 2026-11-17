@@ -768,6 +768,8 @@ constexpr std::array<const char*, 6> kLibraryStyleNames{"Coverflow", "Shelf", "C
                                                         "Arc",       "Stack", "Spotlight"};
 constexpr std::array<const char*, 2> kThemeNames{"Dark", "Light"};
 constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
+constexpr std::array<const char*, 2> kCoverQualityNames{"Standard", "High"};
+constexpr std::array<const char*, 3> kShelfBarNames{"Buttons", "Text", "Hidden"};
 constexpr std::array<const char*, 3> kAmiiboRequestNames{"Scan a real Amiibo", "Choose a file",
                                                          "Do nothing"};
 
@@ -813,7 +815,8 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                    {"Menu Sounds", "Short ticks when moving through the launcher."},
                    UiSound::IsEnabled, UiSound::SetEnabled, true);
 
-    t.Group("Library");
+    t.Page(Category::Library);
+    t.Group("Shelf");
     t.Ini("Switch");
     t << LocalChoice(
         "library_style",
@@ -822,14 +825,53 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
          "library."},
         [] { return GetLibraryStyle(); }, [](int value) { SetLibraryStyle(value); }, 0,
         kLibraryStyleNames);
+    t << LocalBool("shelf_arrows",
+                   {"Show Arrows", "The two round arrows either side of the game's name."},
+                   IsShelfArrowsShown, SetShelfArrowsShown, true);
+    t << LocalChoice(
+        "shelf_bar",
+        {"Button Hints",
+         "The row under the shelf that says what each button does: as buttons, as plain "
+         "text, or not at all. The buttons keep working either way."},
+        [] { return GetShelfBarStyle(); }, [](int value) { SetShelfBarStyle(value); }, 0,
+        kShelfBarNames);
+    t << LocalBool("shelf_title",
+                   {"Show Game Name", "The selected game's name and publisher under the shelf."},
+                   IsShelfTitleShown, SetShelfTitleShown, true);
+    t << LocalBool("shelf_reflection",
+                   {"Floor Reflections", "The games mirrored in the floor they stand on."},
+                   IsShelfReflectionOn, SetShelfReflectionOn, true);
+    t << LocalBool("shelf_floating",
+                   {"Floating Animation", "The games that are not selected hover gently."},
+                   IsShelfFloatingOn, SetShelfFloatingOn, true);
+
+    t.Group("Covers");
+    t.Ini("Switch");
     t << LocalChoice(
         "cover_source",
-        {"Download Covers",
-         "Fetches missing box art from GameTDB when the console is online. Covers can "
-         "also be copied to the covers folder by hand; see the readme there."},
+        {"Download Automatically",
+         "Looks for missing box art on GameTDB every time the library is read, when the "
+         "console is online. Covers can also be copied to the covers folder by hand; see "
+         "the readme there."},
         [] { return GetCoverSource(); }, [](int value) { SetCoverSource(value); }, 1,
         kCoverSourceNames);
+    t << LocalChoice(
+        "cover_quality",
+        {"Cover Quality",
+         "High asks GameTDB for its large pictures first (about half a megabyte each). "
+         "Covers already on the card are kept; delete them from the covers folder to "
+         "fetch them again."},
+        [] { return GetCoverQuality(); }, [](int value) { SetCoverQuality(value); }, 1,
+        kCoverQualityNames);
+    t << Modal({"Download Covers Now",
+                "Fetches the box art that is missing, from GameTDB. Needs an internet "
+                "connection; what came of it is shown here and in the library."},
+               SettingsModal::DownloadCovers, [] {
+                   const std::string status = CoverDownloadStatus();
+                   return status.empty() ? std::string{"Start"} : status;
+               });
 
+    t.Page(Category::General);
     t.Group("Quick Menu");
     t.Ini("Switch");
     t << LocalBool("pause_in_quick_menu",
@@ -1392,6 +1434,8 @@ const char* CategoryName(Category category) {
     switch (category) {
     case Category::General:
         return "General";
+    case Category::Library:
+        return "Library & Covers";
     case Category::Display:
         return "Display";
     case Category::Audio:

@@ -126,6 +126,10 @@ struct Quad {
     float top1{}, h1{}; // Top and height at the right edge.
 };
 
+/// Library options: the reflections in the floor, and the hovering of the games.
+inline bool g_shelf_reflections = true;
+inline bool g_shelf_floating = true;
+
 /// Draws the part of `img` between `u0` and `u1` (0..1 across the picture) into `q`.
 /// `shade` moves the picture towards `shade_to` (0 = as is, 1 = that colour). With `mirror`
 /// the picture is drawn upside down under the quad and fades out downwards, as a reflection
@@ -135,7 +139,7 @@ struct Quad {
 /// software.
 inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0, float u1, float shade,
                      u32 shade_to, bool mirror, bool smooth, float mirror_gap = 0.0f) {
-    if (img.Empty() || q.x1 <= q.x0) {
+    if (img.Empty() || q.x1 <= q.x0 || (mirror && !g_shelf_reflections)) {
         return;
     }
     const int xa = std::max(0, static_cast<int>(std::floor(q.x0)));
@@ -479,7 +483,9 @@ inline void DrawShelf(Canvas& c, Font& font, const ShelfView& v,
         const float away = std::min(std::abs(d), 1.0f);
         const ShelfPose p = PoseFor(v.style, d, cx, case_h);
         // Games that are not selected hover, each to its own beat.
-        const float bob = away * case_h * 0.014f * (1.0f + std::sin(v.time * 1.7f + index * 1.9f));
+        const float bob = !g_shelf_floating ? 0.0f
+                                            : away * case_h * 0.014f *
+                                                  (1.0f + std::sin(v.time * 1.7f + index * 1.9f));
         const float gap = p.lift + bob;
         const bool left_side = d < 0;
 
@@ -772,6 +778,9 @@ struct HomeView {
     std::string_view counter;   // "3 of 12"
     std::string_view search;    // Active filter, if any.
     bool compact{};             // Narrow (rotated) screen: fewer pills.
+    bool show_arrows{true};     // The two arrows beside the title.
+    bool show_title{true};      // The selected game's name and publisher.
+    int bar_style{};            // Button hints: 0 buttons, 1 plain text, 2 hidden.
 };
 
 /// One pill of the bar, with where it ended up (for touch).
@@ -844,14 +853,17 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
 
     // Title block, centred under the shelf, with an arrow either side of it.
     const int text_w = l.next_x - l.prev_x - 2 * l.arrow_radius - 40;
-    const std::string title = font.Truncate(v.title, 28, text_w);
+    const std::string title = font.Truncate(v.show_title ? v.title : std::string_view{}, 28, text_w);
     font.Draw(c, (v.screen_w - font.Measure(title, 28)) / 2, v.screen_h - 126, title, 28, kColText);
-    if (!v.publisher.empty()) {
+    if (v.show_title && !v.publisher.empty()) {
         const std::string pub = font.Truncate(v.publisher, 17, text_w);
         font.Draw(c, (v.screen_w - font.Measure(pub, 17)) / 2, v.screen_h - 100, pub, 17,
                   kColTextDim);
     }
-    if (v.count > 1) {
+    if (!v.show_arrows) {
+        l.prev_x = l.next_x = -10000; // Nothing there to touch either.
+    }
+    if (v.count > 1 && v.show_arrows) {
         for (const int dir : {-1, 1}) {
             const int ax = dir < 0 ? l.prev_x : l.next_x;
             FillDisc(c, static_cast<float>(ax), static_cast<float>(l.arrows_y), l.arrow_radius + 1.5f,
@@ -879,7 +891,23 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     const Pill narrow[] = {{"A", "Play", 'A'}, {"X", "Flip", 'X'}, {"Y", "Search", 'Y'}};
     const std::span<const Pill> pills = v.compact ? std::span<const Pill>{narrow}
                                                   : std::span<const Pill>{full};
-    if (v.count > 0) {
+    if (v.count > 0 && v.bar_style == 1) {
+        // Plain text: the button in the bright colour, what it does beside it.
+        constexpr int size = 17, inner = 8, between = 30;
+        int total = 0;
+        for (const Pill& p : pills) {
+            total += font.Measure(p.hint, size) + inner + font.Measure(p.label, size) + between;
+        }
+        int px = (v.screen_w - (total - between)) / 2;
+        for (const Pill& p : pills) {
+            const int hint_w = font.Draw(c, px, l.options_cy + 6, p.hint, size, kColText);
+            const int label_w =
+                font.Draw(c, px + hint_w + inner, l.options_cy + 6, p.label, size, kColTextDim);
+            const int w = hint_w + inner + label_w;
+            l.pills[l.pill_count++] = {px - 8, l.options_cy - 17, w + 16, 34, p.action};
+            px += w + between;
+        }
+    } else if (v.count > 0 && v.bar_style == 0) {
         int total = 0;
         for (const Pill& p : pills) {
             total += PillWidth(font, p.hint, p.label) + 10;
