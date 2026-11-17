@@ -709,17 +709,25 @@ public:
             return;
         }
         // Linear resampling to 48 kHz; `phase` carries the position across packets.
+        // The last frame of the previous packet goes in front, so the interpolation runs
+        // across the packet boundary instead of leaving a step there 200 times a second.
         constexpr double step = 32728.0 / 48000.0;
-        while (phase < static_cast<double>(frames - 1)) {
+        joined.resize((frames + 1) * 2);
+        joined[0] = last_frame[0];
+        joined[1] = last_frame[1];
+        std::memcpy(joined.data() + 2, samples, frames * 2 * sizeof(s16));
+        while (phase < static_cast<double>(frames)) {
             const std::size_t i = static_cast<std::size_t>(phase);
             const double f = phase - static_cast<double>(i);
             for (int ch = 0; ch < 2; ++ch) {
-                const double a = samples[i * 2 + ch], b = samples[(i + 1) * 2 + ch];
+                const double a = joined[i * 2 + ch], b = joined[(i + 1) * 2 + ch];
                 fifo.push_back(static_cast<s16>(a + (b - a) * f));
             }
             phase += step;
         }
-        phase -= static_cast<double>(frames - 1);
+        phase -= static_cast<double>(frames);
+        last_frame[0] = samples[(frames - 1) * 2];
+        last_frame[1] = samples[(frames - 1) * 2 + 1];
         // Too far behind is worse than a skip: drop the oldest sound.
         constexpr std::size_t limit = 48000 / 4 * 2; // A quarter of a second.
         if (fifo.size() > limit) {
@@ -779,6 +787,8 @@ private:
     };
     Buffer buffers[6];
     std::vector<s16> fifo;
+    std::vector<s16> joined;
+    s16 last_frame[2]{};
     double phase = 0.0;
     bool started = false;
     bool primed = false;
