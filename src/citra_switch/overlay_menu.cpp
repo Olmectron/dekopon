@@ -120,12 +120,27 @@ constexpr int kAmiibosPerPage = 7;
 constexpr int kCameraImagesPerPage = 6;
 
 std::atomic<bool> s_open{false};
-#if defined(__SWITCH2__)
-// Switch 2: the game is frozen while the in-game menu is open, unless turned off.
+// The game is frozen while the in-game menu is open, unless turned off.
 std::atomic<bool> s_pause_in_menu{true};
-#else
-std::atomic<bool> s_pause_in_menu{false};
-#endif
+
+// The order the pages are listed and stepped through (L/R): the everyday ones first, the
+// technical ones last under an "Advanced" heading - as in the launcher's options.
+constexpr std::array<Page, NumPages> kPageOrder{
+    Page::Home,   Page::Display, Page::Audio,    Page::Input,  Page::States, Page::Cheats,
+    Page::Amiibo, Page::Camera,  Page::Graphics, Page::Stereo, Page::System};
+
+constexpr bool IsAdvancedPage(Page page) {
+    return page == Page::Graphics || page == Page::Stereo || page == Page::System;
+}
+
+int PageOrderIndex(Page page) {
+    for (int i = 0; i < NumPages; ++i) {
+        if (kPageOrder[static_cast<std::size_t>(i)] == page) {
+            return i;
+        }
+    }
+    return 0;
+}
 int s_page = 0;
 int s_selected = 0;
 int s_cheat_page = 0;
@@ -338,13 +353,16 @@ void BuildHomeRows() {
     s_rows.push_back({Item::SaveHere});
     s_rows.push_back({Item::LoadHere});
     s_rows.push_back({Item::Separator, 0});
-    for (int page = static_cast<int>(Page::Display); page <= static_cast<int>(Page::System);
-         ++page) {
-        s_rows.push_back({Item::Section, page});
+    for (const Page page : kPageOrder) {
+        if (page != Page::Home && !IsAdvancedPage(page)) {
+            s_rows.push_back({Item::Section, static_cast<int>(page)});
+        }
     }
     s_rows.push_back({Item::Separator, 1});
-    for (int page = static_cast<int>(Page::States); page < NumPages; ++page) {
-        s_rows.push_back({Item::Section, page});
+    for (const Page page : kPageOrder) {
+        if (IsAdvancedPage(page)) {
+            s_rows.push_back({Item::Section, static_cast<int>(page)});
+        }
     }
 }
 
@@ -434,7 +452,7 @@ bool IsAction(const Row& row) {
 }
 
 const char* SeparatorLabel(int index) {
-    return index == 0 ? "Settings" : "Game";
+    return index == 0 ? "Pages" : "Advanced";
 }
 
 std::string SlotSummary(int slot) {
@@ -574,8 +592,24 @@ void Repaint() {
     const Page page = CurrentPage();
     VideoCore::OverlayMenuState state;
     state.visible = s_open.load(std::memory_order_relaxed);
-    state.title = page == Page::Home ? std::string{PageName(page)}
-                                     : std::string{"Quick Menu > "} + PageName(page);
+    state.title = PageName(page);
+    for (const Page listed : kPageOrder) {
+        state.sections.push_back({listed == Page::Home ? "Home" : PageName(listed),
+                                  IsAdvancedPage(listed)});
+    }
+    state.active_section = PageOrderIndex(page);
+    if (s_selected >= 0 && s_selected < static_cast<int>(s_rows.size())) {
+        const Row& focused = s_rows[static_cast<std::size_t>(s_selected)];
+        if (focused.item == Item::Setting && focused.index >= 0 &&
+            focused.index < static_cast<int>(s_settings.size())) {
+            state.description = s_settings[static_cast<std::size_t>(focused.index)].description;
+        } else if (focused.item == Item::Section && IsAdvancedPage(static_cast<Page>(focused.index))) {
+            state.description = "Advanced: change these only if you know what they do.";
+        }
+    }
+    if (IsAdvancedPage(page) && state.description.empty()) {
+        state.description = "Advanced: change these only if you know what they do.";
+    }
     switch (page) {
     case Page::Cheats:
         state.title += ListSuffix(s_cheat_page, CheatPageCount());
@@ -777,10 +811,10 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
 
     bool changed = false;
 
-    if (nav.tab_prev != nav.tab_next && CurrentPage() != Page::Home) {
-        const int current = s_page - static_cast<int>(Page::Display);
-        const int next = (current + (nav.tab_next ? 1 : -1) + NumSections) % NumSections;
-        EnterPage(static_cast<Page>(next + static_cast<int>(Page::Display)));
+    if (nav.tab_prev != nav.tab_next) {
+        const int current = PageOrderIndex(CurrentPage());
+        const int next = (current + (nav.tab_next ? 1 : -1) + NumPages) % NumPages;
+        EnterPage(kPageOrder[static_cast<std::size_t>(next)]);
         changed = true;
     }
 

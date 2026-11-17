@@ -1998,13 +1998,37 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
     const int n = static_cast<int>(state.items.size());
     const float inner_w = std::max({max_row_w, OverlayBuilder::Measure(state.title, title_scale),
                                     OverlayBuilder::Measure(state.hint, scale)});
-    const float panel_w = std::clamp(inner_w + 2.0f * pad, 0.35f * w, 0.92f * w);
+    // The list of pages down the left side.
+    const int section_count = static_cast<int>(state.sections.size());
+    const float side_row_h = std::round(line_h * 1.42f);
+    const float side_heading_h = std::round(line_h * 1.25f);
+    const float small_scale = scale * 0.78f;
+    float side_w = 0.0f;
+    float side_h = 0.0f;
+    bool has_advanced = false;
+    for (const auto& section : state.sections) {
+        side_w = std::max(side_w, OverlayBuilder::Measure(section.name, scale));
+        side_h += side_row_h;
+        has_advanced = has_advanced || section.advanced;
+    }
+    if (section_count > 0) {
+        side_w = std::round(side_w + 2.6f * em);
+        side_h += has_advanced ? side_heading_h : 0.0f;
+    }
+    const bool has_description = !state.description.empty();
+    const float description_h = has_description ? line_h + sep_gap * 0.5f : 0.0f;
+    const float content_w =
+        std::clamp(inner_w + 2.0f * pad, 0.35f * w, std::max(0.35f * w, 0.94f * w - side_w));
+    const float panel_w = side_w + content_w;
     const float panel_h =
-        pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap + footer_h + pad;
+        std::max(pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap +
+                     description_h + footer_h + pad,
+                 side_h + 2.0f * pad);
     const float panel_x0 = std::round((w - panel_w) / 2.0f);
     const float panel_y0 = std::round((h - panel_h) / 2.0f);
     const float panel_x1 = panel_x0 + panel_w;
     const float panel_y1 = panel_y0 + panel_h;
+    const float content_x0 = panel_x0 + side_w;
 
     std::vector<OverlayDraw::Batch> batches;
     const auto emit = [&](const std::array<float, 4>& color, u32 start) {
@@ -2015,14 +2039,17 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
     };
 
     constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.55f};
-    constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
-    constexpr std::array<float, 4> c_accent = {0.30f, 0.34f, 0.45f, 0.9f};
-    constexpr std::array<float, 4> c_highlight = {0.20f, 0.45f, 0.85f, 0.9f};
-    constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> c_row = {0.82f, 0.85f, 0.92f, 1.0f};
-    constexpr std::array<float, 4> c_header = {0.55f, 0.62f, 0.80f, 1.0f};
-    constexpr std::array<float, 4> c_sel = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> c_footer = {0.60f, 0.63f, 0.72f, 1.0f};
+    // The launcher's palette: dark surfaces, one warm accent.
+    constexpr std::array<float, 4> c_panel = {0.141f, 0.149f, 0.169f, 0.97f};
+    constexpr std::array<float, 4> c_side = {0.106f, 0.110f, 0.125f, 0.97f};
+    constexpr std::array<float, 4> c_accent = {0.227f, 0.235f, 0.259f, 1.0f};
+    constexpr std::array<float, 4> c_highlight = {0.980f, 0.667f, 0.286f, 1.0f};
+    constexpr std::array<float, 4> c_title = {0.945f, 0.949f, 0.957f, 1.0f};
+    constexpr std::array<float, 4> c_row = {0.839f, 0.851f, 0.871f, 1.0f};
+    constexpr std::array<float, 4> c_header = {0.980f, 0.667f, 0.286f, 1.0f};
+    constexpr std::array<float, 4> c_sel = {0.090f, 0.094f, 0.106f, 1.0f};
+    constexpr std::array<float, 4> c_footer = {0.608f, 0.627f, 0.651f, 1.0f};
+    constexpr std::array<float, 4> c_warn = {0.910f, 0.604f, 0.290f, 1.0f};
 
     // Dim the running game.
     {
@@ -2036,24 +2063,81 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         emit(c_panel, s);
     }
 
+    if (section_count > 0) {
+        {
+            const u32 s = builder.VertexCount();
+            builder.AddRect(panel_x0, panel_y0, content_x0, panel_y1);
+            emit(c_side, s);
+        }
+        // Rows are placed once, then drawn by colour.
+        std::vector<float> tops(static_cast<std::size_t>(section_count));
+        float heading_top = -1.0f;
+        float pen = panel_y0 + pad;
+        for (int i = 0; i < section_count; ++i) {
+            if (state.sections[i].advanced && heading_top < 0.0f) {
+                heading_top = pen;
+                pen += side_heading_h;
+            }
+            tops[static_cast<std::size_t>(i)] = pen;
+            pen += side_row_h;
+        }
+        const float text_x = panel_x0 + em * 1.3f;
+        const auto text_y = [&](int i) {
+            return std::round(tops[static_cast<std::size_t>(i)] + (side_row_h - line_h) / 2.0f);
+        };
+        const int active = state.active_section;
+        if (active >= 0 && active < section_count) {
+            const u32 s = builder.VertexCount();
+            const float top = tops[static_cast<std::size_t>(active)];
+            builder.AddRect(panel_x0 + em * 0.5f, top + 2.0f, content_x0 - em * 0.5f,
+                            top + side_row_h - 2.0f);
+            emit(c_highlight, s);
+        }
+        {
+            const u32 s = builder.VertexCount();
+            for (int i = 0; i < section_count; ++i) {
+                if (i != active) {
+                    builder.AddText(text_x, text_y(i), state.sections[i].name, scale);
+                }
+            }
+            emit(c_row, s);
+        }
+        if (active >= 0 && active < section_count) {
+            const u32 s = builder.VertexCount();
+            builder.AddText(text_x, text_y(active), state.sections[active].name, scale);
+            emit(c_sel, s);
+        }
+        if (heading_top >= 0.0f) {
+            const u32 s = builder.VertexCount();
+            builder.AddRect(panel_x0 + em * 0.8f, heading_top + 2.0f, content_x0 - em * 0.8f,
+                            heading_top + 2.0f + std::max(1.0f, std::round(em / 16.0f)));
+            builder.AddText(text_x, std::round(heading_top + side_heading_h * 0.30f), "ADVANCED",
+                            small_scale);
+            emit(c_warn, s);
+        }
+    }
+
     // Walk down the panel building each section's vertical extents.
     float pen_y = panel_y0 + pad;
     const float title_x =
-        std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.title, title_scale)) / 2.0f);
+        std::round(content_x0 + pad);
     const float title_y = pen_y;
     pen_y += title_line_h + sep_gap * 0.5f;
     const float underline_y = std::round(pen_y);
     pen_y += sep_gap * 0.5f;
     const float rows_top = pen_y;
-    pen_y = rows_top + static_cast<float>(n) * row_h + sep_gap * 0.5f;
+    pen_y = std::max(rows_top + static_cast<float>(n) * row_h + sep_gap * 0.5f,
+                     panel_y1 - pad - footer_h - description_h - sep_gap * 0.5f);
     const float footer_line_y = std::round(pen_y);
     pen_y += sep_gap * 0.5f;
+    const float description_y = pen_y;
+    pen_y += description_h;
     const float footer_y = pen_y;
 
     // Title underline and footer separator.
     {
         const u32 s = builder.VertexCount();
-        const float lx0 = panel_x0 + pad;
+        const float lx0 = content_x0 + pad;
         const float lx1 = panel_x1 - pad;
         const float th = std::max(1.0f, std::round(em / 12.0f));
         builder.AddRect(lx0, underline_y, lx1, underline_y + th);
@@ -2069,7 +2153,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         const u32 s = builder.VertexCount();
         const float top = rows_top + static_cast<float>(state.selected) * row_h;
         const float inset = std::round(row_h * 0.08f);
-        builder.AddRect(panel_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
+        builder.AddRect(content_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
                         top + row_h - inset);
         emit(c_highlight, s);
     }
@@ -2085,7 +2169,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         const auto& item = state.items[i];
         const float top = rows_top + static_cast<float>(i) * row_h;
         const float ty = std::round(top + (row_h - line_h) / 2.0f);
-        builder.AddText(panel_x0 + pad, ty, item.label, scale);
+        builder.AddText(content_x0 + pad, ty, item.label, scale);
         if (!item.value.empty()) {
             const float vx = panel_x1 - pad - OverlayBuilder::Measure(item.value, scale);
             builder.AddText(vx, ty, item.value, scale);
@@ -2111,7 +2195,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
             }
             add_row(i);
             const float top = rows_top + static_cast<float>(i) * row_h;
-            const float rule_x0 = panel_x0 + pad +
+            const float rule_x0 = content_x0 + pad +
                                   OverlayBuilder::Measure(state.items[i].label, scale) + em * 0.6f;
             const float rule_x1 = panel_x1 - pad;
             const float rule_y = std::round(top + row_h / 2.0f);
@@ -2128,12 +2212,23 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         emit(c_sel, s);
     }
 
+    // What the selected row is for, cut to fit on one line.
+    if (has_description) {
+        std::string text = state.description;
+        const float room = content_w - 2.0f * pad;
+        while (text.size() > 4 && OverlayBuilder::Measure(text, small_scale * 1.1f) > room) {
+            text.resize(text.size() - 4);
+            text += "...";
+        }
+        const u32 s = builder.VertexCount();
+        builder.AddText(content_x0 + pad, description_y, text, small_scale * 1.1f);
+        emit(c_title, s);
+    }
+
     // Footer hint.
     if (!state.hint.empty()) {
         const u32 s = builder.VertexCount();
-        const float fx =
-            std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.hint, scale)) / 2.0f);
-        builder.AddText(fx, footer_y, state.hint, scale);
+        builder.AddText(content_x0 + pad, footer_y, state.hint, small_scale * 1.05f);
         emit(c_footer, s);
     }
 

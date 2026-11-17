@@ -21,12 +21,21 @@ struct OverlayMenuItem {
     bool is_header{};
 };
 
+// One page of the in-game menu, as listed down its left side.
+struct OverlayMenuSection {
+    std::string name;
+    bool advanced{}; // Listed apart, under an "Advanced" heading.
+};
+
 struct OverlayMenuState {
     bool visible{};
     std::string title;
     std::vector<OverlayMenuItem> items;
     int selected{};
     std::string hint; // Footer help text.
+    std::string description; // What the selected row is for; shown above the hint.
+    std::vector<OverlayMenuSection> sections; // Empty: no side list.
+    int active_section{-1};
 };
 
 // Clockwise rotation the renderer applies to everything it draws over the game.
