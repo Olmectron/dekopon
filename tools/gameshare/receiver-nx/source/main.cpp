@@ -227,7 +227,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     static LdnNetworkInfo networks[0x18];
     bool station_open = false;
     bool connected = false;
-    Say("Scanning for a Dekopon host (hold B: cancel, hold Plus: quit)...\n");
+    Say("Scanning for a Toronja host (hold B: cancel, hold Plus: quit)...\n");
     consoleUpdate(nullptr);
 
     for (int round = 0; appletMainLoop() && !connected; ++round) {
@@ -364,7 +364,7 @@ std::vector<in_addr> LoadHosts() {
     if (file == nullptr) {
         file = std::fopen(HOSTS_FILE, "w");
         if (file != nullptr) {
-            std::fputs("# Dekopon Link: addresses of Dekopon hosts to try, one per line.\n"
+            std::fputs("# Toronja Link: addresses of Toronja hosts to try, one per line.\n"
                        "# Only needed when the host is not found automatically.\n"
                        "192.168.0.100\n",
                        file);
@@ -411,9 +411,9 @@ int main(int, char**) {
     }
 
     consoleInit(nullptr);
-    std::printf("Dekopon Link\n\n");
-    std::printf("Looking for a Dekopon host on this network...\n");
-    std::printf("(open a game in Dekopon on the other console)\n\n");
+    std::printf("Toronja Link\n\n");
+    std::printf("Looking for a Toronja host on this network...\n");
+    std::printf("(open a game in Toronja on the other console)\n\n");
     std::printf("Both stick clicks: bottom / top screen\n");
     std::printf("Plus: quit (while streaming: hold Plus + Minus)\n");
     consoleUpdate(nullptr);

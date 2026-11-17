@@ -55,10 +55,10 @@ $(OUT)/$(TARGET).elf: $(OUT)/main.o $(OUT)/game_share_usb.o
 	$(CXX) $(LDFLAGS) $^ $(LIBPATHS) $(LIBS) -o $@
 
 $(OUT)/$(TARGET).nacp: | $(OUT)
-	$(TOOLS)/nacptool --create "Dekopon Link" "Olmectron" "0.1.0" $@
+	$(TOOLS)/nacptool --create "Toronja Link" "Olmectron" "0.2.0" $@
 
 $(OUT)/$(TARGET).nro: $(OUT)/$(TARGET).elf $(OUT)/$(TARGET).nacp
-	$(TOOLS)/elf2nro $< $@ --nacp=$(OUT)/$(TARGET).nacp
+	$(TOOLS)/elf2nro $< $@ --nacp=$(OUT)/$(TARGET).nacp --icon=icon.jpg
 
 clean:
 	rm -rf out

@@ -124,14 +124,14 @@ endif()
 
 # The title hbmenu shows. The Switch 2 port is told apart from upstream's Switch 1 build.
 if (NINTENDO_SWITCH2)
-    set(DEKOPON_NACP_NAME "Dekopon for SW2")
+    set(DEKOPON_NACP_NAME "Toronja for SW2")
 else()
-    set(DEKOPON_NACP_NAME "Dekopon")
+    set(DEKOPON_NACP_NAME "Toronja")
 endif()
 
 nx_generate_nacp(OUTPUT dekopon.nacp
     NAME "${DEKOPON_NACP_NAME}"
-    AUTHOR "Azahar Team \& PalindromicBreadLoaf"
+    AUTHOR "Olmectron (Azahar, Dekopon)"
     VERSION "${DEKOPON_VERSION}"
 )
 

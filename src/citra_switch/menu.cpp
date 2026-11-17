@@ -619,7 +619,7 @@ int PathRowTop(int row) {
 const char* PathRowLabel(int row) {
     switch (row) {
     case PathRowUserDir:
-        return "Dekopon Folder";
+        return "Toronja Folder";
     case PathRowRomsDir:
         return "ROM Folder";
     case PathRowRomsDir2:
@@ -730,9 +730,9 @@ void DrawRail(Canvas& canvas, Tab active, Tab cursor, bool rail_focused) {
 
 void DrawHeader(Canvas& canvas, std::string_view subtitle) {
     canvas.FillRect(kContentX, 0, ContentW(), kHeaderH, kColBg);
-    g_font.Draw(canvas, kContentX + 24, CenterBaseline(0, kHeaderH, 28), "Dekopon", 28, kColText);
+    g_font.Draw(canvas, kContentX + 24, CenterBaseline(0, kHeaderH, 28), "Toronja", 28, kColText);
 #if defined(__SWITCH2__)
-    g_font.Draw(canvas, kContentX + 24 + g_font.Measure("Dekopon", 28) + 12,
+    g_font.Draw(canvas, kContentX + 24 + g_font.Measure("Toronja", 28) + 12,
                 CenterBaseline(0, kHeaderH, 18), "for Switch 2", 18, kColTextDim);
 #endif
     if (!subtitle.empty()) {
@@ -1036,7 +1036,6 @@ constexpr int kInfoLineH = 26;
 constexpr int kInfoLines = 8;
 constexpr int kInfoBodyTop = 112; // Baseline of the first body line.
 
-constexpr std::string_view kKofiUrl = "ko-fi.com/palindromicbreadloaf";
 
 int InfoCardW() {
     return std::min(720, g_screen_w - 48);
@@ -1203,11 +1202,13 @@ std::vector<InfoPage> PaginateNotes(const std::string& notes, const std::string&
 }
 
 // Shown only to somebody who has already been running an earlier build.
-InfoPage MakeSupportPage(int max_w) {
-    return MakeInfoPage("Support Dekopon",
-                        {"Dekopon is free software written in my spare time.",
-                         "If you are enjoying it, and able to, you can support its development on Ko-fi:", "",
-                         std::string{kKofiUrl}, "", "Thank you."},
+InfoPage MakeAboutPage(int max_w) {
+    return MakeInfoPage("About Toronja",
+                        {"Toronja is maintained by Olmectron.", "",
+                         "It builds on Toronja by PalindromicBreadLoaf, which in turn is "
+                         "built on Azahar, the work of the Azahar Emulator Project and of "
+                         "the Citra contributors before it.",
+                         "", "Free software under the GNU GPL, version 2 or later."},
                         max_w);
 }
 
@@ -1215,10 +1216,10 @@ InfoCard BuildWelcomeCard() {
     const int max_w = InfoCardTextW();
     const SwitchPaths& paths = GetPaths();
     InfoCard card;
-    card.title = "Welcome to Dekopon";
+    card.title = "Welcome to Toronja";
     card.pages.push_back(MakeInfoPage(
         "Your games",
-        {"Dekopon lists the games it finds in:", paths.roms_dir, "",
+        {"Toronja lists the games it finds in:", paths.roms_dir, "",
          "- 3DS, CCI, CXI, 3DSX, APP and CIA files are all recognised.",
          "- The Install tab installs CIAs to the emulated SD card.",
          "- The Paths tab moves that folder, adds a second one, and can scan subfolders."},
@@ -2501,7 +2502,7 @@ private:
                 } else if (update_check_result.status == UpdateCheckStatus::Error) {
                     ShowNotice(update_check_result.error, true);
                 } else {
-                    ShowNotice("GitHub lists no notes for Dekopon " +
+                    ShowNotice("GitHub lists no notes for Toronja " +
                                    std::string{CurrentVersion()},
                                true);
                 }
@@ -2515,7 +2516,7 @@ private:
             }
             if (update_check_result.status == UpdateCheckStatus::UpToDate) {
                 if (manual) {
-                    ShowNotice("Dekopon " + std::string{CurrentVersion()} + " is up to date",
+                    ShowNotice("Toronja " + std::string{CurrentVersion()} + " is up to date",
                                false);
                 }
                 return;
@@ -2569,7 +2570,7 @@ private:
     void OpenWhatsNewCard() {
         const int max_w = InfoCardTextW();
         InfoCard card;
-        card.title = "What's New in Dekopon " + std::string{CurrentVersion()};
+        card.title = "What's New in Toronja " + std::string{CurrentVersion()};
         const CachedReleaseNotes cached = LoadCachedReleaseNotes();
         if (CompareReleaseVersions(cached.tag, CurrentVersion()) == 0) {
             card.pages = PaginateNotes(cached.notes, NotesHeading(), max_w);
@@ -2577,18 +2578,18 @@ private:
         if (card.pages.empty()) {
             card.pages.push_back(MakeInfoPage(
                 NotesHeading(),
-                {"Dekopon is now on " + std::string{CurrentVersion()} + ".", "",
+                {"Toronja is now on " + std::string{CurrentVersion()} + ".", "",
                  "The notes for this release appear here once fetched from GitHub, and "
                  "are also under Settings > General to see later."},
                 max_w));
             info_card_notes_pending = true;
         }
-        card.pages.push_back(MakeSupportPage(max_w));
+        card.pages.push_back(MakeAboutPage(max_w));
         info_card = std::move(card);
     }
 
     // Swaps the placeholder page of an open What's New card for the notes the startup check
-    // brought back, leaving the support page where it is.
+    // brought back, leaving the about page where it is.
     void FillPendingNotes(const std::string& notes) {
         if (!info_card || !info_card_notes_pending) {
             return;
@@ -2606,10 +2607,10 @@ private:
     void OpenReleaseNotesCard(const std::string& notes) {
         InfoCard card;
 #if defined(__SWITCH2__) && defined(DEKOPON_UPSTREAM_VERSION)
-        card.title = "Dekopon for Switch 2 " + std::string{CurrentVersion()} +
-                     " (based on Dekopon " DEKOPON_UPSTREAM_VERSION ")";
+        card.title = "Toronja for Switch 2 " + std::string{CurrentVersion()} +
+                     " (based on Toronja " DEKOPON_UPSTREAM_VERSION ")";
 #else
-        card.title = "Dekopon " + std::string{CurrentVersion()};
+        card.title = "Toronja " + std::string{CurrentVersion()};
 #endif
         card.pages = PaginateNotes(notes, "Release notes", InfoCardTextW());
         if (card.pages.empty()) {
@@ -2648,7 +2649,7 @@ private:
         update_release = release;
         const std::string kind = release.prerelease ? "prerelease" : "stable release";
         confirm = ConfirmPrompt{
-            "Update Dekopon to " + release.tag + '?',
+            "Update Toronja to " + release.tag + '?',
             {"Installed: " + std::string{CurrentVersion()},
              "Available: " + release.tag + " (" + kind + ")",
              "The running dekopon.nro will be replaced after verification."},
@@ -3277,7 +3278,7 @@ private:
 
         int y = PathRowTop(PathRowCount - 1) + PathRowHeight(PathRowCount - 1) + 30;
         if (RestartPending()) {
-            g_font.Draw(c, x + 20, y, "Restart Dekopon to move to the new folder.", 18, kColAccent);
+            g_font.Draw(c, x + 20, y, "Restart Toronja to move to the new folder.", 18, kColAccent);
             y += 26;
         }
         if (!paths.roms_dir_2.empty() && !roms_dir_2_present) {
@@ -3358,7 +3359,7 @@ private:
         }
 
         g_font.Draw(c, x + 12, ContentBottom() - 30,
-                    "System setup installs unique console data. Keep your Dekopon folder private.",
+                    "System setup installs unique console data. Keep your Toronja folder private.",
                     16, kColTextDim);
 
         if (focus == Focus::Rail) {
@@ -3398,7 +3399,7 @@ private:
                     "This connects to Azahar Artic Setup Tool and installs system titles", 18,
                     kColTextDim);
         g_font.Draw(c, x + 28, y + 108,
-                    "and console specific data from the real 3DS into this Dekopon folder.", 18,
+                    "and console specific data from the real 3DS into this Toronja folder.", 18,
                     kColTextDim);
         g_font.Draw(c, x + 28, y + 148,
                     "Do not share the folder after setup. Do not take both systems online", 18,
@@ -3693,7 +3694,7 @@ private:
 
         g_font.Draw(c, bar_x, bar_y + 36, FormatSize(written) + " / " + FormatSize(total), 18,
                     kColTextDim);
-        const char* warn = "Don't close Dekopon or turn off the console";
+        const char* warn = "Don't close Toronja or turn off the console";
         g_font.Draw(c, x + w - 24 - g_font.Measure(warn, 18), bar_y + 36, warn, 18, kColTextDim);
     }
 
@@ -3723,7 +3724,7 @@ private:
         c.FillRect(0, 0, g_screen_w, g_screen_h, MakeColor(0x10, 0x11, 0x13, 0xC0));
         c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
         g_font.Draw(c, x + 24, y + 42,
-                    g_font.Truncate("Downloading Dekopon " + update_release.tag, 20, w - 48), 20,
+                    g_font.Truncate("Downloading Toronja " + update_release.tag, 20, w - 48), 20,
                     kColText);
 
         const int bar_x = x + 24;
@@ -3751,12 +3752,12 @@ private:
         c.FillRect(0, 0, g_screen_w, g_screen_h, MakeColor(0x10, 0x11, 0x13, 0xC0));
         c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
         g_font.Draw(c, x + 24, y + 46, "Update installed", 24, kColText);
-        g_font.Draw(c, x + 24, y + 84, "Dekopon " + update_release.tag + " is ready.", 19,
+        g_font.Draw(c, x + 24, y + 84, "Toronja " + update_release.tag + " is ready.", 19,
                     kColAccent);
         g_font.Draw(c, x + 24, y + 116,
                     "The previous NRO remains beside it with a .backup suffix.", 17,
                     kColTextDim);
-        g_font.Draw(c, x + 24, y + 144, "Dekopon will close and reopen on the new version.", 17,
+        g_font.Draw(c, x + 24, y + 144, "Toronja will close and reopen on the new version.", 17,
                     kColTextDim);
         DrawHint(c, x + 24, y + h - 42, "A", "Restart");
     }
@@ -3778,7 +3779,7 @@ private:
         int line_y = y + kInfoBodyTop;
         for (const std::string& line : page.lines) {
             g_font.Draw(c, x + 24, line_y, line, kInfoBodySize,
-                        line == kKofiUrl ? kColAccent : kColTextDim);
+                        kColTextDim);
             line_y += kInfoLineH;
         }
 

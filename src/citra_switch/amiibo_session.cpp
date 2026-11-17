@@ -2,6 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <vector>
@@ -31,6 +32,17 @@ std::mutex s_pending_mutex;
 
 bool s_have_tag = false;
 bool s_handed_over = false;
+
+// Automatic scanning: the reader follows the game. It opens when the game starts
+// looking for an Amiibo and closes a moment after the game stops looking, so nobody
+// has to go through the in-game menu.
+std::atomic<bool> s_auto_enabled{true};
+bool s_auto_session = false; // The open session was started by us, not from the menu.
+bool s_auto_refused = false; // The reader could not be opened for this search.
+std::chrono::steady_clock::time_point s_auto_next_check{};
+std::chrono::steady_clock::time_point s_auto_idle_since{};
+constexpr auto AUTO_CHECK_INTERVAL = std::chrono::milliseconds(400);
+constexpr auto AUTO_CLOSE_AFTER = std::chrono::seconds(3);
 std::chrono::steady_clock::time_point s_next_poll{};
 
 bool PollDue() {
@@ -173,7 +185,57 @@ bool IsRealAmiiboActive() {
     return s_have_tag;
 }
 
+/// Opens or closes the reader to follow what the game is doing.
+void FollowGuest() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < s_auto_next_check) {
+        return;
+    }
+    s_auto_next_check = now + AUTO_CHECK_INTERVAL;
+
+    const bool searching = GuestIsSearching();
+    if (!IsAmiiboSessionOpen()) {
+        s_auto_session = false;
+        if (!searching) {
+            s_auto_refused = false; // A new search gets a new attempt.
+            return;
+        }
+        if (!s_auto_enabled.load() || s_auto_refused) {
+            return;
+        }
+        std::string message;
+        if (BeginRealAmiiboScan(message) && IsAmiiboSessionOpen()) {
+            s_auto_session = true;
+            s_auto_idle_since = {};
+            VideoCore::PostOverlayToast("Hold the Amiibo against the right stick", 4000);
+        } else {
+            // No reader (or it is busy): say so once, not on every check.
+            s_auto_refused = true;
+            VideoCore::PostOverlayToast("Amiibo: " + message + ". Amiibo files can still "
+                                        "be loaded from the menu.",
+                                        5000);
+        }
+        return;
+    }
+
+    // A session we opened closes again once the game has lost interest and no Amiibo is
+    // on the reader. One opened from the menu is the user's to close.
+    if (!s_auto_session) {
+        return;
+    }
+    if (searching || s_have_tag) {
+        s_auto_idle_since = {};
+        return;
+    }
+    if (s_auto_idle_since.time_since_epoch().count() == 0) {
+        s_auto_idle_since = now;
+    } else if (now - s_auto_idle_since >= AUTO_CLOSE_AFTER) {
+        EndRealAmiibo();
+    }
+}
+
 void UpdateRealAmiibo() {
+    FollowGuest();
     if (!IsAmiiboSessionOpen() || !PollDue()) {
         return;
     }
@@ -213,9 +275,19 @@ void UpdateRealAmiibo() {
     }
 }
 
+bool IsAutoAmiiboEnabled() {
+    return s_auto_enabled.load();
+}
+
+void SetAutoAmiiboEnabled(bool enabled) {
+    s_auto_enabled.store(enabled);
+}
+
 void EndRealAmiibo() {
     TellGuestTagLeft();
     s_have_tag = false;
+    s_auto_session = false;
+    s_auto_idle_since = {};
     DiscardAmiiboOverwrite();
     ReleaseAmiibo();
 }

@@ -17,6 +17,7 @@
 #include "citra_switch/overlay_menu.h"
 #include "citra_switch/settings_menu.h"
 #include "citra_switch/game_share.h"
+#include "citra_switch/amiibo_session.h"
 #include "citra_switch/settings_registry.h"
 #include "video_core/rasterizer_cache/cache_stats.h"
 #include "citra_switch/updater.h"
@@ -774,6 +775,15 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                  QuickSection::Display},
                 Settings::values.show_shader_compile_notice);
 
+    t.Group("Amiibo");
+    t.Ini("Switch");
+    t << LocalBool("auto_amiibo_scan",
+                   {"Automatic Amiibo Scan",
+                    "Turns the NFC reader on by itself whenever the game asks for an "
+                    "Amiibo, and off again afterwards. Just hold the figure against the "
+                    "right stick when the game asks."},
+                   IsAutoAmiiboEnabled, SetAutoAmiiboEnabled, true);
+
     t.Group("Quick Menu");
     t.Ini("Switch");
     t << LocalBool("pause_in_quick_menu",
@@ -1283,7 +1293,7 @@ void BuildGameShare(std::vector<SettingEntry>& out) {
     t.Ini("GameShare");
     t << LocalBool("gameshare_enabled",
                    {"GameShare",
-                    "Lets another console running Dekopon Link show one of the screens and "
+                    "Lets another console running Toronja Link show one of the screens and "
                     "play along. Applies to the next game started."},
                    GameShare::IsEnabled, GameShare::SetEnabled, true);
     t << LocalChoice(

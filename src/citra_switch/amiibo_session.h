@@ -14,7 +14,13 @@ void CancelRealAmiiboScan();
 bool IsRealAmiiboScanning();
 bool IsRealAmiiboActive();
 
+// Polled every frame while a game runs. Besides serving an open scan it follows the game:
+// the reader opens by itself when the game starts looking for an Amiibo and closes when it
+// stops (see IsAutoAmiiboEnabled).
 void UpdateRealAmiibo();
+
+bool IsAutoAmiiboEnabled();
+void SetAutoAmiiboEnabled(bool enabled);
 
 void EndRealAmiibo();
 
