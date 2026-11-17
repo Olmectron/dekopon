@@ -6,6 +6,10 @@
 //
 // Protocol: see src/citra_switch/game_share.h in the Dekopon repository.
 //
+// The host is found by broadcast. When the two consoles are not on the same subnet (for
+// example this one on a PC's Wi-Fi hotspot and the host on that PC's Ethernet), list the
+// host's address in sdmc:/switch/dekopon-link.txt, one IPv4 address per line.
+//
 // Controls:  everything is sent to the game, except
 //   Right stick click      switch between the bottom and the top screen
 //   Plus + Minus (hold)    quit
@@ -156,6 +160,43 @@ void Draw(Framebuffer& fb, const Picture& picture) {
     framebufferEnd(&fb);
 }
 
+constexpr const char* HOSTS_FILE = "sdmc:/switch/dekopon-link.txt";
+
+/// Extra addresses to try besides the broadcast. Creates the file with an example the first
+/// time.
+std::vector<in_addr> LoadHosts() {
+    std::vector<in_addr> hosts;
+    std::FILE* file = std::fopen(HOSTS_FILE, "r");
+    if (file == nullptr) {
+        file = std::fopen(HOSTS_FILE, "w");
+        if (file != nullptr) {
+            std::fputs("# Dekopon Link: addresses of Dekopon hosts to try, one per line.\n"
+                       "# Only needed when the host is not found automatically.\n"
+                       "192.168.0.100\n",
+                       file);
+            std::fclose(file);
+        }
+        in_addr fallback{};
+        if (inet_aton("192.168.0.100", &fallback) != 0) {
+            hosts.push_back(fallback);
+        }
+        return hosts;
+    }
+    char line[128];
+    while (std::fgets(line, sizeof(line), file) != nullptr) {
+        char* end = line + std::strlen(line);
+        while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) {
+            *--end = '\0';
+        }
+        in_addr addr{};
+        if (line[0] != '#' && line[0] != '\0' && inet_aton(line, &addr) != 0) {
+            hosts.push_back(addr);
+        }
+    }
+    std::fclose(file);
+    return hosts;
+}
+
 } // namespace
 
 int main(int, char**) {
@@ -187,6 +228,7 @@ int main(int, char**) {
     host.sin_port = htons(PORT);
     host.sin_addr.s_addr = htonl(INADDR_BROADCAST);
     bool host_known = false;
+    const std::vector<in_addr> extra_hosts = LoadHosts();
 
     u8 screen = 1; // bottom
     u32 input_seq = 0;
@@ -238,6 +280,15 @@ int main(int, char**) {
                 hello[7] = 30; // frames per second
                 sendto(sock, hello, sizeof(hello), 0, reinterpret_cast<const sockaddr*>(&host),
                        sizeof(host));
+                if (!host_known) {
+                    // Not found by broadcast yet: also ask the listed addresses directly.
+                    for (const in_addr& extra : extra_hosts) {
+                        sockaddr_in target = host;
+                        target.sin_addr = extra;
+                        sendto(sock, hello, sizeof(hello), 0,
+                               reinterpret_cast<const sockaddr*>(&target), sizeof(target));
+                    }
+                }
             }
 
             if (host_known) {
