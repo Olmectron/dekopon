@@ -334,6 +334,21 @@ void NetworkThread() {
             if (!any) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
+            // The link's state, whenever it changes (at most every two seconds).
+            static Clock::time_point last_status{};
+            static Clock::time_point last_logged{};
+            static char previous[320];
+            if (Clock::now() - last_status > std::chrono::seconds{2}) {
+                last_status = Clock::now();
+                char status[320];
+                GameShareUsb::Status(status, sizeof(status));
+                if (std::strncmp(status, previous, 60) != 0 ||
+                    Clock::now() - last_logged > std::chrono::seconds{20}) {
+                    std::memcpy(previous, status, sizeof(previous));
+                    last_logged = Clock::now();
+                    LOG_INFO(Frontend, "GameShare/USB: {}", status);
+                }
+            }
         } else if (pollfd pfd{.fd = sock, .events = POLLIN, .revents = 0};
                    poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN) != 0) {
             sockaddr_in from{};

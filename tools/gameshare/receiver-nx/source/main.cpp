@@ -443,7 +443,9 @@ int main(int, char**) {
         if (down & HidNpadButton_Y) {
             char usb_log[256];
             usb_mode = GameShareUsb::Start(usb_log, sizeof(usb_log));
-            std::printf("USB: %s\n", usb_log);
+            s_log_lines = 0;
+            std::remove(LOG_FILE);
+            Say("USB: %s\n", usb_log);
             if (!usb_mode) {
                 std::printf("USB is not available. A: network  X: local wireless\n");
                 consoleUpdate(nullptr);
@@ -499,6 +501,7 @@ int main(int, char**) {
     u64 last_input_ns = 0;
     u32 ack_id = 0; // newest frame id seen, reported back to the host
     bool usb_was_connected = false;
+    u64 last_usb_status_ns = 0;
     u64 last_frame_ns = 0;
     u64 quit_since_ns = 0;
 
@@ -543,9 +546,18 @@ int main(int, char**) {
         if (usb_mode && console_active &&
             GameShareUsb::IsConnected() != usb_was_connected) {
             usb_was_connected = !usb_was_connected;
-            std::printf(usb_was_connected ? "USB link up (this console is the %s)\n"
-                                          : "USB link down%s\n",
-                        GameShareUsb::Role());
+            Say(usb_was_connected ? "USB link up (this console is the %s)\n"
+                                  : "USB link down%s\n",
+                GameShareUsb::Role());
+            consoleUpdate(nullptr);
+        }
+        // Until a picture arrives, say what the link sees every two seconds (also in
+        // the log file).
+        if (usb_mode && console_active && now - last_usb_status_ns >= 2'000'000'000ULL) {
+            last_usb_status_ns = now;
+            char status[320];
+            GameShareUsb::Status(status, sizeof(status));
+            Say("%s | host answered: %s\n", status, host_known ? "yes" : "no");
             consoleUpdate(nullptr);
         }
 

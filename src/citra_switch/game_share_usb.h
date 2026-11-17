@@ -27,6 +27,10 @@ bool IsConnected();
 /// "device", "host", or "" while not connected.
 const char* Role();
 
+/// One line describing the link: role, what each USB service sees, the last step that
+/// failed with its result code, and bytes moved. For logs; this path needs two consoles.
+void Status(char* out, std::size_t size);
+
 /// Queues one datagram. False when not connected or the queue is full (the datagram is
 /// dropped, like UDP would).
 bool Send(const void* data, std::size_t size);
