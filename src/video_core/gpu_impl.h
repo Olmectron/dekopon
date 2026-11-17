@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <unordered_map>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -71,6 +72,16 @@ struct GPU::Impl {
     PAddr pending_invalidate_start{};
     PAddr pending_invalidate_end{};
     bool has_pending_invalidate{};
+
+    /// Guest read-backs that repeat every frame (see GPU::FlushRegion). Keyed by MiB of
+    /// guest physical memory.
+    struct HotReadback {
+        u64 last_frame{};
+        u32 streak{};
+        bool queued_this_frame{};
+    };
+    std::unordered_map<u32, HotReadback> hot_readbacks;
+    u64 frame_counter{1};
 
 #ifdef __SWITCH__
     u32 perf_stats_frame_counter{};

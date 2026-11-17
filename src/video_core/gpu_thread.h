@@ -86,13 +86,19 @@ struct InvalidateRegionCommand {
     u32 size{};
 };
 
+/// A read-back that the guest repeats every frame, served without stopping the guest.
+struct FlushRegionCommand {
+    PAddr address{};
+    u32 size{};
+};
+
 struct StopCommand {};
 
 using GPUCommandData =
     std::variant<StopCommand, WriteRegCommand, WriteRegsCommand, SubmitCmdListCommand,
                  MemoryFillCommand, MemoryTransferCommand, BufferSwapCommand, ColorFillCommand,
                  InvalidateRegionCommand, AccurateMulCommand, RightEyeCommand, SwapBuffersCommand,
-                 UpdateFramebufferLayoutCommand>;
+                 UpdateFramebufferLayoutCommand, FlushRegionCommand>;
 
 static_assert(std::is_trivially_copyable_v<WriteRegCommand>);
 
