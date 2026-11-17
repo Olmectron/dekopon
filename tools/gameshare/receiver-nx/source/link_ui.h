@@ -358,7 +358,124 @@ public:
         }
     }
 
+    // ------------------------------------------------------------------ before the picture
+
+    /// 0: choosing how to connect, 1: Wi-Fi / LAN, 2: local wireless.
+    int startup_mode = 0;
+
+    /// A line of progress, shown in the status card (a trailing newline is dropped; several
+    /// lines may come in one call).
+    void AddLog(std::string_view text) {
+        std::size_t begin = 0;
+        while (begin < text.size()) {
+            std::size_t end = text.find('\n', begin);
+            if (end == std::string_view::npos) {
+                end = text.size();
+            }
+            if (end > begin) {
+                log.emplace_back(text.substr(begin, end - begin));
+            }
+            begin = end + 1;
+        }
+        constexpr std::size_t keep = 15;
+        if (log.size() > keep) {
+            log.erase(log.begin(), log.end() - keep);
+        }
+    }
+
+    /// Which choice a touch at (x, y) lands on: 1 Wi-Fi / LAN, 2 local wireless, 3 close.
+    int StartupHit(int x, int y) const {
+        for (int i = 0; i < 3; ++i) {
+            if (CardRect(i).Contains(x, y)) {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /// The screen shown until the first picture arrives: the ways to connect on the left,
+    /// what is happening on the right.
+    void ComposeStartup(u32* pixels, u32 row_pixels, u64 now_ns) {
+        FillGradientV(canvas, 0, 0, SCREEN_W, SCREEN_H, MakeColor(0x14, 0x15, 0x18),
+                      MakeColor(0x1E, 0x20, 0x26));
+        if (font_ready) {
+            font.Draw(canvas, 64, 104, "Toronja Link", 44, MakeColor(0xF1, 0xF2, 0xF4));
+            font.Draw(canvas, 64, 138, "Play here what is running on the other console", 18,
+                      MakeColor(0x9B, 0xA0, 0xA6));
+            struct Card {
+                const char* hint;
+                const char* title;
+                const char* text;
+            };
+            const Card cards[3] = {
+                {"A", "Wi-Fi / LAN", "Both consoles on the same network."},
+                {"X", "Local wireless",
+                 "Console to console, no router. Start this app from the Album's Homebrew Menu."},
+                {"+", "Close", "Back to the Homebrew Menu."},
+            };
+            for (int i = 0; i < 3; ++i) {
+                const Rect r = CardRect(i);
+                const bool active = startup_mode == i + 1;
+                if (active) {
+                    canvas.RoundBorder(r.x, r.y, r.w, r.h, 18, 3, MakeColor(0xFA, 0xAA, 0x49),
+                                       MakeColor(0x30, 0x2A, 0x22));
+                } else {
+                    canvas.FillRoundRect(r.x, r.y, r.w, r.h, 18, MakeColor(0x26, 0x28, 0x2E));
+                }
+                FillDisc(canvas, r.x + 46.0f, r.y + r.h / 2.0f, 22.0f,
+                         active ? MakeColor(0xFA, 0xAA, 0x49) : MakeColor(0x3A, 0x3D, 0x45));
+                const int hw = font.Measure(cards[i].hint, 22);
+                font.Draw(canvas, r.x + 46 - hw / 2, r.y + r.h / 2 + 8, cards[i].hint, 22,
+                          active ? MakeColor(0x17, 0x18, 0x1B) : MakeColor(0xF1, 0xF2, 0xF4));
+                font.Draw(canvas, r.x + 86, r.y + 38, cards[i].title, 22, MakeColor(0xF1, 0xF2, 0xF4));
+                int ty = r.y + 62;
+                for (const std::string& line : WrapLines(font, cards[i].text, 15, r.w - 110)) {
+                    font.Draw(canvas, r.x + 86, ty, line, 15, MakeColor(0x9B, 0xA0, 0xA6));
+                    ty += 19;
+                }
+            }
+            font.Draw(canvas, 64, SCREEN_H - 40,
+                      "While playing: hold + and - for the menu, click both sticks for the other screen",
+                      15, MakeColor(0x7A, 0x7F, 0x88));
+
+            // Status card.
+            constexpr int sx = 688, sy = 72, sw = 528, sh = 576;
+            canvas.FillRoundRect(sx, sy, sw, sh, 22, MakeColor(0x1B, 0x1C, 0x21));
+            const char* title = startup_mode == 0   ? "Choose how to connect"
+                                : startup_mode == 1 ? "Looking for the other console"
+                                                    : "Joining the other console";
+            std::string heading = title;
+            if (startup_mode != 0) {
+                heading.append(static_cast<std::size_t>((now_ns / 400'000'000ULL) % 4), '.');
+            }
+            font.Draw(canvas, sx + 28, sy + 46, heading, 22, MakeColor(0xFA, 0xAA, 0x49));
+            const char* tip = startup_mode == 0
+                                  ? "On the other console: turn GameShare on and start a game."
+                                  : "Start a game on the other console, with GameShare on.";
+            font.Draw(canvas, sx + 28, sy + 72, tip, 15, MakeColor(0x9B, 0xA0, 0xA6));
+            canvas.FillRect(sx + 28, sy + 90, sw - 56, 1, MakeColor(0x30, 0x33, 0x39));
+            int ly = sy + 120;
+            for (std::size_t i = 0; i < log.size(); ++i) {
+                const bool newest = i + 1 == log.size();
+                font.Draw(canvas, sx + 28, ly, font.Truncate(log[i], 15, sw - 56), 15,
+                          newest ? MakeColor(0xE6, 0xE8, 0xEB) : MakeColor(0x8A, 0x8F, 0x98));
+                ly += 30;
+            }
+        }
+        const u32* src = canvas.Data();
+        for (int y = 0; y < SCREEN_H; ++y) {
+            std::memcpy(pixels + static_cast<std::size_t>(y) * row_pixels, src + y * SCREEN_W,
+                        SCREEN_W * sizeof(u32));
+        }
+    }
+
 private:
+    static Rect CardRect(int index) {
+        return {64, 188 + index * 124, 560, 108};
+    }
+
+    std::vector<std::string> log;
+
     struct Row {
         const char* label;
         std::string value;

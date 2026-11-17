@@ -146,13 +146,30 @@ int s_log_lines = 0;
 
 /// printf that also appends to LOG_FILE (the first few hundred lines), so the result of a
 /// local wireless attempt can be read afterwards instead of off a scrolling screen.
+// The screen. Until the first picture arrives it shows the ways to connect and the
+// progress lines; Say() feeds those, Present() draws them.
+Link::Screen* g_ui = nullptr;
+Framebuffer g_fb{};
+
+void Present() {
+    if (g_ui == nullptr) {
+        return;
+    }
+    u32 stride = 0;
+    u32* pixels = static_cast<u32*>(framebufferBegin(&g_fb, &stride));
+    g_ui->ComposeStartup(pixels, stride / sizeof(u32), armTicksToNs(armGetSystemTick()));
+    framebufferEnd(&g_fb);
+}
+
 __attribute__((format(printf, 1, 2))) void Say(const char* format, ...) {
     char line[256];
     va_list args;
     va_start(args, format);
     std::vsnprintf(line, sizeof(line), format, args);
     va_end(args);
-    std::fputs(line, stdout);
+    if (g_ui != nullptr) {
+        g_ui->AddLog(line);
+    }
     if (s_log_lines < 400) {
         ++s_log_lines;
         if (std::FILE* file = std::fopen(LOG_FILE, "a")) {
@@ -184,7 +201,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
         rc = ldnInitialize(LdnServiceType_User);
         Say("ldnInitialize(user): 0x%x\n", rc);
     }
-    consoleUpdate(nullptr);
+    Present();
     if (R_FAILED(rc)) {
         return false;
     }
@@ -200,7 +217,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     bool station_open = false;
     bool connected = false;
     Say("Scanning for a Toronja host (hold B: cancel, hold Plus: quit)...\n");
-    consoleUpdate(nullptr);
+    Present();
 
     for (int round = 0; appletMainLoop() && !connected; ++round) {
         // After a full round of both protocols, try the other flavour of the service.
@@ -230,7 +247,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
             Say("protocol %s: 0x%x\n", mixed ? "NX+Switch2" : "NX", rc);
             rc = ldnOpenStation();
             Say("ldnOpenStation: 0x%x\n", rc);
-            consoleUpdate(nullptr);
+            Present();
             if (R_FAILED(rc)) {
                 ldnExit();
                 return false;
@@ -259,7 +276,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
             if (R_FAILED(rc) || total > 0) {
                 Say("scan %s: 0x%x, %d network(s)\n",
                             pass == 1 ? "scene+id" : "scene only", rc, total);
-                consoleUpdate(nullptr);
+                Present();
             }
             if (R_SUCCEEDED(rc) && total > 0) {
                 Say("found: id %016llx scene %04x ch %d\n",
@@ -273,7 +290,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
                     // title this runs as; only applet mode has none to check.
                     Say("  -> open the Homebrew Menu from the Album, not from a game\n");
                 }
-                consoleUpdate(nullptr);
+                Present();
                 connected = R_SUCCEEDED(rc);
             }
         }
@@ -291,7 +308,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
                             networks[i].network_id.intent_id.scene_id, networks[i].common.channel,
                             networks[i].node_count);
             }
-            consoleUpdate(nullptr);
+            Present();
         }
 
         for (int wait = 0; wait < 6 && !connected; ++wait) {
@@ -322,7 +339,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     // The first node is the access point, i.e. the Dekopon host.
     host_addr.s_addr = htonl(info.nodes[0].ip_addr.addr);
     Say("Joined. Host %s\n", inet_ntoa(host_addr));
-    consoleUpdate(nullptr);
+    Present();
     return true;
 }
 
@@ -382,34 +399,63 @@ int main(int, char**) {
         hidStartSixAxisSensor(sensor);
     }
 
-    consoleInit(nullptr);
-    std::printf("Toronja Link\n\n");
-    std::printf("Looking for a Toronja host on this network...\n");
-    std::printf("(open a game in Toronja on the other console)\n\n");
-    std::printf("Both stick clicks: bottom / top screen\n");
-    std::printf("Plus: quit (while streaming: hold Plus + Minus)\n");
-    consoleUpdate(nullptr);
-    bool console_active = true;
-    Framebuffer fb{};
+    Link::Screen ui;
+    ui.Init();
+    g_ui = &ui;
+    framebufferCreate(&g_fb, nwindowGetDefault(), FB_WIDTH, FB_HEIGHT, PIXEL_FORMAT_RGBA_8888, 2);
+    framebufferMakeLinear(&g_fb);
+    Framebuffer& fb = g_fb;
+    bool console_active = true; // No picture yet: the startup screen is up.
+    Present();
+    // Started on top of a game title (or as an installed forwarder), the system only lets
+    // local wireless join networks that title's NACP lists. Say so before it is tried.
+    const AppletType applet = appletGetAppletType();
+    if (applet == AppletType_Application || applet == AppletType_SystemApplication) {
+        Say("Running as a game title: local wireless is only allowed if that
+");
+        Say("title lists the host's network id (see the README about forwarders).
+");
+        Say("From the Album's Homebrew Menu it works as is.
+");
+    }
 
     // How to reach the host. The socket is created afterwards, so that with local wireless it
     // lives on that network.
-    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
-    std::printf("Local wireless needs the Homebrew Menu opened from the Album,\n"
-                "not on top of a game.\n");
-    consoleUpdate(nullptr);
+    bool prompt_touching = false;
     bool local_wireless = false;
     bool usb_mode = false;
     bool quit = false;
     in_addr local_host{};
     while (appletMainLoop()) {
         padUpdate(&pad);
-        const u64 down = padGetButtonsDown(&pad);
+        u64 down = padGetButtonsDown(&pad);
+        HidTouchScreenState prompt_touch{};
+        const bool finger = hidGetTouchScreenStates(&prompt_touch, 1) != 0 && prompt_touch.count > 0;
+        if (finger && !prompt_touching) {
+            switch (ui.StartupHit(static_cast<int>(prompt_touch.touches[0].x),
+                                  static_cast<int>(prompt_touch.touches[0].y))) {
+            case 1:
+                down |= HidNpadButton_A;
+                break;
+            case 2:
+                down |= HidNpadButton_X;
+                break;
+            case 3:
+                down |= HidNpadButton_Plus;
+                break;
+            default:
+                break;
+            }
+        }
+        prompt_touching = finger;
+        ui.startup_mode = 0;
         if (down & HidNpadButton_Plus) {
             quit = true;
             break;
         }
         if (down & HidNpadButton_A) {
+            ui.startup_mode = 1;
+            Say("Wi-Fi / LAN: asking the network for the other console\n");
             break;
         }
 #ifdef DEKOPON_LINK_USB
@@ -420,35 +466,40 @@ int main(int, char**) {
             std::remove(LOG_FILE);
             Say("USB: %s\n", usb_log);
             if (!usb_mode) {
-                std::printf("USB is not available. A: network  X: local wireless\n");
-                consoleUpdate(nullptr);
+                Say("USB is not available. A: network  X: local wireless\n");
+                Present();
                 continue;
             }
-            std::printf("Connect both consoles with a USB-C cable.\n");
-            consoleUpdate(nullptr);
+            Say("Connect both consoles with a USB-C cable.\n");
+            Present();
             break;
         }
 #endif
         if (down & HidNpadButton_X) {
+            ui.startup_mode = 2;
+            Present();
             local_wireless = JoinLocalWireless(pad, local_host, quit);
             if (quit) {
                 break;
             }
             if (!local_wireless) {
                 // Let go of B first, or it would not register as a new press below.
-                std::printf("Local wireless stopped. A: network  X: try again  Plus: quit\n");
-                consoleUpdate(nullptr);
+                Say("Local wireless stopped. A: network  X: try again  Plus: quit\n");
+                Present();
                 continue;
             }
             break;
         }
-        consoleUpdate(nullptr);
+        Present();
     }
 
     if (quit) {
-        consoleExit(nullptr);
+        framebufferClose(&g_fb);
         socketExit();
         return 0;
+    }
+    if (local_wireless) {
+        ui.startup_mode = 2;
     }
 
     const int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -469,8 +520,6 @@ int main(int, char**) {
     }
     const std::vector<in_addr> extra_hosts = LoadHosts();
 
-    Link::Screen ui;
-    ui.Init();
     Link::AudioPlayer audio;
     bool amiibo_scanning = false;
     bool amiibo_sent = false;
@@ -538,7 +587,7 @@ int main(int, char**) {
             Say(usb_was_connected ? "USB link up (this console is the %s)\n"
                                   : "USB link down%s\n",
                 GameShareUsb::Role());
-            consoleUpdate(nullptr);
+            Present();
         }
         // Until a picture arrives, say what the link sees every two seconds (also in
         // the log file).
@@ -547,7 +596,7 @@ int main(int, char**) {
             char status[320];
             GameShareUsb::Status(status, sizeof(status));
             Say("%s | host answered: %s\n", status, host_known ? "yes" : "no");
-            consoleUpdate(nullptr);
+            Present();
         }
 
         if (sock >= 0 || usb_mode) {
@@ -685,8 +734,8 @@ int main(int, char**) {
                         host.sin_addr = from.sin_addr;
                         host_known = true;
                         if (console_active) {
-                            std::printf("\nHost found at %s\n", inet_ntoa(from.sin_addr));
-                            consoleUpdate(nullptr);
+                            Say("\nHost found at %s\n", inet_ntoa(from.sin_addr));
+                            Present();
                         }
                     }
                 } else if (type == PacketType::Frame && size > HEADER + 17 && host_known) {
@@ -819,13 +868,7 @@ int main(int, char**) {
             picture_dirty = true; // The menu, the tab or a notice changed.
         }
         if (picture_dirty) {
-            if (console_active) {
-                consoleExit(nullptr);
-                console_active = false;
-                framebufferCreate(&fb, nwindowGetDefault(), FB_WIDTH, FB_HEIGHT,
-                                  PIXEL_FORMAT_RGBA_8888, 2);
-                framebufferMakeLinear(&fb);
-            }
+            console_active = false; // The picture takes over from the startup screen.
             picture_dirty = false;
             u32 stride = 0;
             u32* pixels = static_cast<u32*>(framebufferBegin(&fb, &stride));
@@ -834,7 +877,8 @@ int main(int, char**) {
                        static_cast<int>(picture.width), static_cast<int>(picture.height));
             framebufferEnd(&fb);
         } else if (console_active) {
-            consoleUpdate(nullptr);
+            Present();
+            svcSleepThread(8'000'000);
         } else {
             // Nothing new: wait a moment instead of spinning. If the stream has stopped for a
             // while, forget the host so the next HELLO goes out as a broadcast again.
@@ -854,11 +898,7 @@ int main(int, char**) {
     if (sock >= 0) {
         close(sock);
     }
-    if (console_active) {
-        consoleExit(nullptr);
-    } else {
-        framebufferClose(&fb);
-    }
+    framebufferClose(&fb);
     if (local_wireless) {
         ldnExit();
     }
