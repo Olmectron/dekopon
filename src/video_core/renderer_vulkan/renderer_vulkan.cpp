@@ -2188,14 +2188,21 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
                                     OverlayBuilder::Measure(state.hint, scale)});
     // The list of pages down the left side.
     const int section_count = static_cast<int>(state.sections.size());
-    const float side_row_h = std::round(line_h * 1.42f);
-    const float side_heading_h = std::round(line_h * 1.25f);
+    // The side list has to fit the sheet however many pages there are.
+    const float sheet_h = std::round(0.90f * h);
+    const float side_room = sheet_h - 2.0f * pad;
+    const float side_slots = static_cast<float>(section_count) + 0.9f;
+    const float side_row_h =
+        std::min(std::round(line_h * 1.42f), std::floor(side_room / std::max(side_slots, 1.0f)));
+    const float side_heading_h = std::round(side_row_h * 0.9f);
+    const float side_scale = std::min(scale, side_row_h / (OverlayFont::kLineHeight * 1.18f));
+    const float side_line_h = OverlayFont::kLineHeight * side_scale;
     const float small_scale = scale * 0.78f;
     float side_w = 0.0f;
     float side_h = 0.0f;
     bool has_advanced = false;
     for (const auto& section : state.sections) {
-        side_w = std::max(side_w, OverlayBuilder::Measure(section.name, scale));
+        side_w = std::max(side_w, OverlayBuilder::Measure(section.name, side_scale));
         side_h += side_row_h;
         has_advanced = has_advanced || section.advanced;
     }
@@ -2205,13 +2212,15 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
     }
     const bool has_description = !state.description.empty();
     const float description_h = has_description ? line_h + sep_gap * 0.5f : 0.0f;
-    const float content_w =
-        std::clamp(inner_w + 2.0f * pad, 0.35f * w, std::max(0.35f * w, 0.94f * w - side_w));
-    const float panel_w = side_w + content_w;
+    // A sheet over most of the screen, whatever it holds: the same footing as the home
+    // screen, not a box sized to its contents.
+    (void)inner_w;
+    const float panel_w = std::round(0.94f * w);
+    const float content_w = panel_w - side_w;
     const float panel_h =
-        std::max(pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap +
-                     description_h + footer_h + pad,
-                 side_h + 2.0f * pad);
+        std::max({pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap +
+                      description_h + footer_h + pad,
+                  side_h + 2.0f * pad, sheet_h});
     const float panel_x0 = std::round((w - panel_w) / 2.0f);
     const float panel_y0 = std::round((h - panel_h) / 2.0f);
     const float panel_x1 = panel_x0 + panel_w;
@@ -2287,7 +2296,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
         }
         const float text_x = panel_x0 + em * 1.3f;
         const auto text_y = [&](int i) {
-            return std::round(tops[static_cast<std::size_t>(i)] + (side_row_h - line_h) / 2.0f);
+            return std::round(tops[static_cast<std::size_t>(i)] + (side_row_h - side_line_h) / 2.0f);
         };
         const int active = state.active_section;
         if (active >= 0 && active < section_count) {
@@ -2301,14 +2310,14 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
             const u32 s = builder.VertexCount();
             for (int i = 0; i < section_count; ++i) {
                 if (i != active) {
-                    builder.AddText(text_x, text_y(i), state.sections[i].name, scale);
+                    builder.AddText(text_x, text_y(i), state.sections[i].name, side_scale);
                 }
             }
             emit(c_row, s);
         }
         if (active >= 0 && active < section_count) {
             const u32 s = builder.VertexCount();
-            builder.AddText(text_x, text_y(active), state.sections[active].name, scale);
+            builder.AddText(text_x, text_y(active), state.sections[active].name, side_scale);
             emit(c_sel, s);
         }
         if (heading_top >= 0.0f) {
@@ -2316,7 +2325,7 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
             builder.AddRect(panel_x0 + em * 0.8f, heading_top + 2.0f, content_x0 - em * 0.8f,
                             heading_top + 2.0f + std::max(1.0f, std::round(em / 16.0f)));
             builder.AddText(text_x, std::round(heading_top + side_heading_h * 0.30f), "ADVANCED",
-                            small_scale);
+                            side_scale * 0.80f);
             emit(c_warn, s);
         }
     }

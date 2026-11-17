@@ -670,8 +670,11 @@ std::string Label(const Row& row) {
 
 std::string Value(const Row& row) {
     switch (row.item) {
-    case Item::Setting:
-        return s_settings[static_cast<std::size_t>(row.index)].value();
+    case Item::Setting: {
+        // Headings have no value (and no function to ask for one).
+        const SettingsRow& setting = s_settings[static_cast<std::size_t>(row.index)];
+        return setting.is_header || !setting.value ? std::string{} : setting.value();
+    }
     case Item::SaveHere:
     case Item::LoadHere:
         return SlotSummary(s_home_slot);
