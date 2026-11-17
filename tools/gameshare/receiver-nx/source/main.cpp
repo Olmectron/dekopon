@@ -12,7 +12,8 @@
 //
 // Controls:  everything is sent to the game, except
 //   Both stick clicks      switch between the bottom and the top screen
-//   Plus + Minus (hold)    quit
+//   Plus                   quit, until a picture arrives
+//   Plus + Minus (hold)    quit while streaming
 
 #include <algorithm>
 #include <csetjmp>
@@ -173,7 +174,7 @@ constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0
 ///  - the filter: a network only matches "our" local communication id when both consoles run
 ///    the homebrew through the same title, so the scan also looks for the scene id alone and,
 ///    failing that, lists whatever local networks are in range.
-bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
+bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     // The system flavour of the service first: the user one only lets an application join
     // networks whose local communication id is listed by the title it runs as, and the host
     // runs as a different title (ldnConnect then fails with 0xc2cb, "invalid object").
@@ -198,7 +199,7 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
     static LdnNetworkInfo networks[0x18];
     bool station_open = false;
     bool connected = false;
-    std::printf("Scanning for a Dekopon host (B to cancel)...\n");
+    std::printf("Scanning for a Dekopon host (hold B: cancel, hold Plus: quit)...\n");
     consoleUpdate(nullptr);
 
     for (int round = 0; appletMainLoop() && !connected; ++round) {
@@ -221,8 +222,11 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
             station_open = true;
         }
 
+        // Held, not "just pressed": a scan blocks for a while, and a short press in between
+        // two pad updates would go unnoticed.
         padUpdate(&pad);
-        if (padGetButtonsDown(&pad) & HidNpadButton_B) {
+        if (padGetButtons(&pad) & (HidNpadButton_B | HidNpadButton_Plus)) {
+            quit = (padGetButtons(&pad) & HidNpadButton_Plus) != 0;
             ldnExit();
             return false;
         }
@@ -269,8 +273,14 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
             consoleUpdate(nullptr);
         }
 
-        if (!connected) {
-            svcSleepThread(300'000'000);
+        for (int wait = 0; wait < 6 && !connected; ++wait) {
+            svcSleepThread(50'000'000);
+            padUpdate(&pad);
+            if (padGetButtons(&pad) & (HidNpadButton_B | HidNpadButton_Plus)) {
+                quit = (padGetButtons(&pad) & HidNpadButton_Plus) != 0;
+                ldnExit();
+                return false;
+            }
         }
     }
     if (!connected) {
@@ -346,7 +356,7 @@ int main(int, char**) {
     std::printf("Looking for a Dekopon host on this network...\n");
     std::printf("(open a game in Dekopon on the other console)\n\n");
     std::printf("Both stick clicks: bottom / top screen\n");
-    std::printf("Hold Plus + Minus: quit\n");
+    std::printf("Plus: quit (while streaming: hold Plus + Minus)\n");
     consoleUpdate(nullptr);
     bool console_active = true;
     Framebuffer fb{};
@@ -356,23 +366,38 @@ int main(int, char**) {
     std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
     consoleUpdate(nullptr);
     bool local_wireless = false;
+    bool quit = false;
     in_addr local_host{};
     while (appletMainLoop()) {
         padUpdate(&pad);
         const u64 down = padGetButtonsDown(&pad);
+        if (down & HidNpadButton_Plus) {
+            quit = true;
+            break;
+        }
         if (down & HidNpadButton_A) {
             break;
         }
         if (down & HidNpadButton_X) {
-            local_wireless = JoinLocalWireless(pad, local_host);
+            local_wireless = JoinLocalWireless(pad, local_host, quit);
+            if (quit) {
+                break;
+            }
             if (!local_wireless) {
-                std::printf("Local wireless failed. A: network    X: try again\n");
+                // Let go of B first, or it would not register as a new press below.
+                std::printf("Local wireless stopped. A: network  X: try again  Plus: quit\n");
                 consoleUpdate(nullptr);
                 continue;
             }
             break;
         }
         consoleUpdate(nullptr);
+    }
+
+    if (quit) {
+        consoleExit(nullptr);
+        socketExit();
+        return 0;
     }
 
     const int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -415,11 +440,15 @@ int main(int, char**) {
         const u64 held = padGetButtons(&pad);
         const u64 pressed = padGetButtonsDown(&pad);
 
-        // Quit: Plus + Minus held for a second and a half.
+        // Quit: Plus alone while still looking for the host (nothing to forward it to yet);
+        // once streaming, Plus + Minus held for half a second.
+        if (console_active && (pressed & HidNpadButton_Plus)) {
+            break;
+        }
         if ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus)) {
             if (quit_since_ns == 0) {
                 quit_since_ns = now;
-            } else if (now - quit_since_ns > 1'500'000'000ULL) {
+            } else if (now - quit_since_ns > 500'000'000ULL) {
                 break;
             }
         } else {
