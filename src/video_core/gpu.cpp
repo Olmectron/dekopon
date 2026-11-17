@@ -200,6 +200,7 @@ void GPU::FlushRegion(PAddr addr, u32 size) {
             VideoCore::CacheStats::read_flush_skipped.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        VideoCore::CacheStats::ScopedMicros timer{VideoCore::CacheStats::flush_total_micros};
         impl->rasterizer->FlushRegion(addr, size);
         PAddr lower{}, upper{};
         u64 generation{};

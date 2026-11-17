@@ -1186,12 +1186,16 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
             return;
         }
         const auto download_dest = dest_ptr.GetWriteBytes(flush_end - flush_start);
+        CacheStats::ScopedMicros timer{CacheStats::flush_encode_micros};
         EncodeTexture(flush_info, flush_start, flush_end, source, download_dest,
                       runtime.NeedsConversion(surface));
     };
     const auto download_now = [&] {
         const auto staging = runtime.FindStaging(staging_size, false);
-        surface.Download(make_copy(staging), staging);
+        {
+            CacheStats::ScopedMicros timer{CacheStats::flush_record_micros};
+            surface.Download(make_copy(staging), staging);
+        }
         write_to_guest(staging.mapped);
     };
 
@@ -1221,7 +1225,10 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
                                 state.width == flush_info.width &&
                                 state.height == flush_info.height && state.format == format;
             if (state.streak >= STREAK_TO_DELAY && usable) {
-                runtime.WaitTick(state.tick);
+                {
+                    CacheStats::ScopedMicros timer{CacheStats::flush_wait_micros};
+                    runtime.WaitTick(state.tick);
+                }
                 write_to_guest(state.mapped);
             } else {
                 download_now();
@@ -1230,7 +1237,10 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
             state.pending = false;
             if (state.streak + 1 >= STREAK_TO_DELAY) {
                 const auto staging = runtime.FindStaging(staging_size, false);
-                surface.Download(make_copy(staging), staging, false);
+                {
+                    CacheStats::ScopedMicros timer{CacheStats::flush_record_micros};
+                    surface.Download(make_copy(staging), staging, false);
+                }
                 state.pending = true;
                 state.tick = runtime.CurrentTick();
                 state.staging_size = staging.size;
