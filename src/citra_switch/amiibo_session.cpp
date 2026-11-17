@@ -2,6 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -11,6 +12,7 @@
 
 #include "citra_switch/amiibo_convert.h"
 #include "citra_switch/amiibo_session.h"
+#include "citra_switch/overlay_menu.h"
 #include "core/core.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/service/nfc/nfc.h"
@@ -36,7 +38,8 @@ bool s_handed_over = false;
 // Automatic scanning: the reader follows the game. It opens when the game starts
 // looking for an Amiibo and closes a moment after the game stops looking, so nobody
 // has to go through the in-game menu.
-std::atomic<bool> s_auto_enabled{true};
+std::atomic<int> s_request_mode{static_cast<int>(AmiiboRequestMode::ScanReal)};
+bool s_guest_was_searching = false;
 bool s_auto_session = false; // The open session was started by us, not from the menu.
 bool s_auto_refused = false; // The reader could not be opened for this search.
 std::chrono::steady_clock::time_point s_auto_next_check{};
@@ -194,13 +197,25 @@ void FollowGuest() {
     s_auto_next_check = now + AUTO_CHECK_INTERVAL;
 
     const bool searching = GuestIsSearching();
+    const bool started_searching = searching && !s_guest_was_searching;
+    s_guest_was_searching = searching;
+    const auto mode = static_cast<AmiiboRequestMode>(s_request_mode.load());
+    // Amiibo files: bring up the in-game menu on its Amiibo page, once per request.
+    if (mode == AmiiboRequestMode::PickFile) {
+        if (started_searching && !IsQuickMenuOpen() && !IsAmiiboSessionOpen()) {
+            OpenQuickMenuOnAmiibo();
+        }
+        if (!s_auto_session) {
+            return;
+        }
+    }
     if (!IsAmiiboSessionOpen()) {
         s_auto_session = false;
         if (!searching) {
             s_auto_refused = false; // A new search gets a new attempt.
             return;
         }
-        if (!s_auto_enabled.load() || s_auto_refused) {
+        if (mode != AmiiboRequestMode::ScanReal || s_auto_refused) {
             return;
         }
         std::string message;
@@ -275,12 +290,12 @@ void UpdateRealAmiibo() {
     }
 }
 
-bool IsAutoAmiiboEnabled() {
-    return s_auto_enabled.load();
+int GetAmiiboRequestMode() {
+    return s_request_mode.load();
 }
 
-void SetAutoAmiiboEnabled(bool enabled) {
-    s_auto_enabled.store(enabled);
+void SetAmiiboRequestMode(int mode) {
+    s_request_mode.store(std::clamp(mode, 0, static_cast<int>(AmiiboRequestMode::Count) - 1));
 }
 
 void EndRealAmiibo() {

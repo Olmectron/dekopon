@@ -697,6 +697,17 @@ void CloseQuickMenu() {
     }
 }
 
+namespace {
+void EnterPage(Page page);
+} // namespace
+
+void OpenQuickMenuOnAmiibo() {
+    OpenQuickMenu();
+    EnterPage(Page::Amiibo);
+    Repaint();
+    VideoCore::PostOverlayToast("The game is asking for an Amiibo: choose a file", 3500);
+}
+
 void ToggleQuickMenu() {
     if (IsQuickMenuOpen()) {
         CloseQuickMenu();

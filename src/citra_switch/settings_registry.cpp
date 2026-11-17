@@ -766,6 +766,8 @@ SettingEntry GyroSensitivityEntry(bool horizontal) {
 constexpr std::array<const char*, 4> kLibraryStyleNames{"Coverflow", "Carousel", "Stack",
                                                         "Grid"};
 constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
+constexpr std::array<const char*, 3> kAmiiboRequestNames{"Scan a real Amiibo", "Choose a file",
+                                                         "Do nothing"};
 
 void BuildGeneral(std::vector<SettingEntry>& out) {
     Table t{out, Category::General};
@@ -789,12 +791,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
     t.Page(Category::Amiibo);
     t.Group("Amiibo");
     t.Ini("Switch");
-    t << LocalBool("auto_amiibo_scan",
-                   {"Automatic Amiibo Scan",
-                    "Turns the NFC reader on by itself whenever the game asks for an "
-                    "Amiibo, and off again afterwards. Just hold the figure against the "
-                    "right stick when the game asks."},
-                   IsAutoAmiiboEnabled, SetAutoAmiiboEnabled, true);
+    t << LocalChoice(
+        "amiibo_request",
+        {"When A Game Asks For An Amiibo",
+         "Scan a real one: the NFC reader turns on by itself, hold the figure against "
+         "the right stick. Choose a file: the in-game menu opens on its Amiibo page so "
+         "a dumped .bin can be picked. Either way, nothing to set up beforehand."},
+        [] { return GetAmiiboRequestMode(); },
+        [](int value) { SetAmiiboRequestMode(value); }, 0, kAmiiboRequestNames);
 
     t.Page(Category::General);
     t.Group("Library");

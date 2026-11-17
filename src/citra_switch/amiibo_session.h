@@ -15,12 +15,19 @@ bool IsRealAmiiboScanning();
 bool IsRealAmiiboActive();
 
 // Polled every frame while a game runs. Besides serving an open scan it follows the game:
-// the reader opens by itself when the game starts looking for an Amiibo and closes when it
-// stops (see IsAutoAmiiboEnabled).
+// what happens when the game starts looking for an Amiibo is set by AmiiboRequestMode.
 void UpdateRealAmiibo();
 
-bool IsAutoAmiiboEnabled();
-void SetAutoAmiiboEnabled(bool enabled);
+// What to do when the game asks for an Amiibo.
+enum class AmiiboRequestMode {
+    ScanReal, // Turn the NFC reader on, and off again once the game stops asking.
+    PickFile, // Open the in-game menu on its Amiibo page, to choose a dumped file.
+    Nothing,  // Leave it to the in-game menu.
+    Count,
+};
+
+int GetAmiiboRequestMode();
+void SetAmiiboRequestMode(int mode);
 
 void EndRealAmiibo();
 

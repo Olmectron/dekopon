@@ -40,6 +40,8 @@ void SetPauseInQuickMenu(bool enabled);
 // Opens/closes the overlay saving any changed settings.
 void OpenQuickMenu();
 void CloseQuickMenu();
+// Opens the overlay straight on its Amiibo page (the game is asking for one).
+void OpenQuickMenuOnAmiibo();
 void ToggleQuickMenu();
 
 // Applies one navigation frame, updates the live settings, and repaints the overlay.
