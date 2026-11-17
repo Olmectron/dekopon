@@ -16,6 +16,7 @@
 #include "core/loader/loader.h"
 #include "video_core/pica/shader_setup.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
+#include "video_core/rasterizer_cache/cache_stats.h"
 #include "video_core/renderer_vulkan/vk_async_stats.h"
 #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -588,9 +589,19 @@ void PipelineCache::ReportAsyncStats() {
     const u64 skipped = AsyncStats::skipped_draws.exchange(0, std::memory_order_relaxed);
     const u64 software =
         AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
-    if (const auto downloads = take(AsyncStats::surface_download); downloads.count > 0) {
-        LOG_INFO(Render_Vulkan, "GPU readbacks: {}x {} ms max {} ms", downloads.count,
-                 downloads.total_ms, downloads.max_ms);
+    {
+        const auto downloads = take(AsyncStats::surface_download);
+        const u64 small_writes = VideoCore::CacheStats::small_write_flushes.exchange(
+            0, std::memory_order_relaxed);
+        const u64 small_write_bytes = VideoCore::CacheStats::small_write_flush_bytes.exchange(
+            0, std::memory_order_relaxed);
+        if (downloads.count > 0 || small_writes > 0) {
+            LOG_INFO(Render_Vulkan,
+                     "GPU readbacks: {}x {} ms max {} ms | surface flushes forced by small CPU "
+                     "writes: {}x, {} KiB",
+                     downloads.count, downloads.total_ms, downloads.max_ms, small_writes,
+                     small_write_bytes / 1024);
+        }
     }
     const u64 inline_hits =
         AsyncStats::inline_pipeline_hits.exchange(0, std::memory_order_relaxed);

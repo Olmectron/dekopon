@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <boost/container/small_vector.hpp>
 #include <boost/range/iterator_range.hpp>
+#include "video_core/rasterizer_cache/cache_stats.h"
 #include "common/alignment.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -1356,6 +1357,8 @@ void RasterizerCache<T>::InvalidateRegion(PAddr addr, u32 size, SurfaceId region
             if (Settings::values.skip_cpu_write) {
                 return;
             }
+            CacheStats::small_write_flushes.fetch_add(1, std::memory_order_relaxed);
+            CacheStats::small_write_flush_bytes.fetch_add(surface.size, std::memory_order_relaxed);
             FlushRegion(surface.addr, surface.size, surface_id);
             remove_surfaces.push_back(surface_id);
             return;
