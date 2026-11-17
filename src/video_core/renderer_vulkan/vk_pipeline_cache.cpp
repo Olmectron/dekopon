@@ -596,6 +596,15 @@ void PipelineCache::ReportAsyncStats() {
             0, std::memory_order_relaxed);
         const u64 small_write_bytes = VideoCore::CacheStats::small_write_flush_bytes.exchange(
             0, std::memory_order_relaxed);
+        const u64 read_requests = VideoCore::CacheStats::read_flush_requests.exchange(
+            0, std::memory_order_relaxed);
+        const u64 read_skipped = VideoCore::CacheStats::read_flush_skipped.exchange(
+            0, std::memory_order_relaxed);
+        if (read_requests > 1000) {
+            LOG_INFO(Render_Vulkan,
+                     "Guest reads of GPU-cached memory: {} ({} answered from the clean range)",
+                     read_requests, read_skipped);
+        }
         if (downloads.count > 0 || small_writes > 0 || delayed.count > 0) {
             LOG_INFO(Render_Vulkan,
                      "GPU readbacks: {}x {} ms max {} ms waited | {}x served a frame late "

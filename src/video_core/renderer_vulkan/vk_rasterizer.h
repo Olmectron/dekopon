@@ -52,6 +52,8 @@ public:
     void DrawTriangles() override;
     void FlushAll() override;
     void FlushRegion(PAddr addr, u32 size) override;
+    bool GetCleanRange(PAddr addr, PAddr& lower, PAddr& upper, u64& generation) override;
+    u64 DirtyGeneration() override;
     void InvalidateRegion(PAddr addr, u32 size) override;
     void FlushAndInvalidateRegion(PAddr addr, u32 size) override;
     void ClearAll(bool flush) override;

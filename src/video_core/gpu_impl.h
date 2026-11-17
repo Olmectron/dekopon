@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <unordered_map>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -73,15 +72,11 @@ struct GPU::Impl {
     PAddr pending_invalidate_end{};
     bool has_pending_invalidate{};
 
-    /// Guest read-backs that repeat every frame (see GPU::FlushRegion). Keyed by MiB of
-    /// guest physical memory.
-    struct HotReadback {
-        u64 last_frame{};
-        u32 streak{};
-        bool queued_this_frame{};
-    };
-    std::unordered_map<u32, HotReadback> hot_readbacks;
-    u64 frame_counter{1};
+    /// A range of guest memory known to hold nothing the rasterizer has to flush, valid
+    /// while the rasterizer's dirty generation is `clean_generation` (see GPU::FlushRegion).
+    PAddr clean_lower{};
+    PAddr clean_upper{};
+    u64 clean_generation{};
 
 #ifdef __SWITCH__
     u32 perf_stats_frame_counter{};
