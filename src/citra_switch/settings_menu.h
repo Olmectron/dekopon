@@ -21,6 +21,8 @@ struct SettingsRow {
     std::string description;
     bool is_header{};
     bool needs_restart{};
+    // Safe to change while a game is running (it is one of the in-game menu's own options).
+    bool live{};
     // Bound only in the per-game editor, for rows the core can hold an override for.
     std::function<bool()> using_global;
     std::function<void(bool)> set_global;

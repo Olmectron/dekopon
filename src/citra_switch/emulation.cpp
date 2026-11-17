@@ -17,6 +17,7 @@
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
 #include "citra_switch/game_share.h"
+#include "citra_switch/overlay_menu.h"
 #include "common/file_util.h"
 #include "common/horizon_boost.h"
 #include "common/horizon_thread.h"
@@ -324,14 +325,6 @@ void EmuThread(std::string path) {
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
     GameShare::Start();
-    if (GameShare::IsEnabled()) {
-        // Said every time: sharing left on by mistake should not go unnoticed, least of
-        // all local wireless, which takes this console off its normal network.
-        VideoCore::PostOverlayToast(std::string{"GameShare is on ("} + GameShare::ModeName() +
-                                        "): another console can join. To turn it off, "
-                                        "press + and - and switch GameShare off.",
-                                    7000);
-    }
     while (!s_stop) {
         if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
             system.GPU().UpdateCurrentFramebufferLayout();
@@ -394,6 +387,17 @@ void EmuThread(std::string path) {
             });
     }
 
+    // What follows (freeing the GPU's resources, mostly) can take many seconds and draws
+    // nothing. The last frame presented stays on screen meanwhile: make it one that says
+    // what is going on instead of a black one.
+    if (system.IsPoweredOn()) {
+        ShowClosingScreen();
+        for (int i = 0; i < 2; ++i) {
+            Core::PerfStats::game_frames_updated = true;
+            system.GPU().SwapBuffers();
+        }
+    }
+
     window->DoneCurrent();
     s_stop = true;
 }
@@ -409,6 +413,8 @@ bool BootRom(const std::string& rom_arg) {
     }
 
     LOG_INFO(Frontend, "Booting ROM {}", path);
+    // Nothing left over from the last game's menu or its closing screen.
+    VideoCore::SetOverlayMenuState({});
 
     s_load_ok = false;
     s_artic_disconnected = false;
@@ -646,6 +652,20 @@ const char* GetScreenLayoutName(int index) {
         return "";
     }
     return s_layout_presets[index].name;
+}
+
+int GetScreenLayoutIndex() {
+    SyncLayoutIndex();
+    return static_cast<int>(s_layout_index);
+}
+
+void SetScreenLayoutIndex(int index) {
+    if (!Core::System::GetInstance().IsPoweredOn() || index < 0 ||
+        index >= static_cast<int>(s_layout_presets.size())) {
+        return;
+    }
+    s_layout_index = static_cast<std::size_t>(index);
+    ApplyCurrentLayout();
 }
 
 std::uint32_t GetLayoutCycleMask() {

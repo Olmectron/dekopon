@@ -345,6 +345,8 @@ std::vector<SettingsRow> RowsFor(const std::vector<const SettingEntry*>& entries
         row.boolean = entry->boolean;
         row.description = entry->description != nullptr ? entry->description : "";
         row.needs_restart = (entry->flags & EntryFlag::Restart) != 0;
+        row.live = entry->quick != QuickSection::None && !row.needs_restart &&
+                   entry->modal == SettingsModal::None;
         if (per_game) {
             row.using_global = entry->using_global;
             row.set_global = entry->set_global;

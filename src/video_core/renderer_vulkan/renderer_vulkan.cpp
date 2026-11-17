@@ -1986,6 +1986,188 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
     const float sep_gap = std::round(row_h * 0.4f);
     const float col_gap = em * 1.4f;
 
+    // The home screen: full-screen cells laid out by the frontend.
+    if (state.home) {
+        using Rgba = std::array<float, 4>;
+        const bool light = state.light;
+        std::vector<OverlayDraw::Batch> batches;
+        const auto emit = [&](const Rgba& color, u32 start) {
+            const u32 count = builder.VertexCount() - start;
+            if (count > 0) {
+                batches.push_back({color, start, count});
+            }
+        };
+        const Rgba c_scrim = light ? Rgba{0.90f, 0.90f, 0.90f, 0.88f} : Rgba{0.06f, 0.06f, 0.06f, 0.82f};
+        const Rgba c_cell = light ? Rgba{1.0f, 1.0f, 1.0f, 0.97f} : Rgba{0.224f, 0.224f, 0.224f, 0.97f};
+        const Rgba c_primary = light ? Rgba{0.184f, 0.310f, 0.933f, 1.0f} : Rgba{0.0f, 0.878f, 0.753f, 1.0f};
+        const Rgba c_danger = light ? Rgba{0.840f, 0.190f, 0.190f, 1.0f} : Rgba{0.720f, 0.220f, 0.220f, 1.0f};
+        const Rgba c_focus = light ? Rgba{0.0f, 0.745f, 0.863f, 1.0f} : Rgba{0.361f, 0.902f, 1.0f, 1.0f};
+        const Rgba c_text = light ? Rgba{0.176f, 0.176f, 0.176f, 1.0f} : Rgba{1.0f, 1.0f, 1.0f, 1.0f};
+        const Rgba c_dim = light ? Rgba{0.424f, 0.424f, 0.424f, 1.0f} : Rgba{0.659f, 0.659f, 0.659f, 1.0f};
+        const Rgba c_on_primary = light ? Rgba{1.0f, 1.0f, 1.0f, 1.0f} : Rgba{0.102f, 0.102f, 0.102f, 1.0f};
+        const Rgba c_on_danger = {1.0f, 1.0f, 1.0f, 1.0f};
+        const Rgba c_screen_b = light ? Rgba{0.62f, 0.62f, 0.62f, 1.0f} : Rgba{0.60f, 0.60f, 0.60f, 1.0f};
+        const Rgba c_picture = light ? Rgba{0.90f, 0.90f, 0.90f, 1.0f} : Rgba{0.14f, 0.14f, 0.14f, 1.0f};
+
+        const int cell_count = static_cast<int>(state.cells.size());
+        const auto fit = [&](std::string text, float text_scale, float room) {
+            while (text.size() > 4 && OverlayBuilder::Measure(text, text_scale) > room) {
+                text.resize(text.size() - 4);
+                text += "...";
+            }
+            return text;
+        };
+        const float ring = std::max(3.0f, std::round(em / 7.0f));
+        const float tile_label_scale = scale * 0.60f;
+        const float tile_label_h = OverlayFont::kLineHeight * tile_label_scale + em * 0.35f;
+
+        {
+            const u32 s = builder.VertexCount();
+            builder.AddRect(0.0f, 0.0f, w, h);
+            emit(c_scrim, s);
+        }
+        // The focus ring goes under the cell it surrounds.
+        if (state.cell_selected >= 0 && state.cell_selected < cell_count) {
+            const auto& cell = state.cells[state.cell_selected];
+            const u32 s = builder.VertexCount();
+            builder.AddRect(cell.x * w - ring, cell.y * h - ring, (cell.x + cell.w) * w + ring,
+                            (cell.y + cell.h) * h + ring);
+            emit(c_focus, s);
+        }
+        // The layout in use keeps a thin accent frame.
+        {
+            const u32 s = builder.VertexCount();
+            for (int i = 0; i < cell_count; ++i) {
+                const auto& cell = state.cells[i];
+                if (cell.style == 3 && cell.active && i != state.cell_selected) {
+                    builder.AddRect(cell.x * w - 2.0f, cell.y * h - 2.0f, (cell.x + cell.w) * w + 2.0f,
+                                    (cell.y + cell.h) * h + 2.0f);
+                }
+            }
+            emit(c_primary, s);
+        }
+        for (int style = 0; style < 4; ++style) {
+            const u32 s = builder.VertexCount();
+            for (const auto& cell : state.cells) {
+                if (cell.style == style) {
+                    builder.AddRect(cell.x * w, cell.y * h, (cell.x + cell.w) * w, (cell.y + cell.h) * h);
+                }
+            }
+            emit(style == 1 ? c_primary : style == 2 ? c_danger : c_cell, s);
+        }
+        // Layout tiles: a little picture of where the two screens go.
+        const auto picture_of = [&](const VideoCore::OverlayCell& cell, float& px, float& py,
+                                    float& pw, float& ph) {
+            const float pad = em * 0.30f;
+            px = cell.x * w + pad;
+            py = cell.y * h + pad;
+            pw = cell.w * w - 2.0f * pad;
+            ph = cell.h * h - 2.0f * pad - tile_label_h;
+        };
+        {
+            const u32 s = builder.VertexCount();
+            for (const auto& cell : state.cells) {
+                if (cell.style == 3) {
+                    float px, py, pw, ph;
+                    picture_of(cell, px, py, pw, ph);
+                    builder.AddRect(px, py, px + pw, py + ph);
+                }
+            }
+            emit(c_picture, s);
+        }
+        for (int pass = 0; pass < 2; ++pass) {
+            const u32 s = builder.VertexCount();
+            for (const auto& cell : state.cells) {
+                if (cell.style != 3) {
+                    continue;
+                }
+                float px, py, pw, ph;
+                picture_of(cell, px, py, pw, ph);
+                // The bottom screen goes on top: one layout draws it over the top screen.
+                const float* r = pass == 0 ? cell.top_screen : cell.bottom_screen;
+                if (r[2] > 0.0f) {
+                    builder.AddRect(px + r[0] * pw, py + r[1] * ph, px + (r[0] + r[2]) * pw,
+                                    py + (r[1] + r[3]) * ph);
+                }
+            }
+            emit(pass == 0 ? c_primary : c_screen_b, s);
+        }
+        // Labels, by colour: plain cells and tiles, then what sits on the accent, on red, and
+        // the dim second lines.
+        const auto draw_labels = [&](int which) {
+            const u32 s = builder.VertexCount();
+            for (const auto& cell : state.cells) {
+                const float cx0 = cell.x * w, cy0 = cell.y * h, cw = cell.w * w, ch = cell.h * h;
+                if (cell.style == 3) {
+                    if (which != 0) {
+                        continue;
+                    }
+                    const std::string text = fit(cell.label, tile_label_scale, cw - em * 0.5f);
+                    builder.AddText(
+                        std::round(cx0 + (cw - OverlayBuilder::Measure(text, tile_label_scale)) / 2.0f),
+                        std::round(cy0 + ch - tile_label_h), text, tile_label_scale);
+                    continue;
+                }
+                const bool big = cell.style == 1;
+                const float label_scale = big ? scale * 1.05f : scale * 0.78f;
+                const float sub_scale = scale * 0.60f;
+                const float label_h = OverlayFont::kLineHeight * label_scale;
+                const float sub_h = cell.sub.empty() ? 0.0f : OverlayFont::kLineHeight * sub_scale;
+                const float top = cy0 + (ch - label_h - sub_h) / 2.0f;
+                const int label_group = cell.style == 1 ? 1 : cell.style == 2 ? 2 : 0;
+                if (which == label_group) {
+                    const std::string text = fit(cell.label, label_scale, cw - em);
+                    builder.AddText(
+                        std::round(cx0 + (cw - OverlayBuilder::Measure(text, label_scale)) / 2.0f),
+                        std::round(top), text, label_scale);
+                }
+                // Second lines: dim on plain cells, in the label's colour on coloured ones.
+                const int sub_group = cell.style == 0 ? 3 : label_group;
+                if (which == sub_group && !cell.sub.empty()) {
+                    const std::string text = fit(cell.sub, sub_scale, cw - em);
+                    builder.AddText(
+                        std::round(cx0 + (cw - OverlayBuilder::Measure(text, sub_scale)) / 2.0f),
+                        std::round(top + label_h), text, sub_scale);
+                }
+            }
+            emit(which == 0 ? c_text : which == 1 ? c_on_primary : which == 2 ? c_on_danger : c_dim, s);
+        };
+        for (int which = 0; which < 4; ++which) {
+            draw_labels(which);
+        }
+        for (int tone = 0; tone < 3; ++tone) {
+            const u32 s = builder.VertexCount();
+            for (const auto& text : state.texts) {
+                if (text.tone != tone) {
+                    continue;
+                }
+                const float text_scale = scale * text.scale;
+                const float x = text.centred
+                                    ? text.x * w - OverlayBuilder::Measure(text.text, text_scale) / 2.0f
+                                    : text.x * w;
+                builder.AddText(std::round(x), std::round(text.y * h), text.text, text_scale);
+            }
+            emit(tone == 0 ? c_text : tone == 1 ? c_dim : c_primary, s);
+        }
+        if (!state.hint.empty()) {
+            const u32 s = builder.VertexCount();
+            const float hint_scale = scale * 0.62f;
+            builder.AddText(std::round((w - OverlayBuilder::Measure(state.hint, hint_scale)) / 2.0f),
+                            std::round(h - OverlayFont::kLineHeight * hint_scale - em * 0.45f),
+                            state.hint, hint_scale);
+            emit(c_dim, s);
+        }
+        if (batches.empty()) {
+            return {};
+        }
+        OverlayDraw home;
+        if (!UploadOverlayVertices(frame, verts, home)) {
+            return {};
+        }
+        home.batches = std::move(batches);
+        return home;
+    }
+
     // Size the panel to its contents and centre it.
     float max_row_w = 0.0f;
     for (const auto& item : state.items) {
@@ -2196,11 +2378,20 @@ OverlayDraw RendererVulkan::PrepareQuickMenu(const Layout::FramebufferLayout& la
     {
         const u32 s = builder.VertexCount();
         for (int i = 0; i < n; ++i) {
-            if (i != state.selected && !state.items[i].is_header) {
+            if (i != state.selected && !state.items[i].is_header && !state.items[i].locked) {
                 add_row(i);
             }
         }
         emit(c_row, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        for (int i = 0; i < n; ++i) {
+            if (i != state.selected && !state.items[i].is_header && state.items[i].locked) {
+                add_row(i);
+            }
+        }
+        emit(c_footer, s);
     }
 
     {

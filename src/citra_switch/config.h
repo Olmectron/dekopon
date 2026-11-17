@@ -232,6 +232,10 @@ int GetScreenLayoutCount();
 // The display name of preset `index` or "" if out of range.
 const char* GetScreenLayoutName(int index);
 
+// The preset in use, and switching straight to one (while a game runs).
+int GetScreenLayoutIndex();
+void SetScreenLayoutIndex(int index);
+
 // Bitmask of presets included in R3's cycle (bit i = preset i).
 std::uint32_t GetLayoutCycleMask();
 void SetLayoutCycleMask(std::uint32_t mask);

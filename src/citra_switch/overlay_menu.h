@@ -44,6 +44,10 @@ void CloseQuickMenu();
 void OpenQuickMenuOnAmiibo();
 void ToggleQuickMenu();
 
+// Puts up a full-screen "closing the game" notice (the game is being torn down and
+// nothing else will be drawn for a while).
+void ShowClosingScreen();
+
 // A tap at (x, y), each 0..1 across the screen.
 QuickMenuAction QuickMenuTouch(float x, float y);
 

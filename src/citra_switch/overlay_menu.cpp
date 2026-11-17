@@ -25,6 +25,7 @@
 #include "core/hle/service/nfc/nfc.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/loader/loader.h"
+#include "common/settings.h"
 #include "core/savestate.h"
 #include "video_core/overlay.h"
 
@@ -62,16 +63,12 @@ struct Row {
     int index = -1;
 };
 
-// The overlay opens on Home, which carries the things worth reaching for mid-game and links out
-// to the rest. The settings pages are numbered to match QuickSection so one cast converts them.
+// The overlay opens on Home: a screen of buttons and tiles for what is reached for mid-game.
+// "Settings" there leads to the pages below, listed down the side as in the launcher.
 enum class Page {
     Home,
-    Display,
-    Graphics,
-    Stereo,
-    Audio,
-    Input,
-    System,
+    Live,     // Every option that can be changed while the game runs, in one place.
+    Settings, // One of the launcher's settings pages (s_category); most rows are locked.
     States,
     Cheats,
     Amiibo,
@@ -81,15 +78,11 @@ enum class Page {
 
 constexpr int NumPages = static_cast<int>(Page::Count);
 
-// Every page but Home, which L/R cycles through once you are inside one.
-constexpr int NumSections = NumPages - 1;
-
-static_assert(static_cast<int>(Page::Display) == static_cast<int>(QuickSection::Display) &&
-                  static_cast<int>(Page::System) == static_cast<int>(QuickSection::System),
-              "the settings pages have to line up with QuickSection");
+// Which of the launcher's pages Page::Settings is showing.
+Category s_category = Category::General;
 
 bool IsSettingsPage(Page page) {
-    return page >= Page::Display && page <= Page::System;
+    return page == Page::Live || page == Page::Settings;
 }
 
 const char* PageName(Page page) {
@@ -104,8 +97,12 @@ const char* PageName(Page page) {
         return "Amiibo";
     case Page::Camera:
         return "Camera";
+    case Page::Live:
+        return "Live Tweaks";
+    case Page::Settings:
+        return CategoryName(s_category);
     default:
-        return QuickSectionName(static_cast<QuickSection>(page));
+        return "";
     }
 }
 
@@ -126,24 +123,50 @@ std::atomic<bool> s_open{false};
 // The game is frozen while the in-game menu is open, unless turned off.
 std::atomic<bool> s_pause_in_menu{true};
 
-// The order the pages are listed and stepped through (L/R): the everyday ones first, the
-// technical ones last under an "Advanced" heading - as in the launcher's options.
-constexpr std::array<Page, NumPages> kPageOrder{
-    Page::Home,   Page::Display, Page::Audio,    Page::Input,  Page::States, Page::Cheats,
-    Page::Amiibo, Page::Camera,  Page::Graphics, Page::Stereo, Page::System};
+// The side list, in the order L/R steps through it: Home, the live options, the launcher's
+// everyday pages, the game's own tools, then the Advanced pages.
+struct NavEntry {
+    Page page;
+    Category category;
+    bool advanced;
+};
 
-constexpr bool IsAdvancedPage(Page page) {
-    return page == Page::Graphics || page == Page::Stereo || page == Page::System;
-}
-
-int PageOrderIndex(Page page) {
-    for (int i = 0; i < NumPages; ++i) {
-        if (kPageOrder[static_cast<std::size_t>(i)] == page) {
-            return i;
+const std::vector<NavEntry>& NavList() {
+    static const std::vector<NavEntry> list = [] {
+        std::vector<NavEntry> entries;
+        entries.push_back({Page::Home, Category::Count, false});
+        entries.push_back({Page::Live, Category::Count, false});
+        for (int i = 0; i < NumCategories; ++i) {
+            const auto category = static_cast<Category>(i);
+            if (!IsAdvancedCategory(category)) {
+                entries.push_back({Page::Settings, category, false});
+            }
         }
-    }
-    return 0;
+        for (const Page page : {Page::States, Page::Cheats, Page::Amiibo, Page::Camera}) {
+            entries.push_back({page, Category::Count, false});
+        }
+        for (int i = 0; i < NumCategories; ++i) {
+            const auto category = static_cast<Category>(i);
+            if (IsAdvancedCategory(category)) {
+                entries.push_back({Page::Settings, category, true});
+            }
+        }
+        return entries;
+    }();
+    return list;
 }
+
+std::string NavName(const NavEntry& entry) {
+    if (entry.page == Page::Home) {
+        return "Home";
+    }
+    return entry.page == Page::Settings ? CategoryName(entry.category) : PageName(entry.page);
+}
+
+bool IsAdvancedPage(Page page) {
+    return page == Page::Settings && IsAdvancedCategory(s_category);
+}
+
 int s_page = 0;
 int s_selected = 0;
 int s_cheat_page = 0;
@@ -350,34 +373,140 @@ void PersistCheats() {
 }
 
 // Rebuilds the visible rows for the active page and keeps the cursor in range.
-void BuildHomeRows() {
-    s_rows.push_back({Item::Resume});
-    s_rows.push_back({Item::ExitGame});
-    s_rows.push_back({Item::SaveHere});
-    s_rows.push_back({Item::LoadHere});
-    s_rows.push_back({Item::GameShareSwitch});
-    s_rows.push_back({Item::Separator, 0});
-    for (const Page page : kPageOrder) {
-        if (page != Page::Home && !IsAdvancedPage(page)) {
-            s_rows.push_back({Item::Section, static_cast<int>(page)});
+// The home screen's buttons and tiles. Positions are in fractions of the screen.
+enum class CellKind {
+    Resume,
+    Layout,
+    SaveState,
+    LoadState,
+    GameShare,
+    Fps,
+    Amiibo,
+    Cheats,
+    Settings,
+    Exit,
+};
+
+struct Cell {
+    CellKind kind;
+    int index; // Layout: the preset.
+    float x, y, w, h;
+};
+
+std::vector<Cell> s_cells;
+int s_cell = 0;
+float s_layout_label_y = 0.0f;
+float s_quick_label_y = 0.0f;
+
+void BuildHomeCells() {
+    s_cells.clear();
+    constexpr float W = 1280.0f, H = 720.0f, left = 64.0f, width = 1152.0f, gap = 13.0f;
+    const auto add = [&](CellKind kind, int index, float x, float y, float w, float h) {
+        s_cells.push_back({kind, index, x / W, y / H, w / W, h / H});
+    };
+    add(CellKind::Resume, 0, left, 92.0f, width, 70.0f);
+
+    // The layouts the user kept in the rotation (all of them if none is).
+    std::vector<int> layouts;
+    const std::uint32_t mask = GetLayoutCycleMask();
+    for (int i = 0; i < GetScreenLayoutCount(); ++i) {
+        if ((mask >> i) & 1u) {
+            layouts.push_back(i);
         }
     }
-    s_rows.push_back({Item::Separator, 1});
-    for (const Page page : kPageOrder) {
-        if (IsAdvancedPage(page)) {
-            s_rows.push_back({Item::Section, static_cast<int>(page)});
+    if (layouts.empty()) {
+        for (int i = 0; i < GetScreenLayoutCount(); ++i) {
+            layouts.push_back(i);
         }
+    }
+    constexpr int per_row = 5;
+    constexpr float tile_h = 124.0f, row_gap = 12.0f, layout_top = 206.0f;
+    const float tile_w = (width - (per_row - 1) * gap) / per_row;
+    for (int k = 0; k < static_cast<int>(layouts.size()) && k < 2 * per_row; ++k) {
+        add(CellKind::Layout, layouts[static_cast<std::size_t>(k)],
+            left + (k % per_row) * (tile_w + gap), layout_top + (k / per_row) * (tile_h + row_gap),
+            tile_w, tile_h);
+    }
+    const int rows = std::min(2, (static_cast<int>(layouts.size()) + per_row - 1) / per_row);
+    s_layout_label_y = (layout_top - 28.0f) / H;
+
+    const float quick_top = layout_top + rows * (tile_h + row_gap) + 40.0f;
+    s_quick_label_y = (quick_top - 28.0f) / H;
+    constexpr CellKind quick[] = {CellKind::SaveState, CellKind::LoadState, CellKind::GameShare,
+                                  CellKind::Fps,       CellKind::Amiibo,    CellKind::Cheats};
+    constexpr int quick_count = 6;
+    const float quick_w = (width - (quick_count - 1) * gap) / quick_count;
+    for (int i = 0; i < quick_count; ++i) {
+        add(quick[i], 0, left + i * (quick_w + gap), quick_top, quick_w, 62.0f);
+    }
+
+    const float bottom_top = quick_top + 62.0f + 22.0f;
+    const float half = (width - gap) / 2.0f;
+    add(CellKind::Settings, 0, left, bottom_top, half, 58.0f);
+    add(CellKind::Exit, 0, left + half + gap, bottom_top, half, 58.0f);
+    s_cell = std::clamp(s_cell, 0, static_cast<int>(s_cells.size()) - 1);
+}
+
+// Where the two screens go in each layout preset, as fractions of a tile's picture: top
+// screen, then bottom screen. A width of 0 leaves that screen out.
+struct LayoutPicture {
+    float top[4];
+    float bottom[4];
+};
+
+LayoutPicture PictureOfLayout(int preset) {
+    switch (preset) {
+    case 1: // Side by side
+        return {{0.03f, 0.24f, 0.52f, 0.52f}, {0.58f, 0.28f, 0.39f, 0.44f}};
+    case 2: // Large top, small bottom
+        return {{0.03f, 0.12f, 0.68f, 0.76f}, {0.74f, 0.36f, 0.23f, 0.30f}};
+    case 3: // Large bottom, small top
+        return {{0.72f, 0.36f, 0.25f, 0.26f}, {0.03f, 0.08f, 0.66f, 0.84f}};
+    case 4: // Top screen only
+        return {{0.10f, 0.08f, 0.80f, 0.84f}, {0.0f, 0.0f, 0.0f, 0.0f}};
+    case 5: // Bottom screen only
+        return {{0.0f, 0.0f, 0.0f, 0.0f}, {0.18f, 0.06f, 0.64f, 0.88f}};
+    case 6: // Vertical stack, console turned
+        return {{0.22f, 0.08f, 0.27f, 0.84f}, {0.53f, 0.16f, 0.24f, 0.68f}};
+    case 7: // Hybrid
+        return {{0.03f, 0.10f, 0.62f, 0.80f}, {0.68f, 0.52f, 0.29f, 0.38f}};
+    case 8: // Vertical stack, console turned the other way
+        return {{0.51f, 0.08f, 0.27f, 0.84f}, {0.23f, 0.16f, 0.24f, 0.68f}};
+    case 9: // Bottom screen overlaid on the top one
+        return {{0.06f, 0.06f, 0.88f, 0.88f}, {0.66f, 0.54f, 0.26f, 0.36f}};
+    default: // Vertical stack
+        return {{0.28f, 0.03f, 0.44f, 0.47f}, {0.32f, 0.52f, 0.36f, 0.45f}};
     }
 }
+
+bool IsSkippable(const Row& row);
 
 void RebuildRows() {
     s_rows.clear();
     s_settings.clear();
     const Page page = CurrentPage();
     if (page == Page::Home) {
-        BuildHomeRows();
+        BuildHomeCells();
     } else if (IsSettingsPage(page)) {
-        s_settings = BuildQuickRows(static_cast<QuickSection>(page));
+        if (page == Page::Live) {
+            // Everything the in-game menu may change, section after section.
+            for (int section = 1; section < NumQuickSections; ++section) {
+                std::vector<SettingsRow> rows = BuildQuickRows(static_cast<QuickSection>(section));
+                if (rows.empty()) {
+                    continue;
+                }
+                SettingsRow heading;
+                heading.label = QuickSectionName(static_cast<QuickSection>(section));
+                heading.is_header = true;
+                s_settings.push_back(std::move(heading));
+                for (SettingsRow& row : rows) {
+                    row.live = true;
+                    s_settings.push_back(std::move(row));
+                }
+            }
+        } else {
+            s_settings = BuildCategoryRows(s_category);
+        }
         for (int i = 0; i < static_cast<int>(s_settings.size()); ++i) {
             s_rows.push_back({Item::Setting, i});
         }
@@ -429,11 +558,14 @@ void RebuildRows() {
         }
         s_rows.push_back({Item::ClearCamera});
     }
-    s_selected = std::clamp(s_selected, 0, static_cast<int>(s_rows.size()) - 1);
     if (s_rows.empty()) {
+        s_selected = 0;
+        s_scroll = 0;
         return;
     }
-    if (s_rows[static_cast<std::size_t>(s_selected)].item == Item::Separator) {
+    s_selected = std::clamp(s_selected, 0, static_cast<int>(s_rows.size()) - 1);
+    while (s_selected + 1 < static_cast<int>(s_rows.size()) &&
+           IsSkippable(s_rows[static_cast<std::size_t>(s_selected)])) {
         ++s_selected;
     }
     const int max_scroll = std::max(0, static_cast<int>(s_rows.size()) - kMaxVisibleRows);
@@ -442,6 +574,25 @@ void RebuildRows() {
 }
 
 // Rows that only respond to A.
+// A heading, or anything else the cursor passes over.
+bool IsSkippable(const Row& row) {
+    return row.item == Item::Separator ||
+           (row.item == Item::Setting && s_settings[static_cast<std::size_t>(row.index)].is_header);
+}
+
+// A setting that has to wait until no game is running.
+bool IsLocked(const Row& row) {
+    if (row.item != Item::Setting) {
+        return false;
+    }
+    const SettingsRow& setting = s_settings[static_cast<std::size_t>(row.index)];
+    return !setting.is_header && !setting.live;
+}
+
+void SayLocked() {
+    VideoCore::PostOverlayToast("Locked while a game is running: change it from the library", 3000);
+}
+
 bool IsAction(const Row& row) {
     switch (row.item) {
     case Item::Setting:
@@ -549,7 +700,13 @@ std::string Value(const Row& row) {
 void Adjust(const Row& row, int dir) {
     switch (row.item) {
     case Item::Setting:
-        s_settings[static_cast<std::size_t>(row.index)].step(dir);
+        if (IsLocked(row)) {
+            SayLocked();
+            break;
+        }
+        if (s_settings[static_cast<std::size_t>(row.index)].step) {
+            s_settings[static_cast<std::size_t>(row.index)].step(dir);
+        }
         break;
     case Item::SaveHere:
     case Item::LoadHere:
@@ -576,8 +733,14 @@ void Activate(const Row& row) {
         Adjust(row, 1);
         return;
     }
+    if (IsLocked(row)) {
+        SayLocked();
+        return;
+    }
     const SettingsRow& setting = s_settings[static_cast<std::size_t>(row.index)];
-    setting.step(setting.boolean && setting.boolean() ? -1 : 1);
+    if (setting.step) {
+        setting.step(setting.boolean && setting.boolean() ? -1 : 1);
+    }
 }
 
 std::string ListSuffix(int page, int pages) {
@@ -602,27 +765,107 @@ const char* HintFor(Page page) {
     }
 }
 
+// Fills in the home screen: its cells, the texts round them, the hint.
+void PaintHome(VideoCore::OverlayMenuState& state) {
+    state.home = true;
+    state.cell_selected = s_cell;
+    const bool paused = IsEmulationPaused();
+    state.texts.push_back({64.0f / 1280.0f, 20.0f / 720.0f, paused ? "Game paused" : "Game running",
+                           1.25f, 0, false});
+    state.texts.push_back(
+        {64.0f / 1280.0f, 58.0f / 720.0f,
+         paused ? "Your game is open behind this menu, frozen until you go back to it."
+                : "Your game is open behind this menu and keeps running.",
+         0.66f, 1, false});
+    state.texts.push_back({64.0f / 1280.0f, s_layout_label_y, "SCREEN LAYOUT", 0.60f, 1, false});
+    state.texts.push_back({64.0f / 1280.0f, s_quick_label_y, "QUICK", 0.60f, 1, false});
+
+    const int layout_in_use = GetScreenLayoutIndex();
+    for (const Cell& cell : s_cells) {
+        VideoCore::OverlayCell out;
+        out.x = cell.x;
+        out.y = cell.y;
+        out.w = cell.w;
+        out.h = cell.h;
+        switch (cell.kind) {
+        case CellKind::Resume:
+            out.label = "Back to the game";
+            out.style = 1;
+            break;
+        case CellKind::Layout: {
+            out.label = GetScreenLayoutName(cell.index);
+            out.style = 3;
+            out.active = cell.index == layout_in_use;
+            const LayoutPicture picture = PictureOfLayout(cell.index);
+            std::copy(std::begin(picture.top), std::end(picture.top), out.top_screen);
+            std::copy(std::begin(picture.bottom), std::end(picture.bottom), out.bottom_screen);
+            break;
+        }
+        case CellKind::SaveState:
+            out.label = "Save State";
+            out.sub = SlotSummary(s_home_slot);
+            break;
+        case CellKind::LoadState:
+            out.label = "Load State";
+            out.sub = SlotSummary(s_home_slot);
+            break;
+        case CellKind::GameShare:
+            out.label = "GameShare";
+            out.sub = GameShare::IsEnabled() ? std::string{"On: "} + GameShare::ModeName() : "Off";
+            break;
+        case CellKind::Fps:
+            out.label = "FPS Counter";
+            out.sub = Settings::values.show_fps.GetValue() ? "On" : "Off";
+            break;
+        case CellKind::Amiibo:
+            out.label = "Amiibo";
+            out.sub = IsRealAmiiboActive() ? "On the reader" : "Files and reader";
+            break;
+        case CellKind::Cheats:
+            out.label = "Cheats";
+            out.sub = std::to_string(CheatCount()) + " loaded";
+            break;
+        case CellKind::Settings:
+            out.label = "Settings";
+            out.sub = "Everything else. What needs the game closed is locked.";
+            break;
+        case CellKind::Exit:
+            out.label = "Exit to Library";
+            out.sub = "Closes the game";
+            out.style = 2;
+            break;
+        }
+        state.cells.push_back(std::move(out));
+    }
+    state.hint = "A  Choose      X  Next save slot      L / R  Pages      B  Back to the game";
+}
+
 void Repaint() {
     const Page page = CurrentPage();
     VideoCore::OverlayMenuState state;
     state.visible = s_open.load(std::memory_order_relaxed);
-    state.title = PageName(page);
-    for (const Page listed : kPageOrder) {
-        state.sections.push_back({listed == Page::Home ? "Home" : PageName(listed),
-                                  IsAdvancedPage(listed)});
-    }
-    state.active_section = PageOrderIndex(page);
     state.light = GetUiTheme() != 0;
+    if (page == Page::Home) {
+        PaintHome(state);
+        VideoCore::SetOverlayMenuState(state);
+        return;
+    }
+    state.title = PageName(page);
+    const std::vector<NavEntry>& nav_list = NavList();
+    for (int i = 0; i < static_cast<int>(nav_list.size()); ++i) {
+        const NavEntry& entry = nav_list[static_cast<std::size_t>(i)];
+        state.sections.push_back({NavName(entry), entry.advanced});
+        if (entry.page == page && (page != Page::Settings || entry.category == s_category)) {
+            state.active_section = i;
+        }
+    }
     if (s_selected >= 0 && s_selected < static_cast<int>(s_rows.size())) {
         const Row& focused = s_rows[static_cast<std::size_t>(s_selected)];
         if (focused.item == Item::Setting && focused.index >= 0 &&
             focused.index < static_cast<int>(s_settings.size())) {
-            state.description = s_settings[static_cast<std::size_t>(focused.index)].description;
-        } else if (focused.item == Item::GameShareSwitch) {
-            state.description = "Lets another console running Toronja Link show a screen and play "
-                                "along. The connection type is set in the launcher's options.";
-        } else if (focused.item == Item::Section && IsAdvancedPage(static_cast<Page>(focused.index))) {
-            state.description = "Advanced: change these only if you know what they do.";
+            state.description = IsLocked(focused)
+                                    ? "Locked while a game is running. Change it from the library."
+                                    : s_settings[static_cast<std::size_t>(focused.index)].description;
         }
     }
     if (IsAdvancedPage(page) && state.description.empty()) {
@@ -660,8 +903,8 @@ void Repaint() {
         const Row& row = s_rows[static_cast<std::size_t>(i)];
         std::string value = Value(row);
         const bool no_value = value.empty();
-        state.items.push_back(
-            {Label(row), std::move(value), no_value, row.item == Item::Separator});
+        state.items.push_back({Label(row), std::move(value), no_value, IsSkippable(row)});
+        state.items.back().locked = IsLocked(row);
     }
     VideoCore::SetOverlayMenuState(state);
 }
@@ -685,6 +928,7 @@ void SetPauseInQuickMenu(bool enabled) {
 
 void OpenQuickMenu() {
     s_page = static_cast<int>(Page::Home);
+    s_cell = 0;
     s_selected = 0;
     s_scroll = 0;
     s_cheat_page = 0;
@@ -758,6 +1002,10 @@ void EnterPage(Page page) {
 
 void ClampScroll() {
     const int count = static_cast<int>(s_rows.size());
+    if (count == 0) {
+        s_scroll = 0;
+        return;
+    }
     const int visible = std::min(count, kMaxVisibleRows);
     s_scroll = std::clamp(s_scroll, s_selected - visible + 1, s_selected);
     s_scroll = std::clamp(s_scroll, 0, std::max(0, count - visible));
@@ -770,11 +1018,120 @@ void MoveSelection(int dir) {
     }
     for (int step = 0; step < count; ++step) {
         s_selected = (s_selected + dir + count) % count;
-        if (s_rows[static_cast<std::size_t>(s_selected)].item != Item::Separator) {
+        if (!IsSkippable(s_rows[static_cast<std::size_t>(s_selected)])) {
             break;
         }
     }
     ClampScroll();
+}
+
+// Opens entry `index` of the side list.
+void EnterNav(int index) {
+    const std::vector<NavEntry>& list = NavList();
+    if (index < 0 || index >= static_cast<int>(list.size())) {
+        return;
+    }
+    const NavEntry& entry = list[static_cast<std::size_t>(index)];
+    if (entry.page == Page::Settings) {
+        s_category = entry.category;
+    }
+    EnterPage(entry.page);
+}
+
+int NavIndex() {
+    const std::vector<NavEntry>& list = NavList();
+    const Page page = CurrentPage();
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        const NavEntry& entry = list[static_cast<std::size_t>(i)];
+        if (entry.page == page && (page != Page::Settings || entry.category == s_category)) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+// Moves the home screen's cursor to the nearest cell in a direction.
+void MoveCell(int dx, int dy) {
+    if (s_cells.empty()) {
+        return;
+    }
+    const Cell& from = s_cells[static_cast<std::size_t>(s_cell)];
+    const float fx = from.x + from.w / 2, fy = from.y + from.h / 2;
+    int best = -1;
+    float best_score = 1e9f;
+    for (int i = 0; i < static_cast<int>(s_cells.size()); ++i) {
+        if (i == s_cell) {
+            continue;
+        }
+        const Cell& to = s_cells[static_cast<std::size_t>(i)];
+        const float tx = to.x + to.w / 2, ty = to.y + to.h / 2;
+        // Vertical moves care about rows, so a wide cell above still counts as "above".
+        const bool overlaps_x = to.x < from.x + from.w && from.x < to.x + to.w;
+        const float along = dx != 0 ? (tx - fx) * dx : (ty - fy) * dy;
+        const float across = dx != 0 ? std::abs(ty - fy) * 4.0f
+                                     : (overlaps_x ? 0.0f : std::abs(tx - fx));
+        if (along <= 0.001f) {
+            continue;
+        }
+        const float score = along + across;
+        if (score < best_score) {
+            best_score = score;
+            best = i;
+        }
+    }
+    if (best >= 0) {
+        s_cell = best;
+    }
+}
+
+// Does what the selected cell of the home screen is for.
+QuickMenuAction ActivateCell() {
+    if (s_cells.empty()) {
+        return QuickMenuAction::None;
+    }
+    const Cell cell = s_cells[static_cast<std::size_t>(s_cell)];
+    const auto slot = static_cast<unsigned int>(s_home_slot);
+    switch (cell.kind) {
+    case CellKind::Resume:
+        CloseQuickMenu();
+        return QuickMenuAction::Close;
+    case CellKind::Layout:
+        SetScreenLayoutIndex(cell.index);
+        break;
+    case CellKind::SaveState:
+        if (RequestSaveState(slot)) {
+            CloseQuickMenu();
+            return QuickMenuAction::Close;
+        }
+        break;
+    case CellKind::LoadState:
+        if (s_slot_status[slot].empty()) {
+            VideoCore::PostOverlayToast(SaveStateSlotName(slot) + " is empty");
+        } else if (RequestLoadState(slot)) {
+            CloseQuickMenu();
+            return QuickMenuAction::Close;
+        }
+        break;
+    case CellKind::GameShare:
+        GameShare::SetEnabled(!GameShare::IsEnabled());
+        break;
+    case CellKind::Fps:
+        Settings::values.show_fps = !Settings::values.show_fps.GetValue();
+        break;
+    case CellKind::Amiibo:
+        EnterPage(Page::Amiibo);
+        break;
+    case CellKind::Cheats:
+        EnterPage(Page::Cheats);
+        break;
+    case CellKind::Settings:
+        EnterNav(1); // The live options first; the launcher's pages follow in the side list.
+        break;
+    case CellKind::Exit:
+        CloseQuickMenu();
+        return QuickMenuAction::ExitGame;
+    }
+    return QuickMenuAction::None;
 }
 
 bool StepSubList(const QuickMenuNav& nav) {
@@ -841,10 +1198,36 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
     bool changed = false;
 
     if (nav.tab_prev != nav.tab_next) {
-        const int current = PageOrderIndex(CurrentPage());
-        const int next = (current + (nav.tab_next ? 1 : -1) + NumPages) % NumPages;
-        EnterPage(kPageOrder[static_cast<std::size_t>(next)]);
+        const int count = static_cast<int>(NavList().size());
+        EnterNav((NavIndex() + (nav.tab_next ? 1 : -1) + count) % count);
         changed = true;
+    }
+
+    // The home screen is a grid of cells, not a list.
+    if (CurrentPage() == Page::Home) {
+        if (nav.left) {
+            MoveCell(-1, 0);
+        }
+        if (nav.right) {
+            MoveCell(+1, 0);
+        }
+        if (nav.up) {
+            MoveCell(0, -1);
+        }
+        if (nav.down) {
+            MoveCell(0, +1);
+        }
+        if (nav.alt) {
+            s_home_slot = (s_home_slot + 1) % static_cast<int>(Core::SaveStateSlotCount);
+        }
+        QuickMenuAction action = QuickMenuAction::None;
+        if (nav.confirm) {
+            action = ActivateCell();
+        }
+        if (IsQuickMenuOpen()) {
+            Repaint();
+        }
+        return action;
     }
 
     changed |= StepSubList(nav);
@@ -1019,6 +1402,21 @@ QuickMenuAction QuickMenuTouch(float x, float y) {
     if (!IsQuickMenuOpen()) {
         return QuickMenuAction::None;
     }
+    // Home: a tap on a cell is that cell's button.
+    if (CurrentPage() == Page::Home) {
+        for (int i = 0; i < static_cast<int>(s_cells.size()); ++i) {
+            const Cell& cell = s_cells[static_cast<std::size_t>(i)];
+            if (x >= cell.x && x < cell.x + cell.w && y >= cell.y && y < cell.y + cell.h) {
+                s_cell = i;
+                const QuickMenuAction action = ActivateCell();
+                if (IsQuickMenuOpen()) {
+                    Repaint();
+                }
+                return action;
+            }
+        }
+        return QuickMenuAction::None;
+    }
     const std::vector<VideoCore::OverlayHit> hits = VideoCore::GetOverlayHitMap();
     bool inside = false;
     for (const VideoCore::OverlayHit& hit : hits) {
@@ -1027,9 +1425,10 @@ QuickMenuAction QuickMenuTouch(float x, float y) {
         }
         if (hit.kind == 2) {
             inside = true;
-        } else if (hit.kind == 1 && hit.index >= 0 && hit.index < NumPages) {
+        } else if (hit.kind == 1 && hit.index >= 0 &&
+                   hit.index < static_cast<int>(NavList().size())) {
             s_overwrite_armed = false;
-            EnterPage(kPageOrder[static_cast<std::size_t>(hit.index)]);
+            EnterNav(hit.index);
             Repaint();
             return QuickMenuAction::None;
         } else if (hit.kind == 0) {
@@ -1057,6 +1456,18 @@ QuickMenuAction QuickMenuTouch(float x, float y) {
         return UpdateQuickMenu(nav);
     }
     return QuickMenuAction::None;
+}
+
+void ShowClosingScreen() {
+    VideoCore::OverlayMenuState state;
+    state.visible = true;
+    state.home = true;
+    state.light = GetUiTheme() != 0;
+    state.texts.push_back({0.5f, 0.40f, "Closing the game", 1.5f, 0, true});
+    state.texts.push_back({0.5f, 0.50f, "Saving and freeing memory. This can take a few seconds.",
+                           0.8f, 1, true});
+    state.texts.push_back({0.5f, 0.56f, "Please do not turn the console off.", 0.8f, 1, true});
+    VideoCore::SetOverlayMenuState(state);
 }
 
 } // namespace SwitchFrontend

@@ -842,7 +842,9 @@ void System::Shutdown(bool is_deserializing) {
     // Shutdown emulation session
     is_powered_on = false;
 
+    LOG_INFO(Core, "Shutdown: releasing the GPU");
     gpu.reset();
+    LOG_INFO(Core, "Shutdown: GPU released");
     if (!is_deserializing) {
         lle_modules.clear();
 #ifdef ENABLE_GDBSTUB

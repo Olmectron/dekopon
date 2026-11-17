@@ -19,6 +19,30 @@ struct OverlayMenuItem {
     std::string value;
     bool is_action{};
     bool is_header{};
+    bool locked{}; // Shown, but not changeable while a game is running.
+};
+
+// One button or tile of the in-game menu's home screen. Positions are fractions of the
+// menu's canvas; the frontend lays them out, since it also moves the cursor between
+// them and matches touches to them.
+struct OverlayCell {
+    float x{}, y{}, w{}, h{};
+    std::string label;
+    std::string sub;
+    int style{};   // 0 plain, 1 primary, 2 danger, 3 screen-layout tile
+    bool active{}; // Layout tile: the layout in use.
+    // Layout tile: the top and the bottom screen, as fractions of the tile's picture
+    // area (x, y, w, h). A width of 0 leaves that screen out.
+    float top_screen[4]{};
+    float bottom_screen[4]{};
+};
+
+struct OverlayText {
+    float x{}, y{};
+    std::string text;
+    float scale{1.0f};
+    int tone{};      // 0 normal, 1 dim, 2 accent
+    bool centred{};  // x is the middle of the text, not its left edge.
 };
 
 // One page of the in-game menu, as listed down its left side.
@@ -37,6 +61,11 @@ struct OverlayMenuState {
     std::vector<OverlayMenuSection> sections; // Empty: no side list.
     int active_section{-1};
     bool light{}; // Light theme.
+    // The home screen: full-screen buttons and tiles instead of the list.
+    bool home{};
+    std::vector<OverlayCell> cells;
+    std::vector<OverlayText> texts;
+    int cell_selected{-1};
 };
 
 // Clockwise rotation the renderer applies to everything it draws over the game.

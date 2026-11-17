@@ -23,6 +23,7 @@
 
 #include "citra_switch/config.h"
 #include "citra_switch/covers.h"
+#include "citra_switch/game_share.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
@@ -1017,7 +1018,10 @@ public:
                 done = HandleArtic(down, nav, result);
             }
             if (done) {
-                return result;
+                if (result.action != MenuAction::Launch || !NeedsShareNotice()) {
+                    return result;
+                }
+                OpenShareNotice(result.path);
             }
 
             if (!install_active && !update_download_active && !update_installed &&
@@ -1031,9 +1035,13 @@ public:
                 return {MenuAction::Exit, {}};
             }
             if (pending_launch) {
-                MenuResult launch{MenuAction::Launch, *pending_launch};
+                const std::string path = *pending_launch;
                 pending_launch.reset();
-                return launch;
+                if (!NeedsShareNotice()) {
+                    Flush();
+                    return {MenuAction::Launch, path};
+                }
+                OpenShareNotice(path);
             }
 
             Draw();
@@ -1100,6 +1108,44 @@ private:
     // The library as a full-screen shelf of covers. The Grid style keeps the classic page.
     bool ShelfMode() const {
         return tab == Tab::Library && !PerGameOpen();
+    }
+
+    // GameShare left on is easy to forget, and it changes how the console behaves: say so
+    // before the game starts, every time, and let it be switched off right there.
+    bool share_ack = false;
+
+    bool NeedsShareNotice() const {
+        return GameShare::IsEnabled() && !share_ack;
+    }
+
+    void OpenShareNotice(const std::string& path) {
+        const bool wireless =
+            GameShare::GetMode() == static_cast<int>(GameShare::Mode::LocalWireless);
+        ConfirmPrompt prompt;
+        prompt.title = wireless ? "GameShare is on: local wireless" : "GameShare is on: Wi-Fi / LAN";
+        if (wireless) {
+            prompt.lines = {"This console will create its own wireless network, so",
+                            "another console running Toronja Link can join directly.",
+                            "While the game runs this console leaves its usual network:",
+                            "FTP and anything else that needs it stop until you exit."};
+        } else {
+            prompt.lines = {"Another console on the same network running Toronja Link",
+                            "will be able to show a screen of this game and send it",
+                            "controls. This console stays on its network as usual."};
+        }
+        prompt.note = "B starts the game with GameShare switched off.";
+        prompt.accept = "Start and share";
+        prompt.cancel_label = "Start without";
+        prompt.on_accept = [this, path] {
+            share_ack = true;
+            pending_launch = path;
+        };
+        prompt.on_cancel = [this, path] {
+            GameShare::SetEnabled(false);
+            settings_dirty = true;
+            pending_launch = path;
+        };
+        confirm = std::move(prompt);
     }
 
     void GoHome() {
@@ -1582,6 +1628,7 @@ private:
         const char* accept;
         std::function<void()> on_accept;
         std::function<void()> on_cancel;
+        const char* cancel_label{}; // "Cancel" unless B does something else here.
     };
     std::optional<ConfirmPrompt> confirm;
 
@@ -4162,7 +4209,8 @@ private:
         const int accept_w = DrawHint(c, hx, hy, "A", confirm->accept);
         confirm_accept_rect = {hx - 12, hy - 14, accept_w + 24, 54};
         hx += accept_w + 22;
-        const int cancel_w = DrawHint(c, hx, hy, "B", "Cancel");
+        const int cancel_w =
+            DrawHint(c, hx, hy, "B", confirm->cancel_label ? confirm->cancel_label : "Cancel");
         confirm_cancel_rect = {hx - 10, hy - 14, cancel_w + 24, 54};
     }
 
