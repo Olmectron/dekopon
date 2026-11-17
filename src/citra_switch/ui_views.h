@@ -470,12 +470,87 @@ struct BoxVertex {
     float u{}, v{};
 };
 
+/// What a triangle needs to know about the face of the case it is part of. `u` and `v` of
+/// its corners run 0..1 across that face (left to right, top to bottom, seen from outside).
+struct BoxFace {
+    int kind{};         // 0 front, 1 back, 2 spine, 3 opening side, 4 top, 5 bottom
+    float w{1}, h{1};   // The face's size, in case heights.
+    float u0{}, u1{1};  // The part of the picture that goes across it.
+    u32 plastic{};      // The case itself, where no print covers it.
+};
+
+/// The small things that make a case a case rather than a painted block. Returns false for
+/// a point outside the face's rounded corners. `plastic` says the bare case shows there;
+/// `dark` is how much darker that point is (a groove, a crease).
+inline bool CaseDetail(const BoxFace& f, float s, float t, bool& plastic, float& dark) {
+    const float x = s * f.w, y = t * f.h;
+    // Corners: gently rounded in the plane of the face.
+    const float r = std::min(0.024f, std::min(f.w, f.h) * 0.30f);
+    const float cx = x < r ? r - x : x > f.w - r ? x - (f.w - r) : 0.0f;
+    const float cy = y < r ? r - y : y > f.h - r ? y - (f.h - r) : 0.0f;
+    if (cx > 0.0f && cy > 0.0f && cx * cx + cy * cy > r * r) {
+        return false;
+    }
+    plastic = false;
+    dark = 0.0f;
+    constexpr float rim = 0.014f; // The edge of the case round the printed sleeve.
+    switch (f.kind) {
+    case 0:   // Front: the spine is at its left.
+    case 1: { // Back: the spine is at its right.
+        const float from_spine = f.kind == 0 ? x : f.w - x;
+        const float from_open = f.w - from_spine;
+        if (y < rim || y > f.h - rim || from_open < rim) {
+            plastic = true;
+            // The lip the sleeve stops at.
+            dark = (y < rim ? rim - y : y > f.h - rim ? y - (f.h - rim) : rim - from_open) < 0.004f
+                       ? 0.22f
+                       : 0.0f;
+        } else if (from_spine > 0.030f && from_spine < 0.036f) {
+            dark = 0.20f; // The crease where the lid folds.
+        } else if (from_spine < 0.030f) {
+            dark = 0.06f; // The hinge is a touch duller than the lid.
+        }
+        break;
+    }
+    case 2: // Spine: the sleeve runs over it, the case shows at its ends.
+        if (y < rim || y > f.h - rim) {
+            plastic = true;
+        }
+        break;
+    case 3: { // The side that opens: two halves meeting, and the notch for a thumb.
+        plastic = true;
+        const float across = s;
+        const bool notch = t > 0.44f && t < 0.56f;
+        if (std::abs(across - 0.5f) < (notch ? 0.20f : 0.06f)) {
+            dark = notch ? 0.50f : 0.42f;
+        } else if (std::abs(across - 0.5f) < (notch ? 0.26f : 0.10f)) {
+            dark = 0.14f; // The bevel into the gap.
+        }
+        break;
+    }
+    default: { // Top and bottom: the same seam, ending at the hinge (s = 0 is the spine end).
+        plastic = true;
+        if (x > 0.045f) {
+            const float across = std::abs(t - 0.5f);
+            if (across < 0.06f) {
+                dark = 0.42f;
+            } else if (across < 0.10f) {
+                dark = 0.14f;
+            }
+        }
+        break;
+    }
+    }
+    return true;
+}
+
 /// One triangle of a face, with the picture laid on it in true perspective. Without a
 /// picture it is filled with `solid`. With `mirror_floor` at or above zero the pixels are a
 /// reflection: they fade out over `mirror_span` pixels below that line.
-inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxVertex& a,
-                            const BoxVertex& b, const BoxVertex& d, float shade, u32 shade_to,
-                            bool smooth, float mirror_floor, float mirror_span) {
+inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxFace& face,
+                            const BoxVertex& a, const BoxVertex& b, const BoxVertex& d,
+                            float shade, u32 shade_to, bool smooth, float mirror_floor,
+                            float mirror_span) {
     const float area = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
     if (std::abs(area) < 0.5f) {
         return;
@@ -495,6 +570,8 @@ inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxVer
     const u32 lose = 256 - keep;
     const u32 tr = shade_to & 0xFF, tg = (shade_to >> 8) & 0xFF, tb = (shade_to >> 16) & 0xFF;
     const bool textured = img != nullptr && !img->Empty();
+    const float iw = textured ? static_cast<float>(img->w - 1) : 0.0f;
+    const float ih = textured ? static_cast<float>(img->h - 1) : 0.0f;
     u32* const pixels = c.Data();
     const int stride = c.Width();
     for (int y = y0; y <= y1; ++y) {
@@ -519,13 +596,23 @@ inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxVer
                 continue;
             }
             u32 color = solid;
-            if (textured) {
-                const float q = wa * a.w + wb * b.w + wd * d.w;
-                if (q <= 0.0f) {
-                    continue;
-                }
-                const float u = (wa * a.u * a.w + wb * b.u * b.w + wd * d.u * d.w) / q;
-                const float v = (wa * a.v * a.w + wb * b.v * b.w + wd * d.v * d.w) / q;
+            const float q = wa * a.w + wb * b.w + wd * d.w;
+            if (q <= 0.0f) {
+                continue;
+            }
+            // Where on the face this pixel is, in true perspective.
+            const float fs = (wa * a.u * a.w + wb * b.u * b.w + wd * d.u * d.w) / q;
+            const float ft = (wa * a.v * a.w + wb * b.v * b.w + wd * d.v * d.w) / q;
+            bool bare = false;
+            float dark = 0.0f;
+            if (!CaseDetail(face, fs, ft, bare, dark)) {
+                continue;
+            }
+            if (bare) {
+                color = face.plastic;
+            } else if (textured) {
+                const float u = (face.u0 + (face.u1 - face.u0) * fs) * iw;
+                const float v = ft * ih;
                 if (smooth) {
                     color = SampleImage(*img, u, v);
                 } else {
@@ -538,6 +625,12 @@ inline void FillBoxTriangle(Canvas& c, const Image* img, u32 solid, const BoxVer
                 }
             }
             u32 r = color & 0xFF, g = (color >> 8) & 0xFF, bl = (color >> 16) & 0xFF;
+            if (dark > 0.0f) {
+                const u32 lit = static_cast<u32>((1.0f - dark) * 256.0f);
+                r = (r * lit) >> 8;
+                g = (g * lit) >> 8;
+                bl = (bl * lit) >> 8;
+            }
             if (keep < 256) {
                 r = (r * keep + tr * lose) >> 8;
                 g = (g * keep + tg * lose) >> 8;
@@ -685,22 +778,26 @@ inline void DrawCase3D(Canvas& c, Font& font, const ShelfItem& item, const BoxPo
             solid = face.kind == 4 ? plastic : plastic_dark;
             break;
         }
-        if (img != nullptr) {
-            const float iw = static_cast<float>(img->w - 1), ih = static_cast<float>(img->h - 1);
-            v[0].u = v[3].u = u0 * iw;
-            v[1].u = v[2].u = u1 * iw;
-            v[0].v = v[1].v = 0.0f;
-            v[2].v = v[3].v = ih;
-        }
+        v[0].u = v[3].u = 0.0f;
+        v[1].u = v[2].u = 1.0f;
+        v[0].v = v[1].v = 0.0f;
+        v[2].v = v[3].v = 1.0f;
+        BoxFace info;
+        info.kind = face.kind;
+        info.w = face.kind == 2 || face.kind == 3 ? kCaseDepth : kCaseAspect;
+        info.h = face.kind >= 4 ? kCaseDepth : 1.0f;
+        info.u0 = u0;
+        info.u1 = u1;
+        info.plastic = face.kind == 5 ? plastic_dark : plastic;
         if (mirror_floor >= 0.0f) {
             for (BoxVertex& vertex : v) {
                 vertex.y = 2.0f * mirror_floor - vertex.y;
             }
         }
-        FillBoxTriangle(c, img, solid, v[0], v[1], v[2], shade, shade_to, smooth, mirror_floor,
-                        mirror_span);
-        FillBoxTriangle(c, img, solid, v[0], v[2], v[3], shade, shade_to, smooth, mirror_floor,
-                        mirror_span);
+        FillBoxTriangle(c, img, solid, info, v[0], v[1], v[2], shade, shade_to, smooth,
+                        mirror_floor, mirror_span);
+        FillBoxTriangle(c, img, solid, info, v[0], v[2], v[3], shade, shade_to, smooth,
+                        mirror_floor, mirror_span);
 
         // A back with nothing printed on it says what is known about the game, once it is
         // square on and large enough to read.
