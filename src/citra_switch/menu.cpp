@@ -829,7 +829,7 @@ std::vector<InfoPage> PaginateNotes(const std::string& notes, const std::string&
 InfoPage MakeAboutPage(int max_w) {
     return MakeInfoPage("About Toronja",
                         {"Toronja is maintained by Olmectron.", "",
-                         "It builds on Toronja by PalindromicBreadLoaf, which in turn is "
+                         "It builds on Dekopon by PalindromicBreadLoaf, which in turn is "
                          "built on Azahar, the work of the Azahar Emulator Project and of "
                          "the Citra contributors before it.",
                          "", "Free software under the GNU GPL, version 2 or later."},
