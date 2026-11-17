@@ -1,0 +1,118 @@
+name: dekopon-switch1
+
+# Builds the Switch 1 version (NXVK for Vulkan), so it keeps up with the Switch 2 port.
+# The NXVK driver is Mesa cross-built for the Switch; that takes a while, so its archives
+# are kept in the Actions cache, keyed by the NXVK commit.
+on:
+  push:
+    branches: [master, switch2-gameshare]
+    paths-ignore: ['**.md', 'tools/gameshare/**', 'tools/ui-preview/**', 'tools/branding/**',
+                   'tools/covers/**', '.github/workflows/gameshare-receiver.yml',
+                   '.github/workflows/ui-preview.yml', '.github/workflows/switch2.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: dekopon-switch1-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fetch NXVK
+        id: nxvk
+        run: |
+          git clone --depth 1 -b switch https://github.com/PalindromicBreadLoaf/nxvk.git externals/nxvk
+          echo "sha=$(git -C externals/nxvk rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the NXVK driver archives
+        id: archives
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/nxvk-archives.tar
+          key: nxvk-archives-${{ steps.nxvk.outputs.sha }}
+
+      - name: Build NXVK
+        if: steps.archives.outputs.cache-hit != 'true'
+        working-directory: externals/nxvk
+        run: |
+          make CONTAINER=docker image
+          make CONTAINER=docker
+          # Only the static archives are needed afterwards.
+          find switch/build/cross -name '*.a' -print0 | sudo tar --null -T - -cf /tmp/nxvk-archives.tar
+          sudo chmod a+r /tmp/nxvk-archives.tar
+          ls -la /tmp/nxvk-archives.tar
+
+      - name: Keep the NXVK driver archives
+        if: steps.archives.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/nxvk-archives.tar
+          key: nxvk-archives-${{ steps.nxvk.outputs.sha }}
+
+      - name: Unpack the NXVK driver archives
+        if: steps.archives.outputs.cache-hit == 'true'
+        run: tar -xf /tmp/nxvk-archives.tar -C externals/nxvk
+
+      - name: Restore the toolchain image
+        id: toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
+
+      - name: Load or build the toolchain image
+        run: |
+          if [ -f /tmp/toolchain-image.tar ]; then
+            docker load -i /tmp/toolchain-image.tar && exit 0
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .; then
+              docker save dekopon-switch2 -o /tmp/toolchain-image.tar
+              exit 0
+            fi
+            echo "toolchain image build failed (attempt $attempt), retrying in 60 s"
+            sleep 60
+          done
+          exit 1
+
+      - name: Keep the toolchain image for later runs
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: switch1-ccache-${{ github.sha }}
+          restore-keys: |
+            switch1-ccache-
+
+      - name: Build dekopon.nro for Switch 1
+        run: docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch1/build.sh
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: switch1-ccache-${{ github.sha }}
+
+      - name: Upload NRO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dekopon-switch1-nro
+          path: build/switch1/src/citra_switch/dekopon.nro
+          if-no-files-found: error
