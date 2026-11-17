@@ -1216,12 +1216,12 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
             state.last_frame = frame_counter;
 
             const u32 format = static_cast<u32>(surface.pixel_format);
-            const bool usable = state.pending && state.staging.size == staging_size &&
+            const bool usable = state.pending && state.staging_size == staging_size &&
                                 state.width == flush_info.width &&
                                 state.height == flush_info.height && state.format == format;
             if (state.streak >= STREAK_TO_DELAY && usable) {
                 runtime.WaitTick(state.tick);
-                write_to_guest(state.staging.mapped);
+                write_to_guest(state.mapped);
             } else {
                 download_now();
             }
@@ -1232,7 +1232,8 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
                 surface.Download(make_copy(staging), staging, false);
                 state.pending = true;
                 state.tick = runtime.CurrentTick();
-                state.staging = staging;
+                state.staging_size = staging.size;
+                state.mapped = staging.mapped;
                 state.width = flush_info.width;
                 state.height = flush_info.height;
                 state.format = format;
