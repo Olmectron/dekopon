@@ -24,6 +24,7 @@ enum class Category {
     Console,
     Storage,
     Advanced,
+    GameShare,
     Count,
 };
 

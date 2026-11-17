@@ -16,7 +16,9 @@
 #include "citra_switch/menu_data.h"
 #include "citra_switch/overlay_menu.h"
 #include "citra_switch/settings_menu.h"
+#include "citra_switch/game_share.h"
 #include "citra_switch/settings_registry.h"
+#include "video_core/rasterizer_cache/cache_stats.h"
 #include "citra_switch/updater.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -1230,6 +1232,11 @@ void BuildAdvanced(std::vector<SettingEntry>& out) {
                 v.skip_texture_copy);
     t << Toggle({"Skip CPU Write", "Keeps cached GPU surfaces through tiny CPU writes."},
                 v.skip_cpu_write);
+    t << LocalBool("delayed_gpu_readback",
+                   {"Delayed GPU Readback",
+                    "Hands the game last frame's copy of data it reads back from the GPU every "
+                    "frame, instead of waiting for the GPU. For testing only."},
+                   IsDelayedReadbackEnabled, SetDelayedReadbackEnabled, false);
 
     t.Group("Debug");
     t.Ini("Debugging");
@@ -1256,6 +1263,36 @@ void BuildAdvanced(std::vector<SettingEntry>& out) {
                         [] { return Settings::values.log_filter.GetValue(); });
 }
 
+constexpr std::array<const char*, 2> kGameShareModeNames{"Wi-Fi / LAN",
+                                                         "Local wireless (direct)"};
+
+bool IsDelayedReadbackEnabled() {
+    return VideoCore::CacheStats::delayed_readback_enabled.load();
+}
+
+void SetDelayedReadbackEnabled(bool enabled) {
+    VideoCore::CacheStats::delayed_readback_enabled.store(enabled);
+}
+
+void BuildGameShare(std::vector<SettingEntry>& out) {
+    Table t{out, Category::GameShare};
+
+    t.Group("Sharing");
+    t.Ini("GameShare");
+    t << LocalBool("gameshare_enabled",
+                   {"GameShare",
+                    "Lets another console running Dekopon Link show one of the screens and "
+                    "play along. Applies to the next game started."},
+                   GameShare::IsEnabled, GameShare::SetEnabled, true);
+    t << LocalChoice(
+        "gameshare_mode",
+        {"Connection",
+         "Wi-Fi / LAN uses the network this console is on. Local wireless creates a "
+         "console-to-console network (experimental). Applies to the next game started."},
+        [] { return GameShare::GetMode(); }, [](int value) { GameShare::SetMode(value); }, 0,
+        kGameShareModeNames);
+}
+
 std::vector<SettingEntry> BuildRegistry() {
     std::vector<SettingEntry> entries;
     entries.reserve(160);
@@ -1270,6 +1307,7 @@ std::vector<SettingEntry> BuildRegistry() {
     BuildConsole(entries);
     BuildStorage(entries);
     BuildAdvanced(entries);
+    BuildGameShare(entries);
     return entries;
 }
 
@@ -1308,6 +1346,8 @@ const char* CategoryName(Category category) {
         return "Storage";
     case Category::Advanced:
         return "Advanced";
+    case Category::GameShare:
+        return "GameShare";
     default:
         return "";
     }

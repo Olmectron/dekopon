@@ -26,6 +26,19 @@ struct InputState;
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)
 namespace SwitchFrontend::GameShare {
 
+/// How the receiver reaches this console.
+enum class Mode : int {
+    Network = 0,       ///< The network the console is already on (Wi-Fi or LAN).
+    LocalWireless = 1, ///< Console-to-console: this console creates a local network.
+    Count,
+};
+
+/// Settings, persisted by the frontend (GameShare tab).
+bool IsEnabled();
+void SetEnabled(bool enabled);
+int GetMode();
+void SetMode(int mode);
+
 /// Starts listening for a receiver. Safe to call again while running.
 void Start();
 

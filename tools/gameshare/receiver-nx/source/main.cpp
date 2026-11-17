@@ -160,6 +160,85 @@ void Draw(Framebuffer& fb, const Picture& picture) {
     framebufferEnd(&fb);
 }
 
+// Local wireless (LDN). Must match src/citra_switch/game_share.cpp.
+constexpr u16 LDN_SCENE_ID = 0x4453; // "DS"
+constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0x47,
+                                     0x61, 0x6d, 0x65, 0x53, 0x68, 0x61, 0x72, 0x65};
+
+/// Joins the local network a Dekopon host created and returns the host's address. Prints
+/// every step with its result code: this path cannot be tested without two consoles.
+bool JoinLocalWireless(PadState& pad, in_addr& host_addr) {
+    Result rc = ldnInitialize(LdnServiceType_User);
+    std::printf("ldnInitialize: 0x%x\n", rc);
+    consoleUpdate(nullptr);
+    if (R_FAILED(rc)) {
+        return false;
+    }
+    rc = ldnSetProtocol(LdnProtocol_Unknown3);
+    std::printf("ldnSetProtocol(NX+Ounce): 0x%x\n", rc);
+    rc = ldnOpenStation();
+    std::printf("ldnOpenStation: 0x%x\n", rc);
+    consoleUpdate(nullptr);
+    if (R_FAILED(rc)) {
+        ldnExit();
+        return false;
+    }
+
+    LdnSecurityConfig security{};
+    security.security_mode = LdnSecurityMode_Product;
+    security.passphrase_size = sizeof(LDN_PASSPHRASE);
+    std::memcpy(security.passphrase, LDN_PASSPHRASE, sizeof(LDN_PASSPHRASE));
+    LdnUserConfig user{};
+    std::strncpy(user.user_name, "DekoponLink", sizeof(user.user_name) - 1);
+
+    LdnScanFilter filter{};
+    filter.network_id.intent_id.local_communication_id = -1;
+    filter.network_id.intent_id.scene_id = LDN_SCENE_ID;
+    filter.flags = LdnScanFilterFlag_LocalCommunicationId | LdnScanFilterFlag_SceneId;
+
+    static LdnNetworkInfo networks[0x18];
+    std::printf("Scanning for a Dekopon host (B to cancel)...\n");
+    consoleUpdate(nullptr);
+    for (int attempt = 0; appletMainLoop(); ++attempt) {
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & HidNpadButton_B) {
+            ldnExit();
+            return false;
+        }
+        s32 total = 0;
+        rc = ldnScan(0, &filter, networks, 0x18, &total);
+        if (attempt % 5 == 0 || R_FAILED(rc) || total > 0) {
+            std::printf("ldnScan: 0x%x, %d network(s)\n", rc, total);
+            consoleUpdate(nullptr);
+        }
+        if (R_SUCCEEDED(rc) && total > 0) {
+            rc = ldnConnect(&security, &user, 0, 0, &networks[0]);
+            std::printf("ldnConnect: 0x%x\n", rc);
+            consoleUpdate(nullptr);
+            if (R_SUCCEEDED(rc)) {
+                break;
+            }
+        }
+        svcSleepThread(300'000'000);
+    }
+
+    LdnNetworkInfo info{};
+    rc = ldnGetNetworkInfo(&info);
+    LdnIpv4Address address{};
+    LdnSubnetMask mask{};
+    const Result rc2 = ldnGetIpv4Address(&address, &mask);
+    std::printf("ldnGetNetworkInfo: 0x%x, ldnGetIpv4Address: 0x%x\n", rc, rc2);
+    if (R_FAILED(rc) || info.node_count == 0) {
+        ldnExit();
+        return false;
+    }
+    // The first node is the access point, i.e. the Dekopon host.
+    host_addr.s_addr = htonl(info.nodes[0].ip_addr.addr);
+    std::printf("Joined. Host %s\n", inet_ntoa(host_addr));
+    consoleUpdate(nullptr);
+    return true;
+}
+
 constexpr const char* HOSTS_FILE = "sdmc:/switch/dekopon-link.txt";
 
 /// Extra addresses to try besides the broadcast. Creates the file with an example the first
@@ -216,6 +295,30 @@ int main(int, char**) {
     bool console_active = true;
     Framebuffer fb{};
 
+    // How to reach the host. The socket is created afterwards, so that with local wireless it
+    // lives on that network.
+    std::printf("\nA: network (Wi-Fi / LAN)    X: local wireless (direct)\n");
+    consoleUpdate(nullptr);
+    bool local_wireless = false;
+    in_addr local_host{};
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        const u64 down = padGetButtonsDown(&pad);
+        if (down & HidNpadButton_A) {
+            break;
+        }
+        if (down & HidNpadButton_X) {
+            local_wireless = JoinLocalWireless(pad, local_host);
+            if (!local_wireless) {
+                std::printf("Local wireless failed. A: network    X: try again\n");
+                consoleUpdate(nullptr);
+                continue;
+            }
+            break;
+        }
+        consoleUpdate(nullptr);
+    }
+
     const int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock >= 0) {
         const int yes = 1;
@@ -228,6 +331,10 @@ int main(int, char**) {
     host.sin_port = htons(PORT);
     host.sin_addr.s_addr = htonl(INADDR_BROADCAST);
     bool host_known = false;
+    if (local_wireless) {
+        // The host is the network's access point; ask it directly.
+        host.sin_addr = local_host;
+    }
     const std::vector<in_addr> extra_hosts = LoadHosts();
 
     u8 screen = 1; // bottom
@@ -410,7 +517,7 @@ int main(int, char**) {
         } else {
             // Nothing new: wait a moment instead of spinning. If the stream has stopped for a
             // while, forget the host so the next HELLO goes out as a broadcast again.
-            if (host_known && now - last_frame_ns > 5'000'000'000ULL) {
+            if (host_known && !local_wireless && now - last_frame_ns > 5'000'000'000ULL) {
                 host_known = false;
                 host.sin_addr.s_addr = htonl(INADDR_BROADCAST);
             }
@@ -425,6 +532,9 @@ int main(int, char**) {
         consoleExit(nullptr);
     } else {
         framebufferClose(&fb);
+    }
+    if (local_wireless) {
+        ldnExit();
     }
     socketExit();
     return 0;

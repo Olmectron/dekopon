@@ -1207,7 +1207,8 @@ void RasterizerCache<T>::DownloadSurface(Surface& surface, SurfaceInterval inter
     // back the copy that was requested on the previous frame (it has long finished) and
     // request the next one, instead of waiting. The guest sees that region one frame late.
     if constexpr (requires { runtime.WaitTick(u64{}); }) {
-        if (allow_delayed) {
+        if (allow_delayed &&
+            CacheStats::delayed_readback_enabled.load(std::memory_order_relaxed)) {
             constexpr u32 STREAK_TO_DELAY = 3;
             const u64 key = (u64{flush_start} << 32) | flush_end;
             DelayedDownload& state = delayed_downloads[key];

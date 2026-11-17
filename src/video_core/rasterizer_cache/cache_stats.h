@@ -28,6 +28,12 @@ inline std::atomic<u64> flush_wait_micros{};   ///< Waiting for the previous fra
 inline std::atomic<u64> flush_record_micros{}; ///< Recording / performing the download.
 inline std::atomic<u64> flush_encode_micros{}; ///< Converting and writing to guest memory.
 
+/// Serve read-backs the guest repeats every frame one frame late instead of waiting for the
+/// GPU (see RasterizerCache::DownloadSurface). Off by default: it was written while chasing
+/// the Majora's Mask sun slowdown, turned out not to be the cause, and makes the guest see
+/// that region a frame late. Kept as a switch for future read-back investigations.
+inline std::atomic<bool> delayed_readback_enabled{false};
+
 /// Adds the time it lives for to a counter.
 class ScopedMicros {
 public:
