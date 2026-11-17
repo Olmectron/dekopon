@@ -825,9 +825,9 @@ void PaintHome(VideoCore::OverlayMenuState& state) {
             // The render scale, with what it makes of the top screen's 400 x 240.
             const int factor = static_cast<int>(Settings::values.resolution_factor.GetValue());
             out.label = "Resolution";
-            out.sub = factor == 0 ? std::string{"Auto (fits the screen)"}
-                                  : std::to_string(factor) + "x   " +
-                                        std::to_string(400 * factor) + " x " +
+            out.sub = factor == 0 ? std::string{"Auto"}
+                                  : std::to_string(factor) + "x  " +
+                                        std::to_string(400 * factor) + "x" +
                                         std::to_string(240 * factor);
             break;
         }
@@ -837,9 +837,9 @@ void PaintHome(VideoCore::OverlayMenuState& state) {
             break;
         case CellKind::Amiibo: {
             out.label = "Amiibo";
-            static const char* const modes[] = {"When asked: scan a real one",
-                                                "When asked: choose a file",
-                                                "When asked: do nothing"};
+            static const char* const modes[] = {"Scan figure",
+                                                "Pick a file",
+                                                "Ignore"};
             out.sub = modes[std::clamp(GetAmiiboRequestMode(), 0, 2)];
             break;
         }
