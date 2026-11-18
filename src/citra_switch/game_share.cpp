@@ -115,6 +115,12 @@ std::atomic<int> s_mode{static_cast<int>(Mode::Network)};
 std::atomic<u32> s_acked{0};
 std::atomic<bool> s_ack_seen{false};
 
+// A clip on its way to the receiver (PlayClip): at the link's rate, sent as it would play.
+std::mutex s_clip_mutex;
+std::vector<s16> s_clip;
+std::size_t s_clip_sent = 0; // In packets.
+Clock::time_point s_clip_start{};
+
 // Settings (GameShare tab).
 std::atomic<bool> s_audio_enabled{true};
 
@@ -511,6 +517,36 @@ void NetworkThread() {
                 std::lock_guard lock{s_audio_mutex};
                 s_audio_queue.clear();
             }
+            {
+                // The library's clip: paced by the clock, a little ahead of where it plays.
+                std::lock_guard lock{s_clip_mutex};
+                if (!s_clip.empty() && (!active || !s_lobby.load())) {
+                    s_clip.clear();
+                }
+                if (!s_clip.empty()) {
+                    const std::size_t packets =
+                        (s_clip.size() / 2 + AUDIO_FRAME_SAMPLES - 1) / AUDIO_FRAME_SAMPLES;
+                    const double elapsed =
+                        std::chrono::duration<double>(Clock::now() - s_clip_start).count();
+                    const std::size_t due = std::min(
+                        packets, static_cast<std::size_t>(elapsed * 32728.0 / AUDIO_FRAME_SAMPLES) + 16);
+                    for (int burst = 0; burst < 12 && s_clip_sent < due; ++burst, ++s_clip_sent) {
+                        u8 out[HEADER + 6 + AUDIO_FRAME_SAMPLES * 4] = {};
+                        const std::size_t first = s_clip_sent * AUDIO_FRAME_SAMPLES * 2;
+                        const std::size_t count =
+                            std::min(AUDIO_FRAME_SAMPLES * 2, s_clip.size() - first);
+                        std::memcpy(out + HEADER + 6, s_clip.data() + first, count * sizeof(s16));
+                        std::memcpy(out, MAGIC, sizeof(MAGIC));
+                        out[4] = PacketType::Audio;
+                        WriteU32(out + HEADER, ++audio_seq);
+                        WriteU16(out + HEADER + 4, static_cast<u16>(AUDIO_FRAME_SAMPLES | 0x8000));
+                        send(out, sizeof(out));
+                    }
+                    if (s_clip_sent >= packets) {
+                        s_clip.clear();
+                    }
+                }
+            }
             if (active && Clock::now() - last_status > std::chrono::milliseconds{400}) {
                 last_status = Clock::now();
                 u8 out[HEADER + 3];
@@ -789,6 +825,34 @@ void StartLobby() {
     Start();
     s_session.store(false);
     s_lobby.store(true);
+}
+
+void PlayClip(const short* stereo, std::size_t frames, int rate) {
+    if (stereo == nullptr || frames < 2 || rate < 4000 || !s_lobby.load()) {
+        return;
+    }
+    frames = std::min<std::size_t>(frames, static_cast<std::size_t>(rate) * 20);
+    const double step = static_cast<double>(rate) / 32728.0;
+    const std::size_t out_frames = static_cast<std::size_t>(static_cast<double>(frames - 1) / step);
+    std::vector<s16> clip(out_frames * 2);
+    for (std::size_t i = 0; i < out_frames; ++i) {
+        const double at = static_cast<double>(i) * step;
+        const std::size_t k = static_cast<std::size_t>(at);
+        const double f = at - static_cast<double>(k);
+        for (int ch = 0; ch < 2; ++ch) {
+            const double a = stereo[k * 2 + ch], b = stereo[(k + 1) * 2 + ch];
+            clip[i * 2 + ch] = static_cast<s16>((a + (b - a) * f) * 0.7);
+        }
+    }
+    std::lock_guard lock{s_clip_mutex};
+    s_clip = std::move(clip);
+    s_clip_sent = 0;
+    s_clip_start = Clock::now();
+}
+
+void StopClip() {
+    std::lock_guard lock{s_clip_mutex};
+    s_clip.clear();
 }
 
 void StopLobby() {

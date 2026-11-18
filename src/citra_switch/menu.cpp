@@ -1674,6 +1674,7 @@ private:
             count > 0 && GetForwardView() == 1 && (shelf_forward || shelf_zoom > 0.0f)
                 ? BannerFor(games[filtered[selected]])
                 : nullptr;
+        UpdateJingle(count > 0 && shelf_forward ? &games[filtered[selected]] : nullptr);
         view.zoom = banner != nullptr ? 0.0f : shelf_zoom;
         view.spin_yaw = shelf_spin_yaw;
         view.spin_pitch = shelf_spin_pitch;
@@ -2484,7 +2485,43 @@ private:
     // is kept in memory: the selected game's.
     std::shared_ptr<Banner::Model> banner_model;
     std::string banner_path;
-    std::vector<u32> banner_pixels;
+    // A drawn frame is kept and shown again until the next is due: the banner is drawn
+    // in software, material by material, and need not be redrawn sixty times a second.
+    // Two are kept: the window on this console (0) and the other console's screen (1).
+    struct BannerFrame {
+        const Banner::Model* model{};
+        int w{}, h{};
+        float at{-1.0f}, yaw{}, pitch{};
+        std::vector<u32> pixels;
+    };
+    BannerFrame banner_frames[2];
+    std::string jingle_path; // The game whose jingle was last started.
+
+    // The banner's jingle goes with the banner: once when a game is brought forward, on
+    // this console if the banner is what it shows, and on the other console whenever one
+    // is connected (it always shows the banner). Putting the game back cuts it short.
+    void UpdateJingle(const GameEntry* forward) {
+        const bool linked = GameShare::LinkState() == 2;
+        const bool here = GetForwardView() == 1;
+        const Banner::Model* model = forward != nullptr && (here || linked) ? BannerFor(*forward) : nullptr;
+        const std::string key = model != nullptr && !model->sound.empty() ? forward->path : std::string{};
+        if (key == jingle_path) {
+            return;
+        }
+        jingle_path = key;
+        UiSound::StopClip();
+        GameShare::StopClip();
+        if (key.empty()) {
+            return;
+        }
+        const std::size_t frames = model->sound.size() / 2;
+        if (here) {
+            UiSound::PlayClip(model->sound.data(), frames, model->sound_rate);
+        }
+        if (linked) {
+            GameShare::PlayClip(model->sound.data(), frames, model->sound_rate);
+        }
+    }
 
     const Banner::Model* BannerFor(const GameEntry& game) {
         if (banner_path != game.path) {
@@ -2496,27 +2533,48 @@ private:
 
     // Draws the banner into a rectangle of `c`, leaving alone what it does not cover.
     void BlitBanner(Canvas& c, const Banner::Model& model, int x, int y, int w, int h, float yaw,
-                    float pitch) {
-        if (w < 8 || h < 8) {
+                    float pitch, int slot) {
+        if (w < 16 || h < 16) {
             return;
         }
-        banner_pixels.assign(static_cast<std::size_t>(w) * h, 0);
-        // One that has no animation of its own sways a little, so it is seen to be a model.
+#if defined(__SWITCH2__)
+        const int rw = w, rh = h;
+        constexpr float interval = 1.0f / 30.0f;
+#else
+        // The first Switch draws it at half size, twenty times a second: its processor has
+        // the rest of the launcher to draw too.
+        const int rw = w / 2, rh = h / 2;
+        constexpr float interval = 1.0f / 20.0f;
+#endif
+        BannerFrame& frame = banner_frames[slot];
         const float t = UiTime();
-        const float sway = model.Animated() ? 0.0f : 0.38f * std::sin(t * 0.9f);
-        Banner::Render(model, t, yaw + sway, pitch, banner_pixels.data(), w, h);
+        if (frame.model != &model || frame.w != rw || frame.h != rh || t < frame.at ||
+            t - frame.at >= interval || frame.yaw != yaw || frame.pitch != pitch) {
+            frame.model = &model;
+            frame.w = rw;
+            frame.h = rh;
+            frame.at = t;
+            frame.yaw = yaw;
+            frame.pitch = pitch;
+            frame.pixels.assign(static_cast<std::size_t>(rw) * rh, 0);
+            // One that has no animation of its own sways a little, so it is seen to be a model.
+            const float sway = model.Animated() ? 0.0f : 0.38f * std::sin(t * 0.9f);
+            Banner::Render(model, t, yaw + sway, pitch, frame.pixels.data(), rw, rh,
+                           MakeColor(16, 18, 24));
+        }
         u32* const out = c.Data();
         for (int row = 0; row < h; ++row) {
             const int cy = y + row;
             if (cy < 0 || cy >= c.Height()) {
                 continue;
             }
-            const u32* src = banner_pixels.data() + static_cast<std::size_t>(row) * w;
+            const u32* src = frame.pixels.data() + static_cast<std::size_t>(std::min(rh - 1, row * rh / h)) * rw;
             u32* dst = out + static_cast<std::size_t>(cy) * c.Width();
             for (int col = 0; col < w; ++col) {
                 const int cx = x + col;
-                if (src[col] != 0 && cx >= 0 && cx < c.Width()) {
-                    dst[cx] = src[col];
+                const u32 pixel = src[std::min(rw - 1, col * rw / w)];
+                if (pixel != 0 && cx >= 0 && cx < c.Width()) {
+                    dst[cx] = pixel;
                 }
             }
         }
@@ -2534,7 +2592,7 @@ private:
         }
         c.FillRoundRect(x - 12, y - 12, w + 24, h + 24, 18, kColSurfaceHi);
         c.FillRoundRect(x, y, w, h, 10, MakeColor(16, 18, 24));
-        BlitBanner(c, model, x, y, w, h, shelf_spin_yaw, shelf_spin_pitch);
+        BlitBanner(c, model, x, y, w, h, shelf_spin_yaw, shelf_spin_pitch, 0);
     }
 
     // ------------------------------------------------------------ Toronja Link from the library
@@ -2976,7 +3034,7 @@ private:
                 if (const Banner::Model* banner = BannerFor(game)) {
                     // What the 3DS shows above a chosen game: its banner, moving.
                     c.FillRoundRect(100, 52, 440, 204, 16, MakeColor(16, 18, 24));
-                    BlitBanner(c, *banner, 110, 58, 420, 192, 0.0f, 0.0f);
+                    BlitBanner(c, *banner, 110, 58, 420, 192, 0.0f, 0.0f, 1);
                     const std::string name = g_font.Truncate(game.title, 22, 600);
                     g_font.Draw(c, (W - g_font.Measure(name, 22)) / 2, 286, name, 22, kColText);
                     if (!game.publisher.empty()) {

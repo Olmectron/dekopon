@@ -542,6 +542,9 @@ int main(int, char**) {
     const std::vector<in_addr> extra_hosts = LoadHosts();
 
     Link::AudioPlayer audio;
+    // Sound the host says to play whatever the Sound setting here (a banner's jingle in
+    // the library): the output is kept open this long after the last of it.
+    u64 forced_audio_until = 0;
     bool amiibo_scanning = false;
     bool amiibo_sent = false;
     bool amiibo_refused = false;
@@ -754,8 +757,14 @@ int main(int, char**) {
                 if (type == PacketType::Status && size >= HEADER + 2) {
                     ui.OnStatus(body[0], size >= HEADER + 3 ? body[2] : 0);
                 } else if (type == PacketType::Audio && size >= HEADER + 6 + 4) {
-                    const std::size_t frames = ReadU16(body + 4);
-                    if (ui.settings.audio && size >= HEADER + 6 + frames * 4 && audio.Start()) {
+                    const std::size_t field = ReadU16(body + 4);
+                    const bool forced = (field & 0x8000) != 0;
+                    const std::size_t frames = field & 0x7FFF;
+                    if (forced) {
+                        forced_audio_until = armTicksToNs(armGetSystemTick()) + 1500000000ull;
+                    }
+                    if ((ui.settings.audio || forced) && size >= HEADER + 6 + frames * 4 &&
+                        audio.Start()) {
                         // The samples sit unaligned in the packet.
                         static s16 pcm[512];
                         const std::size_t count = std::min<std::size_t>(frames * 2, 512);
@@ -829,7 +838,7 @@ int main(int, char**) {
                 }
             }
         }
-        if (!ui.settings.audio) {
+        if (!ui.settings.audio && armTicksToNs(armGetSystemTick()) > forced_audio_until) {
             audio.Stop();
         }
         audio.Pump();

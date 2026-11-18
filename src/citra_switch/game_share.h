@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 namespace Core {
 class System;
 }
@@ -32,7 +34,9 @@ struct InputState;
 //   5 COMMAND receiver -> host   u8 what, u8 value: 1 = screen the host shows (0 its own
 //                                 layout, 1 top only, 2 bottom only), 2 = host FPS counter,
 //                                 3 = open or close the host's in-game menu
-//   6 AUDIO   host -> receiver   u32 seq, u16 frames, then s16 stereo PCM at 32728 Hz
+//   6 AUDIO   host -> receiver   u32 seq, u16 frames, then s16 stereo PCM at 32728 Hz. Bit 15
+//                                 of frames: play it whatever the receiver's sound setting
+//                                 (a banner's jingle in the library)
 //   7 STATUS  host -> receiver   u8 flags (1 game wants an Amiibo, 2 sound is being sent,
 //                                 4 host FPS counter on, 8 host allows sound, 16 no game is
 //                                 running: the library is on screen), u8 host screen,
@@ -92,6 +96,10 @@ int LinkState();
 /// takes it (pixels as the launcher's canvas has them, 0xAABBGGRR).
 bool LobbyFrameDue();
 void SubmitLobbyFrame(const unsigned int* pixels, int width, int height);
+/// A sound for the receiver while the library is shared: a game's banner jingle. Played
+/// there once, whatever its sound setting. `stereo` is interleaved and copied.
+void PlayClip(const short* stereo, std::size_t frames, int rate);
+void StopClip();
 /// What the receiver's pad is doing, for menus on this console. False when there is none.
 struct RemotePad {
     unsigned int buttons{}; // bit = SwitchFrontend::InputButton

@@ -17,12 +17,19 @@
 //
 // A game's banner (the "banner" file of its ExeFS) is a CBMD container: an LZ11-compressed
 // CGFX scene and a sound. The scene holds one model - meshes skinned to a small skeleton,
-// a handful of textures - and usually a skeletal animation that loops every eight or ten
-// seconds. This reads the model, its textures and that animation, and draws a frame of it
-// into a pixel buffer: textured, depth-buffered, unlit, seen square on (the caller may
-// turn it). Lights, the material's combiner stages, material and visibility animations and
-// the camera are left out; what comes out is the shape and the movement, not the exact
-// shading.
+// a handful of textures, a material per mesh - and usually a skeletal animation that loops
+// every eight or ten seconds. This reads all of that and draws a frame of it into a pixel
+// buffer, depth-buffered, seen square on (the caller may turn it).
+//
+// Materials are evaluated as the 3DS does: up to three textures, each with its own
+// coordinates, transform and wrap mode (or mapped by the normal, for reflections), the six
+// combiner stages with their constants and the combiner buffer, then blending - opaque
+// meshes first, the blended ones over them. The 3DS's lights are not read; a fixed light
+// from the upper right stands in for them, feeding the combiner the two colours a light
+// would. Material and visibility animations and the camera are left out.
+//
+// The sound is the jingle the HOME Menu plays with the banner: a BCWAV of about three
+// seconds, decoded here to plain samples.
 //
 // The layout below was worked out against the banners of five retail games and checked two
 // ways: the rest pose rebuilt from each bone's scale, rotation and translation, times the
@@ -45,14 +52,48 @@ struct Texture {
 
 struct Vertex {
     float p[3]{};
-    float u{}, v{};
+    float n[3]{0.0f, 0.0f, 1.0f};
+    float uv[3][2]{};
     u8 color[4]{255, 255, 255, 255};
     u8 bone[4]{};
     float weight[4]{1.0f, 0.0f, 0.0f, 0.0f};
 };
 
+/// One combiner stage: three arguments for colour and three for alpha, each a source
+/// seen through an operand, and how they are combined.
+struct Stage {
+    u8 src_rgb[3]{}, src_a[3]{};
+    u8 op_rgb[3]{}, op_a[3]{};
+    u8 comb_rgb{}, comb_a{};
+    u8 constant{};
+    float scale_rgb{1.0f}, scale_a{1.0f};
+    bool buffer_rgb{}, buffer_a{}; // Its result goes into the combiner buffer too.
+};
+
+struct Coordinator {
+    int source{};  // Which of the vertex's texture coordinates.
+    int method{};  // 0 those coordinates, 2 by the normal (a reflection).
+    float m[6]{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}; // u' = m0 u + m1 v + m2; v' = m3 u + m4 v + m5
+};
+
+struct Material {
+    float emission[4]{}, ambient[4]{}, diffuse[4]{1, 1, 1, 1}, spec0[4]{}, spec1[4]{};
+    float constant[6][4]{};
+    float buffer[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    int texture[3]{-1, -1, -1};
+    u8 wrap[3][2]{{2, 2}, {2, 2}, {2, 2}}; // 0, 1 clamp; 2 repeat; 3 mirror
+    Coordinator coord[3];
+    std::vector<Stage> stages;
+    u32 blend{0x01010000}; // The 3DS's blend word: equation, source and destination factors.
+    u32 uses{};            // Bit per combiner source the stages read.
+
+    bool Opaque() const {
+        return ((blend >> 16) & 15) == 1 && ((blend >> 20) & 15) == 0;
+    }
+};
+
 struct Mesh {
-    int texture{-1};
+    int material{-1};
     bool skinned{};
     std::vector<Vertex> verts;
     std::vector<u32> indices;
@@ -93,6 +134,7 @@ struct Member {
 
 struct Model {
     std::vector<Texture> textures;
+    std::vector<Material> materials;
     std::vector<Mesh> meshes;
     std::vector<Bone> bones;
     std::vector<Member> members; // One per bone.
@@ -100,6 +142,9 @@ struct Model {
     // Where the model is and how large, seen from the front over the whole animation.
     float centre[3]{};
     float half_w{1}, half_h{1};
+    // The jingle: interleaved stereo, `sound_rate` frames a second. Empty when there is none.
+    std::vector<std::int16_t> sound;
+    int sound_rate{};
 
     bool Animated() const {
         return frames > 1.0f;
@@ -553,13 +598,15 @@ inline void Apply(const Mat& m, const float p[3], float out[3]) {
     out[2] = m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11];
 }
 
-/// A vertex where the skeleton puts it.
-inline void Skin(const Mesh& mesh, const Vertex& v, const std::vector<Mat>& skin, float out[3]) {
+/// A vertex where the skeleton puts it, and its normal turned the same way (not normalised).
+inline void Skin(const Mesh& mesh, const Vertex& v, const std::vector<Mat>& skin, float out[3],
+                 float normal[3]) {
+    normal[0] = v.n[0], normal[1] = v.n[1], normal[2] = v.n[2];
+    out[0] = v.p[0], out[1] = v.p[1], out[2] = v.p[2];
     if (!mesh.skinned) {
-        out[0] = v.p[0], out[1] = v.p[1], out[2] = v.p[2];
         return;
     }
-    float sum[3] = {0, 0, 0};
+    float sum[3] = {0, 0, 0}, turned[3] = {0, 0, 0};
     float total = 0.0f;
     for (int k = 0; k < 4; ++k) {
         if (v.weight[k] <= 0.0f || v.bone[k] >= mesh.bones.size()) {
@@ -569,18 +616,23 @@ inline void Skin(const Mesh& mesh, const Vertex& v, const std::vector<Mat>& skin
         if (bone >= skin.size()) {
             continue;
         }
+        const Mat& m = skin[bone];
         float p[3];
-        Apply(skin[bone], v.p, p);
-        sum[0] += p[0] * v.weight[k];
-        sum[1] += p[1] * v.weight[k];
-        sum[2] += p[2] * v.weight[k];
-        total += v.weight[k];
+        Apply(m, v.p, p);
+        const float w = v.weight[k];
+        sum[0] += p[0] * w;
+        sum[1] += p[1] * w;
+        sum[2] += p[2] * w;
+        turned[0] += (m[0] * v.n[0] + m[1] * v.n[1] + m[2] * v.n[2]) * w;
+        turned[1] += (m[4] * v.n[0] + m[5] * v.n[1] + m[6] * v.n[2]) * w;
+        turned[2] += (m[8] * v.n[0] + m[9] * v.n[1] + m[10] * v.n[2]) * w;
+        total += w;
     }
     if (total <= 0.0f) {
-        out[0] = v.p[0], out[1] = v.p[1], out[2] = v.p[2];
         return;
     }
     out[0] = sum[0] / total, out[1] = sum[1] / total, out[2] = sum[2] / total;
+    normal[0] = turned[0], normal[1] = turned[1], normal[2] = turned[2];
 }
 
 struct Attribute {
@@ -711,6 +763,202 @@ inline void ReadAnimation(const Reader& r, std::size_t at, Model& model) {
     }
 }
 
+inline void Unpack(u32 packed, float out[4]) {
+    for (int k = 0; k < 4; ++k) {
+        out[k] = static_cast<float>((packed >> (8 * k)) & 255) / 255.0f;
+    }
+}
+
+/// A material: its colours, where its textures come from and how they are laid on, the
+/// combiner stages and the blending. `end` is where the next thing in the file starts.
+inline Material ReadMaterial(const Reader& r, std::size_t at, std::size_t end,
+                             const std::vector<std::string>& texture_names) {
+    Material m;
+    u32 packed[11];
+    for (u32 i = 0; i < 11; ++i) {
+        packed[i] = r.U32(at + 0xD8 + 4 * i);
+    }
+    Unpack(packed[0], m.emission);
+    Unpack(packed[1], m.ambient);
+    Unpack(packed[2], m.diffuse);
+    Unpack(packed[3], m.spec0);
+    Unpack(packed[4], m.spec1);
+    for (int i = 0; i < 6; ++i) {
+        Unpack(packed[5 + i], m.constant[i]);
+    }
+    for (u32 c = 0; c < 3; ++c) {
+        const std::size_t base = at + 0x16C + c * 0x58;
+        Coordinator& coord = m.coord[c];
+        coord.source = static_cast<int>(std::min<u32>(r.U32(base), 2));
+        coord.method = static_cast<int>(r.U32(base + 4));
+        static constexpr int cells[6] = {0, 1, 3, 4, 5, 7};
+        for (int k = 0; k < 6; ++k) {
+            coord.m[k] = r.F32(base + 0x28 + static_cast<std::size_t>(cells[k]) * 4);
+        }
+        // A transform that was never filled in would collapse the texture to a point.
+        if (coord.m[0] == 0.0f && coord.m[1] == 0.0f && coord.m[3] == 0.0f && coord.m[4] == 0.0f) {
+            coord.m[0] = coord.m[4] = 1.0f;
+        }
+    }
+    for (u32 i = 0; i < 3; ++i) {
+        const std::size_t mapper = r.Rel(at + 0x274 + 4 * i);
+        if (mapper == 0) {
+            continue;
+        }
+        const std::size_t reference = r.Rel(mapper + 8);
+        const std::string wanted = reference != 0 ? r.Str(r.Rel(reference + 0x18)) : std::string{};
+        const auto found = std::find(texture_names.begin(), texture_names.end(), wanted);
+        if (found != texture_names.end() && !wanted.empty()) {
+            m.texture[i] = static_cast<int>(found - texture_names.begin());
+        }
+        // The sampler's settings sit in the mapper as the GPU command that sets them.
+        for (std::size_t o = 0; o < 0x80; o += 4) {
+            const u32 header = r.U32(mapper + o);
+            if (header == 0x809F0081u || header == 0x809F0091u || header == 0x809F0099u) {
+                const u32 params = r.U32(mapper + o + 8);
+                m.wrap[i][0] = static_cast<u8>((params >> 12) & 7);
+                m.wrap[i][1] = static_cast<u8>((params >> 8) & 7);
+                break;
+            }
+        }
+    }
+    // The rest is found by the GPU commands the material carries for it.
+    static constexpr u32 stage_headers[6] = {0x804F00C0u, 0x804F00C8u, 0x804F00D0u,
+                                             0x804F00D8u, 0x804F00F0u, 0x804F00F8u};
+    u32 buffer_update = 0;
+    std::vector<Stage> stages;
+    for (std::size_t o = at + 8; o + 20 <= end; o += 4) {
+        const u32 v = r.U32(o);
+        if (stages.size() < 6 && v == stage_headers[stages.size()]) {
+            const u32 src = r.U32(o - 4), opr = r.U32(o + 4), comb = r.U32(o + 8), scale = r.U32(o + 16);
+            Stage st;
+            st.constant = static_cast<u8>(std::min<u32>(r.U32(o - 8), 6));
+            for (u32 k = 0; k < 3; ++k) {
+                st.src_rgb[k] = static_cast<u8>((src >> (4 * k)) & 15);
+                st.src_a[k] = static_cast<u8>((src >> (16 + 4 * k)) & 15);
+                st.op_rgb[k] = static_cast<u8>((opr >> (4 * k)) & 15);
+                st.op_a[k] = static_cast<u8>((opr >> (12 + 4 * k)) & 7);
+            }
+            st.comb_rgb = static_cast<u8>(comb & 15);
+            st.comb_a = static_cast<u8>((comb >> 16) & 15);
+            st.scale_rgb = static_cast<float>(1u << std::min<u32>(scale & 3, 2));
+            st.scale_a = static_cast<float>(1u << std::min<u32>((scale >> 16) & 3, 2));
+            stages.push_back(st);
+        } else if (v == 0x803F0100u) {
+            m.blend = r.U32(o + 4);
+        } else if (v == 0x000200E0u) {
+            buffer_update = r.U32(o - 4);
+        } else if (v == 0x000F00FDu) {
+            Unpack(r.U32(o - 4), m.buffer);
+        }
+    }
+    for (std::size_t i = 0; i < stages.size(); ++i) {
+        Stage& st = stages[i];
+        st.buffer_rgb = i < 4 && ((buffer_update >> (8 + i)) & 1) != 0;
+        st.buffer_a = i < 4 && ((buffer_update >> (12 + i)) & 1) != 0;
+        // A stage that only hands on what it was given costs time for nothing.
+        const bool passes = i > 0 && st.comb_rgb == 0 && st.comb_a == 0 && st.src_rgb[0] == 15 &&
+                            st.src_a[0] == 15 && st.op_rgb[0] == 0 && st.op_a[0] == 0 &&
+                            st.scale_rgb == 1.0f && st.scale_a == 1.0f && !st.buffer_rgb && !st.buffer_a;
+        if (passes) {
+            continue;
+        }
+        // How many arguments the combination reads: the others are not looked up.
+        static constexpr int arguments[10] = {1, 2, 2, 2, 3, 2, 2, 2, 3, 3};
+        const int rgb_n = st.comb_rgb < 10 ? arguments[st.comb_rgb] : 1;
+        const int a_n = st.comb_a < 10 ? arguments[st.comb_a] : 1;
+        for (int k = 0; k < 3; ++k) {
+            if (k >= rgb_n) {
+                st.src_rgb[k] = 15;
+                st.op_rgb[k] = 0;
+            }
+            if (k >= a_n) {
+                st.src_a[k] = 15;
+                st.op_a[k] = 0;
+            }
+            m.uses |= (1u << st.src_rgb[k]) | (1u << st.src_a[k]);
+        }
+        m.stages.push_back(st);
+    }
+    if (m.stages.empty()) {
+        // Nothing readable: the first texture times the vertex colour.
+        Stage st;
+        st.src_rgb[0] = st.src_a[0] = 3;
+        st.src_rgb[1] = st.src_a[1] = 0;
+        st.comb_rgb = st.comb_a = 1;
+        m.uses = (1u << 3) | 1u;
+        m.stages.push_back(st);
+    }
+    return m;
+}
+
+/// The banner's jingle: a BCWAV, as 16-bit samples or as the DSP's ADPCM.
+inline void ReadSound(const u8* data, std::size_t size, Model& model) {
+    const Reader r{data, size};
+    if (!r.Tag(0, "CWAV")) {
+        return;
+    }
+    const std::size_t info = r.U32(0x18), body = r.U32(0x24);
+    if (info == 0 || body == 0 || !r.In(info, 0x40) || !r.In(body, 8)) {
+        return;
+    }
+    const u32 encoding = r.U8(info + 8);
+    const u32 rate = r.U32(info + 0xC);
+    const u32 total = std::min<u32>(r.U32(info + 0x14), 48000u * 20);
+    const u32 channels = std::min<u32>(r.U32(info + 0x1C), 2);
+    if ((encoding != 1 && encoding != 2) || rate < 4000 || rate > 96000 || total == 0 || channels == 0) {
+        return;
+    }
+    const std::size_t table = info + 0x1C;
+    std::vector<std::int16_t> out(static_cast<std::size_t>(total) * 2, 0);
+    for (u32 ch = 0; ch < channels; ++ch) {
+        const std::size_t channel = table + r.U32(table + 4 + ch * 8 + 4);
+        std::size_t pos = body + 8 + r.U32(channel + 4);
+        if (encoding == 1) {
+            if (!r.In(pos, static_cast<std::size_t>(total) * 2)) {
+                return;
+            }
+            for (u32 i = 0; i < total; ++i) {
+                std::memcpy(&out[static_cast<std::size_t>(i) * 2 + ch], data + pos + i * 2, 2);
+            }
+            continue;
+        }
+        const std::size_t adpcm = channel + r.U32(channel + 12);
+        if (!r.In(adpcm, 0x26) || !r.In(pos, (static_cast<std::size_t>(total) + 13) / 14 * 8)) {
+            return;
+        }
+        std::int16_t coefficients[16], history[2];
+        std::memcpy(coefficients, data + adpcm, sizeof(coefficients));
+        std::memcpy(history, data + adpcm + 0x22, sizeof(history));
+        int h1 = history[0], h2 = history[1];
+        for (u32 done = 0; done < total; pos += 8) {
+            const u8 head = data[pos];
+            const int predictor = (head >> 4) & 7, shift = head & 15;
+            const int c1 = coefficients[predictor * 2], c2 = coefficients[predictor * 2 + 1];
+            for (u32 k = 0; k < 14 && done < total; ++k, ++done) {
+                const u8 byte = data[pos + 1 + k / 2];
+                int nibble = (k & 1) == 0 ? byte >> 4 : byte & 15;
+                nibble -= nibble >= 8 ? 16 : 0;
+                const int sample = std::clamp(
+                    static_cast<int>((static_cast<std::int64_t>(nibble) * (std::int64_t{1} << shift) * 2048 + 1024 +
+                                      static_cast<std::int64_t>(c1) * h1 +
+                                      static_cast<std::int64_t>(c2) * h2) >> 11),
+                    -32768, 32767);
+                out[static_cast<std::size_t>(done) * 2 + ch] = static_cast<std::int16_t>(sample);
+                h2 = h1;
+                h1 = sample;
+            }
+        }
+    }
+    if (channels == 1) {
+        for (u32 i = 0; i < total; ++i) {
+            out[static_cast<std::size_t>(i) * 2 + 1] = out[static_cast<std::size_t>(i) * 2];
+        }
+    }
+    model.sound = std::move(out);
+    model.sound_rate = static_cast<int>(rate);
+}
+
 } // namespace detail
 
 /// Reads a game's banner file. Null when it is not a banner this understands.
@@ -756,19 +1004,18 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
         model->textures.push_back(std::move(texture));
     }
 
-    std::vector<int> material_texture;
-    for (const auto& [name, at] : Dict(r, r.Rel(cmdl + 0xC0))) {
-        int texture = -1;
-        // The first texture mapper, and through its reference the texture's name.
-        if (const std::size_t mapper = r.Rel(at + 0x274); mapper != 0) {
-            const std::size_t reference = r.Rel(mapper + 8);
-            const std::string wanted = reference != 0 ? r.Str(r.Rel(reference + 0x18)) : std::string{};
-            const auto found = std::find(texture_names.begin(), texture_names.end(), wanted);
-            if (found != texture_names.end()) {
-                texture = static_cast<int>(found - texture_names.begin());
+    {
+        const auto entries = Dict(r, r.Rel(cmdl + 0xC0));
+        for (const auto& [name, at] : entries) {
+            // A material runs to wherever the next one starts.
+            std::size_t end = std::min(at + 0x600, cgfx.size());
+            for (const auto& [other_name, other] : entries) {
+                if (other > at && other < end) {
+                    end = other;
+                }
             }
+            model->materials.push_back(ReadMaterial(r, at, end, texture_names));
         }
-        material_texture.push_back(texture);
     }
 
     if (r.U32(cmdl) & 0x80) {
@@ -816,8 +1063,8 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
         }
         const float offset[3] = {r.F32(shape + 0x20), r.F32(shape + 0x24), r.F32(shape + 0x28)};
 
-        // Attributes by what they are for: 0 position, 3 colour, 4 the first texture
-        // coordinate, 7 bone index, 8 bone weight.
+        // Attributes by what they are for: 0 position, 1 normal, 3 colour, 4 to 6 the
+        // texture coordinates, 7 bone index, 8 bone weight.
         Attribute attributes[9];
         u32 vertex_count = 0;
         const std::size_t group_table = r.Rel(shape + 0x3C);
@@ -861,7 +1108,7 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
                 continue;
             }
             Mesh mesh;
-            mesh.texture = material_index < material_texture.size() ? material_texture[material_index] : -1;
+            mesh.material = material_index < model->materials.size() ? static_cast<int>(material_index) : -1;
             const u32 related = std::min<u32>(r.U32(set), 32);
             const std::size_t bone_table = r.Rel(set + 4);
             for (u32 b = 0; b < related && bone_table != 0; ++b) {
@@ -875,9 +1122,16 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
                 for (u32 k = 0; k < 3; ++k) {
                     out.p[k] = ReadComponent(r, attributes[0], v, k) + offset[k];
                 }
-                if (attributes[4].present) {
-                    out.u = ReadComponent(r, attributes[4], v, 0);
-                    out.v = ReadComponent(r, attributes[4], v, 1);
+                if (attributes[1].present) {
+                    for (u32 k = 0; k < 3; ++k) {
+                        out.n[k] = ReadComponent(r, attributes[1], v, k);
+                    }
+                }
+                for (u32 set_index = 0; set_index < 3; ++set_index) {
+                    if (attributes[4 + set_index].present) {
+                        out.uv[set_index][0] = ReadComponent(r, attributes[4 + set_index], v, 0);
+                        out.uv[set_index][1] = ReadComponent(r, attributes[4 + set_index], v, 1);
+                    }
                 }
                 if (attributes[3].present) {
                     for (u32 k = 0; k < 4; ++k) {
@@ -951,8 +1205,8 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
         Pose(*model, model->frames * static_cast<float>(sample) / static_cast<float>(samples), skin);
         for (const Mesh& mesh : model->meshes) {
             for (const Vertex& vertex : mesh.verts) {
-                float p[3];
-                Skin(mesh, vertex, skin, p);
+                float p[3], n[3];
+                Skin(mesh, vertex, skin, p, n);
                 for (int k = 0; k < 3; ++k) {
                     lo[k] = std::min(lo[k], p[k]);
                     hi[k] = std::max(hi[k], p[k]);
@@ -965,21 +1219,161 @@ inline std::shared_ptr<Model> Parse(const std::vector<u8>& banner) {
     }
     model->half_w = std::max(1e-3f, (hi[0] - lo[0]) / 2);
     model->half_h = std::max(1e-3f, (hi[1] - lo[1]) / 2);
+    if (sound != 0 && sound < banner.size()) {
+        ReadSound(banner.data() + sound, banner.size() - sound, *model);
+    }
     return model;
 }
 
+namespace detail {
+
+/// A vertex ready to be drawn: where it lands, and what a light gives it.
+struct Lit {
+    float x{}, y{}, z{};
+    float primary[3]{};   // The diffuse side of the light.
+    float secondary[4]{}; // Its specular side; alpha is how much the surface turns away.
+    float env[2]{};       // Texture coordinates by the normal.
+};
+
+inline float Clamp01(float v) {
+    return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+}
+
+inline float Wrap(u8 mode, float t) {
+    if (mode < 2) {
+        return Clamp01(t) * 0.9999f;
+    }
+    if (mode == 3) {
+        const float f = t - 2.0f * std::floor(t * 0.5f);
+        return (f > 1.0f ? 2.0f - f : f) * 0.9999f;
+    }
+    return t - std::floor(t);
+}
+
+inline void OperandRgb(u8 op, const float* c, float out[3]) {
+    switch (op) {
+    case 1:
+        out[0] = 1 - c[0], out[1] = 1 - c[1], out[2] = 1 - c[2];
+        break;
+    case 2:
+        out[0] = out[1] = out[2] = c[3];
+        break;
+    case 3:
+        out[0] = out[1] = out[2] = 1 - c[3];
+        break;
+    case 4:
+        out[0] = out[1] = out[2] = c[0];
+        break;
+    case 5:
+        out[0] = out[1] = out[2] = 1 - c[0];
+        break;
+    case 8:
+        out[0] = out[1] = out[2] = c[1];
+        break;
+    case 9:
+        out[0] = out[1] = out[2] = 1 - c[1];
+        break;
+    case 12:
+        out[0] = out[1] = out[2] = c[2];
+        break;
+    case 13:
+        out[0] = out[1] = out[2] = 1 - c[2];
+        break;
+    default:
+        out[0] = c[0], out[1] = c[1], out[2] = c[2];
+        break;
+    }
+}
+
+inline float OperandAlpha(u8 op, const float* c) {
+    switch (op) {
+    case 1:
+        return 1 - c[3];
+    case 2:
+        return c[0];
+    case 3:
+        return 1 - c[0];
+    case 4:
+        return c[1];
+    case 5:
+        return 1 - c[1];
+    case 6:
+        return c[2];
+    case 7:
+        return 1 - c[2];
+    default:
+        return c[3];
+    }
+}
+
+inline float Combine(u8 mode, float x, float y, float z) {
+    switch (mode) {
+    case 1:
+        return x * y;
+    case 2:
+        return x + y;
+    case 3:
+        return x + y - 0.5f;
+    case 4:
+        return x * z + y * (1 - z);
+    case 5:
+        return x - y;
+    case 8:
+        return x * y + z;
+    case 9:
+        return (x + y) * z;
+    default:
+        return x;
+    }
+}
+
+inline void BlendFactor(u32 code, const float* src, const float* dst, float out[3]) {
+    switch (code) {
+    case 0:
+        out[0] = out[1] = out[2] = 0.0f;
+        break;
+    case 2:
+        out[0] = src[0], out[1] = src[1], out[2] = src[2];
+        break;
+    case 3:
+        out[0] = 1 - src[0], out[1] = 1 - src[1], out[2] = 1 - src[2];
+        break;
+    case 4:
+        out[0] = dst[0], out[1] = dst[1], out[2] = dst[2];
+        break;
+    case 5:
+        out[0] = 1 - dst[0], out[1] = 1 - dst[1], out[2] = 1 - dst[2];
+        break;
+    case 6:
+        out[0] = out[1] = out[2] = src[3];
+        break;
+    case 7:
+        out[0] = out[1] = out[2] = 1 - src[3];
+        break;
+    case 9:
+        out[0] = out[1] = out[2] = 0.0f; // What is drawn on is taken as solid.
+        break;
+    default:
+        out[0] = out[1] = out[2] = 1.0f;
+        break;
+    }
+}
+
+} // namespace detail
+
 /// Draws the model as it stands `seconds` into its loop, turned by `yaw` and `pitch`
-/// (radians), into `out` (`width` x `height`, 0xAABBGGRR). Pixels it does not cover are
-/// left alone, so the caller's background shows through.
+/// (radians), into `out` (`width` x `height`, 0xAABBGGRR). `out` must come in cleared to
+/// zero: pixels the model does not cover stay zero, so the caller's own background can show
+/// there, and `background` is the colour of that background, for what blends with it.
 inline void Render(const Model& model, float seconds, float yaw, float pitch, u32* out, int width,
-                   int height) {
+                   int height, u32 background = 0xFF181210u) {
     using namespace detail;
     if (width <= 0 || height <= 0) {
         return;
     }
     static thread_local std::vector<float> depth;
     static thread_local std::vector<Mat> skin;
-    static thread_local std::vector<float> screen;
+    static thread_local std::vector<std::vector<Lit>> lit_meshes;
     depth.assign(static_cast<std::size_t>(width) * height, -1e30f);
     const float frame = model.Animated() ? std::fmod(std::max(0.0f, seconds) * 60.0f, model.frames) : 0.0f;
     Pose(model, frame, skin);
@@ -988,80 +1382,225 @@ inline void Render(const Model& model, float seconds, float yaw, float pitch, u3
                                          static_cast<float>(height) / (2 * model.half_h));
     const float cy = std::cos(yaw), sy = std::sin(yaw);
     const float cp = std::cos(pitch), sp = std::sin(pitch);
+    // The light: from the upper right, a little in front. And halfway between it and the eye.
+    static constexpr float light[3] = {0.25f, 0.45f, 0.86f};
+    const float half_length = std::sqrt(light[0] * light[0] + light[1] * light[1] +
+                                        (light[2] + 1.0f) * (light[2] + 1.0f));
+    const float half[3] = {light[0] / half_length, light[1] / half_length, (light[2] + 1.0f) / half_length};
+    const float back[3] = {static_cast<float>(background & 255) / 255.0f,
+                           static_cast<float>((background >> 8) & 255) / 255.0f,
+                           static_cast<float>((background >> 16) & 255) / 255.0f};
+    static const Material plain = [] {
+        Material m;
+        Stage st;
+        st.src_rgb[0] = st.src_a[0] = 3;
+        st.src_rgb[1] = st.src_a[1] = 0;
+        st.comb_rgb = st.comb_a = 1;
+        m.uses = (1u << 3) | 1u;
+        m.stages.push_back(st);
+        return m;
+    }();
 
-    for (const Mesh& mesh : model.meshes) {
-        const Texture* texture = mesh.texture >= 0 && mesh.texture < static_cast<int>(model.textures.size())
-                                     ? &model.textures[static_cast<std::size_t>(mesh.texture)]
-                                     : nullptr;
-        screen.resize(mesh.verts.size() * 3);
+    // Every vertex once: where it lands and what the light gives it.
+    lit_meshes.resize(model.meshes.size());
+    for (std::size_t mi = 0; mi < model.meshes.size(); ++mi) {
+        const Mesh& mesh = model.meshes[mi];
+        const Material& material = mesh.material >= 0 ? model.materials[static_cast<std::size_t>(mesh.material)] : plain;
+        std::vector<Lit>& lit = lit_meshes[mi];
+        lit.resize(mesh.verts.size());
         for (std::size_t i = 0; i < mesh.verts.size(); ++i) {
-            float p[3];
-            Skin(mesh, mesh.verts[i], skin, p);
+            float p[3], n[3];
+            Skin(mesh, mesh.verts[i], skin, p, n);
             const float x = p[0] - model.centre[0], y = p[1] - model.centre[1],
                         z = p[2] - model.centre[2];
             const float x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
             const float y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
-            screen[i * 3] = static_cast<float>(width) / 2 + x1 * scale;
-            screen[i * 3 + 1] = static_cast<float>(height) / 2 - y2 * scale;
-            screen[i * 3 + 2] = z2;
+            Lit& l = lit[i];
+            l.x = static_cast<float>(width) / 2 + x1 * scale;
+            l.y = static_cast<float>(height) / 2 - y2 * scale;
+            l.z = z2;
+            const float nx1 = n[0] * cy + n[2] * sy, nz1 = -n[0] * sy + n[2] * cy;
+            float nx = nx1, ny = n[1] * cp - nz1 * sp, nz = n[1] * sp + nz1 * cp;
+            const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (length > 1e-6f) {
+                nx /= length, ny /= length, nz /= length;
+            } else {
+                nx = ny = 0.0f, nz = 1.0f;
+            }
+            const float ndl = std::max(0.0f, nx * light[0] + ny * light[1] + nz * light[2]);
+            const float ndh = std::max(0.0f, nx * half[0] + ny * half[1] + nz * half[2]);
+            const float ndh2 = ndh * ndh, ndh4 = ndh2 * ndh2, gloss = ndh4 * ndh4;
+            for (int k = 0; k < 3; ++k) {
+                l.primary[k] = Clamp01(material.emission[k] + material.ambient[k] * 0.25f +
+                                       material.diffuse[k] * (0.2f + 0.8f * ndl));
+                l.secondary[k] = Clamp01(material.spec0[k] * 0.5f + material.spec1[k] * gloss);
+            }
+            const float away = 1.0f - Clamp01(nz);
+            l.secondary[3] = away * away;
+            l.env[0] = nx * 0.5f + 0.5f;
+            l.env[1] = ny * 0.5f + 0.5f;
         }
-        for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-            const u32 ia = mesh.indices[t], ib = mesh.indices[t + 1], ic = mesh.indices[t + 2];
-            const float* a = &screen[ia * 3];
-            const float* b = &screen[ib * 3];
-            const float* c = &screen[ic * 3];
-            const float area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-            if (std::abs(area) < 0.01f) {
+    }
+
+    // What is solid first, writing depth; then what blends, over it and behind nothing new.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t mi = 0; mi < model.meshes.size(); ++mi) {
+            const Mesh& mesh = model.meshes[mi];
+            const Material& material = mesh.material >= 0 ? model.materials[static_cast<std::size_t>(mesh.material)] : plain;
+            const bool opaque = material.Opaque();
+            if (opaque != (pass == 0)) {
                 continue;
             }
-            const int x0 = std::max(0, static_cast<int>(std::floor(std::min({a[0], b[0], c[0]}))));
-            const int x1 = std::min(width - 1, static_cast<int>(std::ceil(std::max({a[0], b[0], c[0]}))));
-            const int y0 = std::max(0, static_cast<int>(std::floor(std::min({a[1], b[1], c[1]}))));
-            const int y1 = std::min(height - 1, static_cast<int>(std::ceil(std::max({a[1], b[1], c[1]}))));
-            if (x0 > x1 || y0 > y1) {
-                continue;
+            const std::vector<Lit>& lit = lit_meshes[mi];
+            const u32 uses = material.uses;
+            const u32 equation = material.blend & 7;
+            const u32 src_factor = (material.blend >> 16) & 15, dst_factor = (material.blend >> 20) & 15;
+            const Texture* textures[3] = {nullptr, nullptr, nullptr};
+            for (int t = 0; t < 3; ++t) {
+                const int index = material.texture[t];
+                if ((uses & (8u << t)) != 0 && index >= 0 && index < static_cast<int>(model.textures.size())) {
+                    textures[t] = &model.textures[static_cast<std::size_t>(index)];
+                }
             }
-            const Vertex& va = mesh.verts[ia];
-            const Vertex& vb = mesh.verts[ib];
-            const Vertex& vc = mesh.verts[ic];
-            const float inv = 1.0f / area;
-            const float wa_dx = (b[1] - c[1]) * inv, wb_dx = (c[1] - a[1]) * inv;
-            for (int y = y0; y <= y1; ++y) {
-                const float py = static_cast<float>(y) + 0.5f, px0 = static_cast<float>(x0) + 0.5f;
-                float wa = ((b[0] - px0) * (c[1] - py) - (b[1] - py) * (c[0] - px0)) * inv;
-                float wb = ((c[0] - px0) * (a[1] - py) - (c[1] - py) * (a[0] - px0)) * inv;
-                const std::size_t row = static_cast<std::size_t>(y) * width;
-                for (int x = x0; x <= x1; ++x, wa += wa_dx, wb += wb_dx) {
-                    const float wc = 1.0f - wa - wb;
-                    if (wa < -0.0005f || wb < -0.0005f || wc < -0.0005f) {
-                        continue;
-                    }
-                    const float z = wa * a[2] + wb * b[2] + wc * c[2];
-                    if (z <= depth[row + x]) {
-                        continue;
-                    }
-                    u32 red = 210, green = 210, blue = 210;
-                    if (texture != nullptr) {
-                        const float u = wa * va.u + wb * vb.u + wc * vc.u;
-                        const float v = 1.0f - (wa * va.v + wb * vb.v + wc * vc.v);
-                        int tx = static_cast<int>(std::floor(u * static_cast<float>(texture->w))) % texture->w;
-                        int ty = static_cast<int>(std::floor(v * static_cast<float>(texture->h))) % texture->h;
-                        tx += tx < 0 ? texture->w : 0;
-                        ty += ty < 0 ? texture->h : 0;
-                        const u32 texel = texture->px[static_cast<std::size_t>(ty) * texture->w + tx];
-                        if ((texel >> 24) < 96) {
-                            continue; // Cut out, as the alpha test would.
+            for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+                const u32 ia = mesh.indices[t], ib = mesh.indices[t + 1], ic = mesh.indices[t + 2];
+                const Lit& a = lit[ia];
+                const Lit& b = lit[ib];
+                const Lit& c = lit[ic];
+                const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                if (std::abs(area) < 0.01f) {
+                    continue;
+                }
+                const int x0 = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
+                const int x1 = std::min(width - 1, static_cast<int>(std::ceil(std::max({a.x, b.x, c.x}))));
+                const int y0 = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, c.y}))));
+                const int y1 = std::min(height - 1, static_cast<int>(std::ceil(std::max({a.y, b.y, c.y}))));
+                if (x0 > x1 || y0 > y1) {
+                    continue;
+                }
+                const Vertex& va = mesh.verts[ia];
+                const Vertex& vb = mesh.verts[ib];
+                const Vertex& vc = mesh.verts[ic];
+                const float inv = 1.0f / area;
+                const float wa_dx = (b.y - c.y) * inv, wb_dx = (c.y - a.y) * inv;
+                for (int y = y0; y <= y1; ++y) {
+                    const float py = static_cast<float>(y) + 0.5f, px0 = static_cast<float>(x0) + 0.5f;
+                    float wa = ((b.x - px0) * (c.y - py) - (b.y - py) * (c.x - px0)) * inv;
+                    float wb = ((c.x - px0) * (a.y - py) - (c.y - py) * (a.x - px0)) * inv;
+                    const std::size_t row = static_cast<std::size_t>(y) * width;
+                    for (int x = x0; x <= x1; ++x, wa += wa_dx, wb += wb_dx) {
+                        const float wc = 1.0f - wa - wb;
+                        if (wa < -0.0005f || wb < -0.0005f || wc < -0.0005f) {
+                            continue;
                         }
-                        red = texel & 0xFF, green = (texel >> 8) & 0xFF, blue = (texel >> 16) & 0xFF;
+                        const float z = wa * a.z + wb * b.z + wc * c.z;
+                        if (z <= depth[row + x]) {
+                            continue;
+                        }
+                        // What the combiner may read. Index = the 3DS's number for the source.
+                        float colour[4] = {1, 1, 1, 1}, primary[4] = {1, 1, 1, 1}, secondary[4] = {0, 0, 0, 1};
+                        float texel[3][4] = {{1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}};
+                        float buffer[4] = {material.buffer[0], material.buffer[1], material.buffer[2],
+                                           material.buffer[3]};
+                        float previous[4] = {0, 0, 0, 1};
+                        if (uses & 1u) {
+                            for (int k = 0; k < 4; ++k) {
+                                colour[k] = (wa * va.color[k] + wb * vb.color[k] + wc * vc.color[k]) * (1.0f / 255.0f);
+                            }
+                        }
+                        if (uses & 2u) {
+                            for (int k = 0; k < 3; ++k) {
+                                primary[k] = wa * a.primary[k] + wb * b.primary[k] + wc * c.primary[k];
+                            }
+                        }
+                        if (uses & 4u) {
+                            for (int k = 0; k < 4; ++k) {
+                                secondary[k] = wa * a.secondary[k] + wb * b.secondary[k] + wc * c.secondary[k];
+                            }
+                        }
+                        for (int ti = 0; ti < 3; ++ti) {
+                            const Texture* texture = textures[ti];
+                            if (texture == nullptr) {
+                                continue;
+                            }
+                            const Coordinator& coord = material.coord[ti];
+                            float u, v;
+                            if (coord.method == 2) {
+                                u = wa * a.env[0] + wb * b.env[0] + wc * c.env[0];
+                                v = wa * a.env[1] + wb * b.env[1] + wc * c.env[1];
+                            } else {
+                                const int s = coord.source;
+                                u = wa * va.uv[s][0] + wb * vb.uv[s][0] + wc * vc.uv[s][0];
+                                v = wa * va.uv[s][1] + wb * vb.uv[s][1] + wc * vc.uv[s][1];
+                            }
+                            const float tu = coord.m[0] * u + coord.m[1] * v + coord.m[2];
+                            const float tv = coord.m[3] * u + coord.m[4] * v + coord.m[5];
+                            const int tx = std::min(texture->w - 1, static_cast<int>(Wrap(material.wrap[ti][0], tu) *
+                                                                                     static_cast<float>(texture->w)));
+                            const int ty = std::min(texture->h - 1, static_cast<int>(Wrap(material.wrap[ti][1], 1.0f - tv) *
+                                                                                     static_cast<float>(texture->h)));
+                            const u32 px = texture->px[static_cast<std::size_t>(std::max(ty, 0)) * texture->w + std::max(tx, 0)];
+                            texel[ti][0] = static_cast<float>(px & 255) * (1.0f / 255.0f);
+                            texel[ti][1] = static_cast<float>((px >> 8) & 255) * (1.0f / 255.0f);
+                            texel[ti][2] = static_cast<float>((px >> 16) & 255) * (1.0f / 255.0f);
+                            texel[ti][3] = static_cast<float>(px >> 24) * (1.0f / 255.0f);
+                        }
+                        static constexpr float nothing[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                        const float* sources[16] = {colour,   primary,  secondary, texel[0], texel[1], texel[2],
+                                                    previous, previous, previous,  previous, previous, previous,
+                                                    previous, buffer,   nothing,   previous};
+                        for (const Stage& st : material.stages) {
+                            sources[14] = st.constant < 6 ? material.constant[st.constant] : nothing;
+                            float rgb[3][3], result[4];
+                            for (int k = 0; k < 3; ++k) {
+                                OperandRgb(st.op_rgb[k], sources[st.src_rgb[k]], rgb[k]);
+                            }
+                            if (st.comb_rgb == 6 || st.comb_rgb == 7) {
+                                const float dot = 4.0f * ((rgb[0][0] - 0.5f) * (rgb[1][0] - 0.5f) +
+                                                          (rgb[0][1] - 0.5f) * (rgb[1][1] - 0.5f) +
+                                                          (rgb[0][2] - 0.5f) * (rgb[1][2] - 0.5f));
+                                result[0] = result[1] = result[2] = dot;
+                            } else {
+                                for (int k = 0; k < 3; ++k) {
+                                    result[k] = Combine(st.comb_rgb, rgb[0][k], rgb[1][k], rgb[2][k]);
+                                }
+                            }
+                            result[3] = Combine(st.comb_a, OperandAlpha(st.op_a[0], sources[st.src_a[0]]),
+                                                OperandAlpha(st.op_a[1], sources[st.src_a[1]]),
+                                                OperandAlpha(st.op_a[2], sources[st.src_a[2]]));
+                            for (int k = 0; k < 3; ++k) {
+                                previous[k] = Clamp01(result[k] * st.scale_rgb);
+                            }
+                            previous[3] = Clamp01(result[3] * st.scale_a);
+                            if (st.buffer_rgb) {
+                                buffer[0] = previous[0], buffer[1] = previous[1], buffer[2] = previous[2];
+                            }
+                            if (st.buffer_a) {
+                                buffer[3] = previous[3];
+                            }
+                        }
+                        float final_colour[3] = {previous[0], previous[1], previous[2]};
+                        if (opaque) {
+                            depth[row + x] = z;
+                        } else {
+                            const u32 under = out[row + x];
+                            const float dst[4] = {under != 0 ? static_cast<float>(under & 255) / 255.0f : back[0],
+                                                  under != 0 ? static_cast<float>((under >> 8) & 255) / 255.0f : back[1],
+                                                  under != 0 ? static_cast<float>((under >> 16) & 255) / 255.0f : back[2],
+                                                  1.0f};
+                            float sf[3], df[3];
+                            BlendFactor(src_factor, previous, dst, sf);
+                            BlendFactor(dst_factor, previous, dst, df);
+                            for (int k = 0; k < 3; ++k) {
+                                const float s = previous[k] * sf[k], d = dst[k] * df[k];
+                                final_colour[k] = Clamp01(equation == 1 ? s - d : equation == 2 ? d - s : s + d);
+                            }
+                        }
+                        out[row + x] = 0xFF000000u |
+                                       (static_cast<u32>(final_colour[2] * 255.0f + 0.5f) << 16) |
+                                       (static_cast<u32>(final_colour[1] * 255.0f + 0.5f) << 8) |
+                                       static_cast<u32>(final_colour[0] * 255.0f + 0.5f);
                     }
-                    const float cr = wa * va.color[0] + wb * vb.color[0] + wc * vc.color[0];
-                    const float cg = wa * va.color[1] + wb * vb.color[1] + wc * vc.color[1];
-                    const float cb = wa * va.color[2] + wb * vb.color[2] + wc * vc.color[2];
-                    red = static_cast<u32>(Clamp8(static_cast<int>(static_cast<float>(red) * cr / 255.0f)));
-                    green = static_cast<u32>(Clamp8(static_cast<int>(static_cast<float>(green) * cg / 255.0f)));
-                    blue = static_cast<u32>(Clamp8(static_cast<int>(static_cast<float>(blue) * cb / 255.0f)));
-                    depth[row + x] = z;
-                    out[row + x] = 0xFF000000u | (blue << 16) | (green << 8) | red;
                 }
             }
         }
