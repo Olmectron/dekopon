@@ -590,6 +590,8 @@ void PipelineCache::ReportAsyncStats() {
     const auto shaders = take(AsyncStats::shader_compile);
     const auto pipelines = take(AsyncStats::pipeline_build);
     const u64 skipped = AsyncStats::skipped_draws.exchange(0, std::memory_order_relaxed);
+    const u64 built_in_draw =
+        AsyncStats::render_thread_builds.exchange(0, std::memory_order_relaxed);
     const u64 software =
         AsyncStats::software_vertex_draws.exchange(0, std::memory_order_relaxed);
     {
@@ -655,10 +657,10 @@ void PipelineCache::ReportAsyncStats() {
              "Compile stats: VS generate (render thread) {}x {} ms max {} ms | shader "
              "compiles {}x {} ms max {} ms | pipeline builds {}x {} ms max {} ms (served "
              "from driver cache on the render thread: {}) | draws skipped {} | draws via "
-             "software vertex path {}",
+             "software vertex path {} | pipelines built by the draw that needed them {}",
              vs_gen.count, vs_gen.total_ms, vs_gen.max_ms, shaders.count, shaders.total_ms,
              shaders.max_ms, pipelines.count, pipelines.total_ms, pipelines.max_ms,
-             inline_hits, skipped, software);
+             inline_hits, skipped, software, built_in_draw);
 }
 
 bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {

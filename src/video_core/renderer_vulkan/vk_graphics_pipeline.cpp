@@ -104,10 +104,23 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
             const bool shaders_ready = std::none_of(
                 stages.begin(), stages.end(),
                 [](Shader* shader) { return shader && !shader->IsDone(); });
-            if (shaders_ready) {
+            // Not without limit: a battle starting in Pokemon Omega Ruby needs dozens
+            // of new pipelines at once, and building them all here is a freeze of many
+            // seconds. Up to a quarter of each second goes to it; past that the draw is
+            // skipped for now, as it used to be, while the worker carries on.
+            static std::chrono::steady_clock::time_point window_start{};
+            static std::chrono::steady_clock::duration window_spent{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - window_start > std::chrono::seconds{1}) {
+                window_start = now;
+                window_spent = {};
+            }
+            if (shaders_ready && window_spent < std::chrono::milliseconds{250}) {
                 if (!build_claimed.exchange(true)) {
                     Build();
+                    AsyncStats::render_thread_builds.fetch_add(1, std::memory_order_relaxed);
                 }
+                window_spent += std::chrono::steady_clock::now() - now;
                 return true; // The caller waits for whoever is building it.
             }
         }

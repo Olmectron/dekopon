@@ -123,6 +123,11 @@ std::atomic<int> s_pending_layout{-1};
 std::atomic<int> s_pending_fps{-1};
 std::atomic<int> s_host_layout{0}; // What the receiver last asked this console to show.
 std::atomic<bool> s_lobby{false};        // The library is on screen: no game to capture.
+// Frames the receiver says it has put together, and whether it says so at all.
+std::atomic<u32> s_completed{0};
+std::atomic<bool> s_completed_seen{false};
+// The frame rate the link can take at the moment (lowered while it is congested).
+std::atomic<u32> s_fps_cap{60};
 std::atomic<bool> s_lobby_wanted{false}; // Sharing was started from the library: keep the link.
 std::atomic<bool> s_link_failed{false};  // The thread gave up (no local wireless, no socket).
 std::atomic<bool> s_menu_request{false}; // The receiver asked for the in-game menu.
@@ -254,6 +259,7 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
         }
         if (is_new) {
             s_ack_seen.store(false);
+            s_completed_seen.store(false);
             LOG_INFO(Frontend, "GameShare: receiver connected from {}:{} ({})",
                      inet_ntoa(from.sin_addr), ntohs(from.sin_port),
                      screen == 2 ? "both screens" : screen == 1 ? "bottom screen" : "top screen");
@@ -297,6 +303,10 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
             s_ack_seen.store(true);
         }
         s.input.has_motion = body_size >= 50 && body[25] != 0;
+        if (body_size >= 52) {
+            s_completed.store(ReadU16(body + 50));
+            s_completed_seen.store(true);
+        }
         if (s.input.has_motion) {
             std::memcpy(s.input.motion, body + 26, sizeof(s.input.motion));
         }
@@ -408,6 +418,12 @@ void NetworkThread() {
     AudioCore::SetOutputTap(OnAudioFrame);
 
     u32 stat_frames = 0, stat_held = 0;
+    // How the link is doing, looked at once a second (see where the frame is encoded).
+    u64 stat_held_total = 0, adapt_held = 0;
+    u32 adapt_sent = 0;
+    u16 adapt_done = 0;
+    int adapt_level = 0, adapt_calm = 0, stat_quality = 0;
+    auto adapt_checked = Clock::now();
     auto last_sent = Clock::now();
     u64 stat_bytes = 0, stat_encode_us = 0, stat_capture_us = 0;
     auto stat_start = Clock::now();
@@ -553,8 +569,41 @@ void NetworkThread() {
         if (s_ack_seen.load() && frame_id - s_acked.load() > MAX_UNACKED_FRAMES &&
             Clock::now() - last_sent < PROBE_INTERVAL) {
             ++stat_held;
+            ++stat_held_total;
             continue;
         }
+
+        // Once a second, look at how the link is doing. A frame goes out as some twenty
+        // datagrams and is lost if one of them is: on a link losing 5% of its packets
+        // only a third of the frames arrive whole. Smaller frames survive, so while the
+        // link is struggling the picture gets coarser and a little slower instead of
+        // late, and comes back when the link does.
+        if (const auto now = Clock::now(); now - adapt_checked >= std::chrono::seconds{1}) {
+            adapt_checked = now;
+            const u32 held_now = static_cast<u32>(stat_held_total - adapt_held);
+            adapt_held = stat_held_total;
+            bool struggling = held_now >= 4;
+            if (s_completed_seen.load()) {
+                const u16 done = static_cast<u16>(s_completed.load());
+                const u32 arrived = static_cast<u16>(done - adapt_done);
+                const u32 sent = frame_id - adapt_sent;
+                // What was sent in the last moments may still be on its way.
+                struggling = struggling || (sent >= 10 && arrived + 3 < sent * 85 / 100);
+                adapt_done = done;
+            }
+            adapt_sent = frame_id;
+            if (struggling) {
+                adapt_level = std::min(adapt_level + 1, 3);
+                adapt_calm = 0;
+            } else if (adapt_level > 0 && ++adapt_calm >= 4) {
+                --adapt_level;
+                adapt_calm = 0;
+            }
+            s_fps_cap.store(adapt_level >= 2 ? 20 : 60);
+        }
+        static constexpr int quality_step[4] = {0, 22, 38, 50};
+        quality = std::max(28, quality - quality_step[adapt_level]);
+        stat_quality = quality;
 
         const auto encode_start = Clock::now();
         const std::vector<u8> jpeg = EncodeJpeg(frame, width, height, quality);
@@ -602,10 +651,11 @@ void NetworkThread() {
             const double seconds = std::chrono::duration<double>(now - stat_start).count();
             LOG_INFO(Frontend,
                      "GameShare: {:.1f} fps, {} KB/s, jpeg {} bytes avg, capture {:.1f} ms avg, "
-                     "encode {:.1f} ms avg, {} frames held back",
+                     "encode {:.1f} ms avg, {} frames held back, quality {} (link level {})",
                      stat_frames / seconds, static_cast<u64>(stat_bytes / seconds / 1024),
                      stat_bytes / stat_frames, stat_capture_us / 1000.0 / stat_frames,
-                     stat_encode_us / 1000.0 / stat_frames, stat_held);
+                     stat_encode_us / 1000.0 / stat_frames, stat_held, stat_quality,
+                     adapt_level);
             stat_frames = stat_held = 0;
             stat_bytes = stat_encode_us = stat_capture_us = 0;
             stat_start = now;
@@ -843,17 +893,22 @@ void Tick(Core::System& system) {
         if (!s.client_active || s.capture_pending) {
             return;
         }
-        const auto interval = std::chrono::microseconds{1'000'000 / std::max<u32>(s.max_fps, 1)};
+        const u32 fps = std::clamp<u32>(std::min<u32>(s.max_fps, s_fps_cap.load()), 5, 60);
+        const auto interval = std::chrono::microseconds{1'000'000 / fps};
         // The capture is taken at the next presented frame. Asking a quarter of an
         // interval early makes it the frame that is due, not the one after it, which
         // used to add about half a frame of latency.
-        if (now - s.last_capture < interval - interval / 4) {
+        const auto due = s.last_capture + interval;
+        if (now < due - interval / 4) {
             return;
         }
         screen = s.screen == 3 ? 1 : s.screen;
         s.capture_pending = true;
         s.capture_requested = now;
-        s.last_capture = now;
+        // An early capture still counts from when it was due: counting from `now` let a
+        // game presenting at 60 be sent at 40 frames a second when 30 were asked for -
+        // a third more data than the link had been sized for.
+        s.last_capture = now < due ? due : now;
     }
 
     auto& renderer = system.GPU().Renderer();

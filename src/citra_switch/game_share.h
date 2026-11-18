@@ -23,7 +23,9 @@ struct InputState;
 //                                 s16 right stick x, s16 right stick y, then optionally
 //                                 u32 newest frame id seen (drives congestion control),
 //                                 then optionally u8 has motion, float[3] acceleration,
-//                                 float[3] angular velocity (libnx six-axis units)
+//                                 float[3] angular velocity (libnx six-axis units),
+//                                 then optionally u16 frames received whole so far (the
+//                                 host compares it with what it sent, to know the loss)
 //   3 FRAME   host -> receiver   u32 frame id, u16 chunk index, u16 chunk count, u32 jpeg size,
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)

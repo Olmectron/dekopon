@@ -37,6 +37,8 @@ inline std::atomic<u64> inline_pipeline_hits{};
 inline std::atomic<bool> driver_cache_dirty{};
 /// Draws dropped because their pipeline was not ready (asynchronous mode).
 inline std::atomic<u64> skipped_draws{};
+/// Pipelines a draw built itself after waiting too long for the worker (Switch 1).
+inline std::atomic<u64> render_thread_builds{};
 /// Draws sent through the CPU vertex path because their vertex shader was not ready.
 inline std::atomic<u64> software_vertex_draws{};
 

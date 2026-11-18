@@ -534,6 +534,7 @@ int main(int, char**) {
     u64 last_hello_ns = 0;
     u64 last_input_ns = 0;
     u32 ack_id = 0; // newest frame id seen, reported back to the host
+    u16 frames_whole = 0; // frames put together complete, reported back too
     bool usb_was_connected = false;
     u64 last_usb_status_ns = 0;
     u64 last_frame_ns = 0;
@@ -675,7 +676,7 @@ int main(int, char**) {
                     touch_y = static_cast<u16>((finger_y - bottom_rect.y) * 240 / bottom_rect.h);
                 }
 
-                u8 packet[HEADER + 50];
+                u8 packet[HEADER + 52];
                 std::memcpy(packet, MAGIC, sizeof(MAGIC));
                 packet[4] = PacketType::Input;
                 WriteU32(packet + HEADER, ++input_seq);
@@ -704,6 +705,9 @@ int main(int, char**) {
                                          motion.angular_velocity.y, motion.angular_velocity.z};
                 packet[HEADER + 25] = has_motion ? 1 : 0;
                 std::memcpy(packet + HEADER + 26, values, sizeof(values));
+                // How many frames have arrived whole: the host sets the picture's quality
+                // by how that compares with what it sent.
+                WriteU16(packet + HEADER + 50, frames_whole);
                 if (usb_mode) {
                     GameShareUsb::Send(packet, sizeof(packet));
                 } else {
@@ -778,6 +782,7 @@ int main(int, char**) {
                         std::memcpy(assembly.data() + static_cast<std::size_t>(index) * CHUNK,
                                     body + 17, payload);
                         if (chunks_seen == chunk_count) {
+                            ++frames_whole;
                             jpeg = assembly;
                             if (DecodeJpeg(jpeg, picture)) {
                                 picture_dirty = true;
