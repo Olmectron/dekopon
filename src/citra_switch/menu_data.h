@@ -89,6 +89,9 @@ struct FileEntry {
 // Scans the configured ROM directory and the installed SD titles, sorted by title.
 std::vector<GameEntry> ScanGames();
 
+/// The game's HOME Menu banner (a CBMD file), or nothing when it has none.
+std::vector<std::uint8_t> ReadGameBanner(const std::string& path);
+
 // The version/update/DLC details behind a library entry.
 TitleDetails GetTitleDetails(const GameEntry& entry);
 

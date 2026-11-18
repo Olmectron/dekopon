@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "citra_switch/banner3d.h"
 #include "citra_switch/config.h"
 #include "citra_switch/cover_share.h"
 #include "citra_switch/covers.h"
@@ -1669,7 +1670,11 @@ private:
         view.position = shelf_pos;
         view.count = count;
         view.flip = shelf_flip;
-        view.zoom = shelf_zoom;
+        const Banner::Model* banner =
+            count > 0 && GetForwardView() == 1 && (shelf_forward || shelf_zoom > 0.0f)
+                ? BannerFor(games[filtered[selected]])
+                : nullptr;
+        view.zoom = banner != nullptr ? 0.0f : shelf_zoom;
         view.spin_yaw = shelf_spin_yaw;
         view.spin_pitch = shelf_spin_pitch;
         view.forward = shelf_forward;
@@ -1710,6 +1715,9 @@ private:
         view.show_title = IsShelfTitleShown();
         view.bar_style = GetShelfBarStyle();
         home_layout = DrawHome(c, g_font, view, get);
+        if (banner != nullptr && shelf_zoom > 0.02f) {
+            DrawBannerPanel(c, *banner, shelf_zoom);
+        }
 
         if (count == 0) {
             const char* line1 = search.empty() ? "No games found" : "No game matches the search";
@@ -2470,6 +2478,65 @@ private:
         }
     }
 
+    // ---------------------------------------------------------------- the 3D banner
+    //
+    // The model a 3DS shows above a game's icon, read out of the game and drawn here. One
+    // is kept in memory: the selected game's.
+    std::shared_ptr<Banner::Model> banner_model;
+    std::string banner_path;
+    std::vector<u32> banner_pixels;
+
+    const Banner::Model* BannerFor(const GameEntry& game) {
+        if (banner_path != game.path) {
+            banner_path = game.path;
+            banner_model = Banner::Parse(ReadGameBanner(game.path));
+        }
+        return banner_model.get();
+    }
+
+    // Draws the banner into a rectangle of `c`, leaving alone what it does not cover.
+    void BlitBanner(Canvas& c, const Banner::Model& model, int x, int y, int w, int h, float yaw,
+                    float pitch) {
+        if (w < 8 || h < 8) {
+            return;
+        }
+        banner_pixels.assign(static_cast<std::size_t>(w) * h, 0);
+        // One that has no animation of its own sways a little, so it is seen to be a model.
+        const float t = UiTime();
+        const float sway = model.Animated() ? 0.0f : 0.38f * std::sin(t * 0.9f);
+        Banner::Render(model, t, yaw + sway, pitch, banner_pixels.data(), w, h);
+        u32* const out = c.Data();
+        for (int row = 0; row < h; ++row) {
+            const int cy = y + row;
+            if (cy < 0 || cy >= c.Height()) {
+                continue;
+            }
+            const u32* src = banner_pixels.data() + static_cast<std::size_t>(row) * w;
+            u32* dst = out + static_cast<std::size_t>(cy) * c.Width();
+            for (int col = 0; col < w; ++col) {
+                const int cx = x + col;
+                if (src[col] != 0 && cx >= 0 && cx < c.Width()) {
+                    dst[cx] = src[col];
+                }
+            }
+        }
+    }
+
+    // The banner in a window over the shelf, growing as the game is brought forward.
+    void DrawBannerPanel(Canvas& c, const Banner::Model& model, float zoom) {
+        const float z = zoom * zoom * (3.0f - 2.0f * zoom);
+        const int w = static_cast<int>(std::min(g_screen_w - 160, 600) * z);
+        const int h = w * 3 / 5; // The proportions of the 3DS's top screen.
+        const int x = (g_screen_w - w) / 2;
+        const int y = home_layout.shelf_y + (home_layout.shelf_h - h) / 2;
+        if (w < 40) {
+            return;
+        }
+        c.FillRoundRect(x - 12, y - 12, w + 24, h + 24, 18, kColSurfaceHi);
+        c.FillRoundRect(x, y, w, h, 10, MakeColor(16, 18, 24));
+        BlitBanner(c, model, x, y, w, h, shelf_spin_yaw, shelf_spin_pitch);
+    }
+
     // ------------------------------------------------------------ Toronja Link from the library
     //
     // The link to the other console can be made here, before any game: the receiver then
@@ -2897,7 +2964,21 @@ private:
             const GameEntry& game = games[filtered[selected]];
             if (shelf_forward) {
                 header("Ready to play");
-                // The icon, alive: it bobs, and a ring breathes behind it.
+                if (const Banner::Model* banner = BannerFor(game)) {
+                    // What the 3DS shows above a chosen game: its banner, moving.
+                    c.FillRoundRect(100, 52, 440, 204, 16, MakeColor(16, 18, 24));
+                    BlitBanner(c, *banner, 110, 58, 420, 192, 0.0f, 0.0f);
+                    const std::string name = g_font.Truncate(game.title, 22, 600);
+                    g_font.Draw(c, (W - g_font.Measure(name, 22)) / 2, 286, name, 22, kColText);
+                    if (!game.publisher.empty()) {
+                        const std::string pub = g_font.Truncate(game.publisher, 15, 600);
+                        g_font.Draw(c, (W - g_font.Measure(pub, 15)) / 2, 308, pub, 15, kColTextDim);
+                    }
+                    CompButton(c, 110, 326, 420, 84, "Play", 36, true, CompKind::Play, 0);
+                    CompButton(c, 16, 424, 170, 46, "Back", 19, false, CompKind::Back, 0);
+                    return;
+                }
+                // No banner to read: the icon, alive. It bobs, and a ring breathes behind it.
                 const float t = UiTime();
                 const int size = 136;
                 const int ix = (W - size) / 2;

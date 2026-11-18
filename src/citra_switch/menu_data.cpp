@@ -103,6 +103,19 @@ std::string CleanTitle(const std::array<char16_t, 0x80>& raw) {
     return collapsed;
 }
 
+} // namespace
+
+std::vector<std::uint8_t> ReadGameBanner(const std::string& path) {
+    std::vector<u8> banner;
+    std::unique_ptr<Loader::AppLoader> loader = Loader::GetLoader(path);
+    if (!loader || loader->ReadBanner(banner) != Loader::ResultStatus::Success) {
+        banner.clear();
+    }
+    return banner;
+}
+
+namespace {
+
 void FillFromSmdh(GameEntry& entry, const Loader::SMDH& smdh) {
     using Language = Loader::SMDH::TitleLanguage;
     const auto title = CleanTitle(smdh.GetLongTitle(Language::English));

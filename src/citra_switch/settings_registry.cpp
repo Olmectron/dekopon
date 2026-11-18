@@ -750,6 +750,11 @@ SettingEntry ScreenLayoutEntry() {
     entry.id = "Screen Layout";
     entry.value = [] { return std::string{CurrentScreenLayoutName()}; };
     entry.step = [](int dir) { StepScreenLayout(dir); };
+    // Written to the config file, so the layout last used is the one the next game (and
+    // the next run of the app) starts in.
+    PersistLocal<int>(
+        entry, "last_screen_layout", [] { return GetSavedScreenLayout(); },
+        [](int value) { SetSavedScreenLayout(value); }, -1);
     return entry;
 }
 
@@ -792,6 +797,7 @@ constexpr std::array<const char*, 9> kLibraryStyleNames{
 constexpr std::array<const char*, 2> kThemeNames{"Dark", "Light"};
 constexpr std::array<const char*, 2> kCoverSourceNames{"Off", "GameTDB"};
 constexpr std::array<const char*, 2> kCoverQualityNames{"Standard", "High"};
+constexpr std::array<const char*, 2> kForwardViewNames{"The case", "The 3D banner"};
 constexpr std::array<const char*, 3> kShelfBarNames{"Buttons", "Text", "Hidden"};
 constexpr std::array<const char*, 3> kAmiiboRequestNames{"Scan a real Amiibo", "Choose a file",
                                                          "Do nothing"};
@@ -850,6 +856,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
          "library."},
         [] { return GetLibraryStyle(); }, [](int value) { SetLibraryStyle(value); }, 0,
         kLibraryStyleNames);
+    t << LocalChoice(
+        "forward_view",
+        {"When A Game Is Chosen",
+         "What the first A brings up: the game's case, to turn and look at, or the animated "
+         "3D banner a 3DS shows for it in the HOME Menu. A console connected with Toronja "
+         "Link always shows the banner on its own screen."},
+        [] { return GetForwardView(); }, [](int value) { SetForwardView(value); }, 0,
+        kForwardViewNames);
     t << LocalBool("shelf_cases",
                    {"3D Cases",
                     "Covers stand as game cases with a side and a spine, rather than as "

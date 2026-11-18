@@ -48,6 +48,7 @@ std::atomic<int> s_quality{0}; // Switch 1: less memory and a slower card.
 std::atomic<bool> s_flush_all{false}; // Covers were replaced: reload the loaded ones too.
 std::atomic<bool> s_overwrite{false};
 std::atomic<bool> s_covers_shown{true};
+std::atomic<int> s_forward_view{0};
 std::mutex s_status_mutex;
 std::string s_status_brief;
 std::string s_status_detail;
@@ -569,6 +570,14 @@ std::string CoverDownloadStatus() {
 std::string CoverDownloadDetail() {
     std::lock_guard lock{s_status_mutex};
     return s_status_detail;
+}
+
+int GetForwardView() {
+    return s_forward_view.load();
+}
+
+void SetForwardView(int view) {
+    s_forward_view.store(view != 0 ? 1 : 0);
 }
 
 bool IsCoversShown() {

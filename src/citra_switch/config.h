@@ -226,6 +226,10 @@ const char* GetScreenLayoutName(int index);
 
 // The preset in use, and switching straight to one (while a game runs).
 int GetScreenLayoutIndex();
+/// The screen layout last in use, kept in the config file and put back when a game
+/// starts. -1 until one has been chosen.
+int GetSavedScreenLayout();
+void SetSavedScreenLayout(int index);
 void SetScreenLayoutIndex(int index);
 
 // Bitmask of presets included in R3's cycle (bit i = preset i).

@@ -151,6 +151,9 @@ constexpr int kScreenGapStep = 4;
 
 // Kept consistent with Settings so the first press advances past the boot default.
 std::size_t s_layout_index = 0;
+// The layout in use when the last game was closed (or the app left): the next game
+// starts in it. -1: none chosen yet, the settings decide.
+int s_saved_layout = -1;
 
 // Bitmask of presets R3 cycles through. Bit i set means preset i is in the rotation.
 std::atomic<std::uint32_t> s_layout_cycle_mask{(1u << s_layout_presets.size()) - 1};
@@ -460,6 +463,11 @@ bool BootRom(const std::string& rom_arg) {
     }
     ApplyPerGameConfig(settings_program_id);
 
+    // The layout last in use comes back, whatever game it was chosen in.
+    if (s_saved_layout >= 0 && s_saved_layout < static_cast<int>(s_layout_presets.size())) {
+        s_layout_index = static_cast<std::size_t>(s_saved_layout);
+        ApplyCurrentLayout();
+    }
     system.ApplySettings();
     Settings::LogSettings();
 
@@ -685,6 +693,17 @@ int GetScreenLayoutIndex() {
     return static_cast<int>(s_layout_index);
 }
 
+int GetSavedScreenLayout() {
+    if (Core::System::GetInstance().IsPoweredOn()) {
+        s_saved_layout = GetScreenLayoutIndex(); // Whatever is on screen now.
+    }
+    return s_saved_layout;
+}
+
+void SetSavedScreenLayout(int index) {
+    s_saved_layout = index;
+}
+
 void SetScreenLayoutIndex(int index) {
     if (!Core::System::GetInstance().IsPoweredOn() || index < 0 ||
         index >= static_cast<int>(s_layout_presets.size())) {
@@ -795,6 +814,7 @@ bool ArticDisconnected() {
 
 void StopRom() {
     RestoreInstantLog();
+    GetSavedScreenLayout(); // Remember the layout this game ends in.
     // Switch 2 bring-up: closing a game has hung on a black screen at least once, with the
     // normal log cut short. These go straight to log/boot.txt, so the next time it happens
     // the last line says how far the shutdown got.
