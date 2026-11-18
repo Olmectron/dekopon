@@ -860,10 +860,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
         "forward_view",
         {"When A Game Is Chosen",
          "What the first A brings up: the game's case, to turn and look at, or the animated "
-         "3D banner a 3DS shows for it in the HOME Menu. A console connected with Toronja "
-         "Link always shows the banner on its own screen."},
+         "3D banner a 3DS shows for it in the HOME Menu, with its jingle."},
         [] { return GetForwardView(); }, [](int value) { SetForwardView(value); }, 0,
         kForwardViewNames);
+    t << LocalBool("link_banner",
+                   {"3D Banner On The Other Console",
+                    "A console connected with Toronja Link shows a chosen game's animated "
+                    "3D banner and plays its jingle, rather than the game's icon."},
+                   IsLinkBannerOn, SetLinkBannerOn, false);
     t << LocalBool("shelf_cases",
                    {"3D Cases",
                     "Covers stand as game cases with a side and a spine, rather than as "

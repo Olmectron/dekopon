@@ -60,6 +60,10 @@ void SetShelfCasesOn(bool on);
 /// What A brings up for the selected game: 0 its case, 1 the 3D banner the 3DS shows.
 int GetForwardView();
 void SetForwardView(int view);
+/// Whether a console connected with Toronja Link shows that banner for a chosen game,
+/// rather than the game's icon.
+bool IsLinkBannerOn();
+void SetLinkBannerOn(bool on);
 
 /// What the library shows around the shelf.
 bool IsShelfArrowsShown();

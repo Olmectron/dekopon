@@ -49,6 +49,7 @@ std::atomic<bool> s_flush_all{false}; // Covers were replaced: reload the loaded
 std::atomic<bool> s_overwrite{false};
 std::atomic<bool> s_covers_shown{true};
 std::atomic<int> s_forward_view{0};
+std::atomic<bool> s_link_banner{false};
 std::mutex s_status_mutex;
 std::string s_status_brief;
 std::string s_status_detail;
@@ -578,6 +579,14 @@ int GetForwardView() {
 
 void SetForwardView(int view) {
     s_forward_view.store(view != 0 ? 1 : 0);
+}
+
+bool IsLinkBannerOn() {
+    return s_link_banner.load();
+}
+
+void SetLinkBannerOn(bool on) {
+    s_link_banner.store(on);
 }
 
 bool IsCoversShown() {

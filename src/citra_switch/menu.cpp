@@ -2498,10 +2498,10 @@ private:
     std::string jingle_path; // The game whose jingle was last started.
 
     // The banner's jingle goes with the banner: once when a game is brought forward, on
-    // this console if the banner is what it shows, and on the other console whenever one
-    // is connected (it always shows the banner). Putting the game back cuts it short.
+    // this console if the banner is what it shows, and on a connected console if the
+    // banner is what that one shows. Putting the game back cuts it short.
     void UpdateJingle(const GameEntry* forward) {
-        const bool linked = GameShare::LinkState() == 2;
+        const bool linked = GameShare::LinkState() == 2 && IsLinkBannerOn();
         const bool here = GetForwardView() == 1;
         const Banner::Model* model = forward != nullptr && (here || linked) ? BannerFor(*forward) : nullptr;
         const std::string key = model != nullptr && !model->sound.empty() ? forward->path : std::string{};
@@ -3031,7 +3031,7 @@ private:
             const GameEntry& game = games[filtered[selected]];
             if (shelf_forward) {
                 header("Ready to play");
-                if (const Banner::Model* banner = BannerFor(game)) {
+                if (const Banner::Model* banner = IsLinkBannerOn() ? BannerFor(game) : nullptr) {
                     // What the 3DS shows above a chosen game: its banner, moving.
                     c.FillRoundRect(100, 52, 440, 204, 16, MakeColor(16, 18, 24));
                     BlitBanner(c, *banner, 110, 58, 420, 192, 0.0f, 0.0f, 1);
