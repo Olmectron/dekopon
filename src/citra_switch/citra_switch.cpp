@@ -23,6 +23,7 @@
 #include "citra_switch/overlay_menu.h"
 #include "citra_switch/usb_storage.h"
 #include "common/horizon_thread.h"
+#include "common/stall_watch.h"
 
 namespace Common {
 void StopAllThreadWorkers();
@@ -512,6 +513,7 @@ void RunGame(PadState& pad, const std::string& rom) {
             if (SwitchFrontend::IsQuickMenuOpen()) {
                 pressed |= remote_pressed;
             }
+            Common::StallWatch::Poll();
             // Its + and - together ask for the menu, as they do here.
             if (SwitchFrontend::GameShare::TakeMenuRequest()) {
                 SwitchFrontend::ToggleQuickMenu();

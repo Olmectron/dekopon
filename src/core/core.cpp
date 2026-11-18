@@ -98,7 +98,6 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
     }
 
     MICROPROFILE_SCOPE(Core_RunLoop);
-    Common::StallWatch::Begin();
     const Common::StallWatch::Scope stall_watch{"the run loop", 0, nullptr};
 
 #ifdef ENABLE_GDBSTUB

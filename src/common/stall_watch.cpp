@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <thread>
 
 #include "common/logging/log.h"
 #include "common/stall_watch.h"
@@ -25,7 +24,6 @@ std::array<Note, RING> s_ring;
 std::atomic<std::uint64_t> s_beat{0}; // Notes written so far; the newest is at (beat - 1) % RING.
 std::atomic<bool> s_idle{true};
 char s_service[48] = "service";
-std::atomic<bool> s_started{false};
 
 std::string Describe(std::uint64_t beat, std::size_t back) {
     if (beat <= back) {
@@ -40,53 +38,6 @@ std::string Describe(std::uint64_t beat, std::size_t back) {
     std::snprintf(text, sizeof(text), "%.48s (0x%X)", what,
                   static_cast<unsigned>(note.detail.load(std::memory_order_relaxed)));
     return text;
-}
-
-void Watch() {
-    using Clock = std::chrono::steady_clock;
-    constexpr auto STEP = std::chrono::milliseconds{250};
-    const auto seconds = [](Clock::duration d) {
-        return std::chrono::duration<double>(d).count();
-    };
-    std::uint64_t last_beat = 0;
-    auto last_change = Clock::now();
-    auto last_report = last_change;
-    auto woke = last_change;
-    bool reported = false;
-    for (;;) {
-        std::this_thread::sleep_for(STEP);
-        const auto now = Clock::now();
-        // This thread asks for nothing but a quarter of a second's sleep. If it was kept
-        // away much longer, the hold is not the emulation's own: the system held the whole
-        // application (or the core this runs on).
-        const auto late = now - woke - STEP;
-        woke = now;
-        if (late > std::chrono::seconds{1}) {
-            LOG_WARNING(Core, "Stall watch: this thread itself was held for {:.1f} s (the whole "
-                              "application was, or its core)",
-                        seconds(late));
-        }
-        const std::uint64_t beat = s_beat.load(std::memory_order_relaxed);
-        if (s_idle.load(std::memory_order_relaxed) || beat != last_beat) {
-            if (reported) {
-                LOG_WARNING(Core, "Stall watch: moving again after {:.1f} s. Now: {}",
-                            seconds(now - last_change), Describe(beat, 0));
-            }
-            reported = false;
-            last_beat = beat;
-            last_change = now;
-            continue;
-        }
-        if (now - last_change < std::chrono::seconds{2} ||
-            (reported && now - last_report < std::chrono::seconds{5})) {
-            continue;
-        }
-        reported = true;
-        last_report = now;
-        LOG_WARNING(Core, "Stall watch: no progress for {:.1f} s. In: {} | before it: {} <- {} <- {} <- {}",
-                    seconds(now - last_change), Describe(beat, 0), Describe(beat, 1),
-                    Describe(beat, 2), Describe(beat, 3), Describe(beat, 4));
-    }
 }
 
 } // namespace
@@ -111,17 +62,47 @@ void MarkIdle() noexcept {
     s_idle.store(true, std::memory_order_relaxed);
 }
 
-void Begin() {
-    // Not std::call_once: on this toolchain it throws instead of calling.
-    if (s_started.exchange(true)) {
+void Poll() {
+    using Clock = std::chrono::steady_clock;
+    const auto seconds = [](Clock::duration d) {
+        return std::chrono::duration<double>(d).count();
+    };
+    static std::uint64_t last_beat = 0;
+    static auto last_change = Clock::now();
+    static auto last_report = last_change;
+    static auto last_poll = last_change;
+    static bool reported = false;
+    const auto now = Clock::now();
+    // The caller comes by every frame. If it was kept away itself, the hold is not the
+    // emulation's own: the system held the whole application.
+    const auto away = now - last_poll;
+    last_poll = now;
+    const std::uint64_t beat = s_beat.load(std::memory_order_relaxed);
+    const bool idle = s_idle.load(std::memory_order_relaxed);
+    if (away > std::chrono::seconds{2} && !idle) {
+        LOG_WARNING(Core, "Stall watch: the thread that watches was itself held for {:.1f} s (the "
+                          "whole application was)",
+                    seconds(away));
+    }
+    if (idle || beat != last_beat) {
+        if (reported) {
+            LOG_WARNING(Core, "Stall watch: moving again after {:.1f} s. Now: {}",
+                        seconds(now - last_change), Describe(beat, 0));
+        }
+        reported = false;
+        last_beat = beat;
+        last_change = now;
         return;
     }
-    try {
-        std::thread{Watch}.detach();
-    } catch (...) {
-        // No thread to spare: the emulation runs without being watched.
-        LOG_WARNING(Core, "Stall watch: could not start its thread");
+    if (now - last_change < std::chrono::seconds{2} ||
+        (reported && now - last_report < std::chrono::seconds{5})) {
+        return;
     }
+    reported = true;
+    last_report = now;
+    LOG_WARNING(Core, "Stall watch: no progress for {:.1f} s. In: {} | before it: {} <- {} <- {} <- {}",
+                seconds(now - last_change), Describe(beat, 0), Describe(beat, 1), Describe(beat, 2),
+                Describe(beat, 3), Describe(beat, 4));
 }
 
 } // namespace Common::StallWatch

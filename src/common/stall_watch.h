@@ -11,7 +11,7 @@
 // had happened, and the log has nothing for that stretch: whatever holds the emulation
 // thread holds its logging too. So the emulation thread leaves a note of what it is about
 // to do at the points it passes thousands of times a second (a system call, a service
-// request, a run of guest code, the JIT's housekeeping), and a second thread watches those
+// request, a run of guest code, the JIT's housekeeping), and another thread looks at those
 // notes. When they stop changing for two seconds it writes the last ones to the log, and
 // again when they start moving.
 //
@@ -27,8 +27,11 @@ void MarkService(const char* name, std::uint32_t command) noexcept;
 /// Between runs of the emulation (paused, a menu open): nothing to watch.
 void MarkIdle() noexcept;
 
-/// Starts the watching thread, once.
-void Begin();
+/// Looks at the notes; writes to the log when they have stopped changing for two seconds,
+/// and again when they move. Call it often from a thread other than the emulation's (the
+/// frontend's main loop does, every frame). It has no thread of its own: one was tried,
+/// and with it the graphics driver's cache thread crashed at the start of every game.
+void Poll();
 
 /// Notes `what` now and `after` when it goes out of scope; null `after` means idle.
 class Scope {
