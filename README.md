@@ -164,8 +164,8 @@ developed and tested on.
   resolution on the main console does not make it sharper. When the link struggles the
   picture gets coarser so the frame rate holds, and a lost frame is skipped, not resent.
 - **A little delay.** Barely noticeable on a good link; it grows on a crowded Wi-Fi.
-- **Sound is optional and off unless asked for** on the second console, and the main console
-  can refuse it. It is sent uncompressed, so it adds to the traffic.
+- **Sound is optional.** It is switched on on the second console, and the main console can
+  refuse it. It is sent uncompressed, so it adds to the traffic.
 - **Sharing costs the main console some work** (it compresses every frame). A game already
   short of frame rate, on a Switch 1 above all, can lose a little more.
 - **Direct wireless takes the main console off its Wi-Fi** for as long as the link lasts.
@@ -199,8 +199,8 @@ port: what was tried, what the loader does and does not grant, and how each fix 
   lighting and without material animations or the banner's own camera.
 - Much of the newest work (the link from the library, cover sharing, the banner on the
   console and on the second one) is *untested* beyond compiling and a PC prototype.
-- On Switch 1, start Toronja over a game (title takeover): from the Album there is not
-  enough memory for it.
+- On Switch 1, start Toronja over a game (title takeover); from the Album (applet mode)
+  games do not start.
 - The frame rate dips for a moment the first time a place is entered, while its code is
   compiled.
 - Frame generation (LSFG) is not built into these binaries.
