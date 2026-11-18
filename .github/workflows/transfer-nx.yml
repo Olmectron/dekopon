@@ -1,0 +1,75 @@
+name: toronja-transfer
+
+# Builds Toronja Transfer, the fast SD <-> PC file transfer app, for Switch 1 and Switch 2
+# with the same toolchain image as the Switch 2 port.
+on:
+  push:
+    branches: [main, switch2-gameshare]
+    paths:
+      - 'tools/transfer-nx/**'
+      - '.github/workflows/transfer-nx.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: toronja-transfer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore the toolchain image
+        id: toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
+
+      - name: Build the toolchain image
+        run: |
+          # The image is kept in the Actions cache: pkg.devkitpro.org refuses GitHub's
+          # runners (403) often enough that building it on every run is not workable.
+          if [ -f /tmp/toolchain-image.tar ]; then
+            docker load -i /tmp/toolchain-image.tar && exit 0
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if docker build -t dekopon-switch2 -f docker/switch2/Dockerfile .; then
+              docker save dekopon-switch2 -o /tmp/toolchain-image.tar
+              exit 0
+            fi
+            echo "toolchain image build failed (attempt $attempt), retrying in 60 s"
+            sleep 60
+          done
+          exit 1
+
+      - name: Keep the toolchain image for later runs
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/toolchain-image.tar
+          key: toolchain-image-${{ hashFiles('docker/switch2/Dockerfile') }}
+
+      - name: Build for Switch 1
+        run: >
+          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2
+          -c "make -C tools/transfer-nx PLATFORM=switch1"
+
+      - name: Build for Switch 2
+        if: always()
+        run: >
+          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2
+          -c "source /opt/devkitpro/switch2vars.sh && make -C tools/transfer-nx PLATFORM=switch2"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toronja-transfer
+          path: tools/transfer-nx/out/**/*.nro
+          if-no-files-found: warn
