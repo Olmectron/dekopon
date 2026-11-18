@@ -251,6 +251,26 @@ std::string ResolveRomPath(const std::string& rom_arg) {
     return found;
 }
 
+// While a game starts, every log line goes to the card at once; the user's own setting
+// comes back once it runs, or when the session ends without having got that far.
+bool s_instant_log_forced = false;
+bool s_instant_log_saved = false;
+
+void ForceInstantLog() {
+    if (!s_instant_log_forced) {
+        s_instant_log_saved = Settings::values.instant_debug_log.GetValue();
+        s_instant_log_forced = true;
+    }
+    Settings::values.instant_debug_log = true;
+}
+
+void RestoreInstantLog() {
+    if (s_instant_log_forced) {
+        Settings::values.instant_debug_log = s_instant_log_saved;
+        s_instant_log_forced = false;
+    }
+}
+
 void EmuThread(std::string path) {
     Common::SetCurrentThreadName("EmuThread");
     if (!Common::Horizon::PinCurrentThread(Common::Horizon::CoreEmu)) {
@@ -324,6 +344,7 @@ void EmuThread(std::string path) {
     }
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
+    RestoreInstantLog();
     GameShare::Start();
     while (!s_stop) {
         if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
@@ -412,6 +433,11 @@ bool BootRom(const std::string& rom_arg) {
         return false;
     }
 
+    // Until the game is running every log line goes to the card at once. A start that
+    // hangs has to be killed, and what was still in the log's buffer went with it: the
+    // one such log we have ends in the middle of the settings dump, a second or two
+    // before whatever it was waiting on.
+    ForceInstantLog();
     LOG_INFO(Frontend, "Booting ROM {}", path);
     // Nothing left over from the last game's menu or its closing screen.
     VideoCore::SetOverlayMenuState({});
@@ -768,6 +794,7 @@ bool ArticDisconnected() {
 }
 
 void StopRom() {
+    RestoreInstantLog();
     // Switch 2 bring-up: closing a game has hung on a black screen at least once, with the
     // normal log cut short. These go straight to log/boot.txt, so the next time it happens
     // the last line says how far the shutdown got.
