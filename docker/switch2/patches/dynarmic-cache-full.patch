@@ -1,11 +1,32 @@
 diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
-index 53c742a..74fcccd 100644
+index 53c742a..0a1b731 100644
 --- a/src/dynarmic/backend/arm64/address_space.cpp
 +++ b/src/dynarmic/backend/arm64/address_space.cpp
-@@ -124,7 +124,14 @@ size_t AddressSpace::GetRemainingSize() {
+@@ -86,6 +86,7 @@ CodePtr AddressSpace::GetOrEmit(IR::LocationDescriptor descriptor) {
+ }
+ 
+ void AddressSpace::InvalidateBasicBlocks(const tsl::robin_set<IR::LocationDescriptor>& descriptors) {
++    const BlockArena::Scope arena_scope{block_arena};
+     UnprotectCodeMemory();
+ 
+     for (const auto& descriptor : descriptors) {
+@@ -109,6 +110,8 @@ void AddressSpace::ClearCache() {
+     reverse_block_entries.clear();
+     block_infos.clear();
+     block_references.clear();
++    // None of the above freed anything of the arena's; this takes it all back at once.
++    block_arena.Reset();
+     code.set_offset(prelude_info.end_of_prelude);
+ }
+ 
+@@ -123,8 +126,17 @@ size_t AddressSpace::GetRemainingSize() {
+ }
  
  EmittedBlockInfo AddressSpace::Emit(IR::Block block) {
-     if (GetRemainingSize() < 1024 * 1024) {
+-    if (GetRemainingSize() < 1024 * 1024) {
++    const BlockArena::Scope arena_scope{block_arena};
++    // The bookkeeping can outgrow the code it describes; it is dropped with it.
++    if (GetRemainingSize() < 1024 * 1024 || block_arena.Used() > 384 * 1024 * 1024) {
 +        // Told before and after, so the host can time the drop itself.
 +        if (code_cache_full_callback) {
 +            code_cache_full_callback();
@@ -17,3 +38,304 @@ index 53c742a..74fcccd 100644
      }
  
      UnprotectCodeMemory();
+@@ -286,7 +298,7 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
+     }
+ }
+ 
+-void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr target_ptr, const std::vector<BlockRelocation>& block_relocations_list) {
++void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr target_ptr, const BlockRelocationList& block_relocations_list) {
+     using namespace oaknut;
+     using namespace oaknut::util;
+ 
+diff --git a/src/dynarmic/backend/arm64/address_space.h b/src/dynarmic/backend/arm64/address_space.h
+index d0b7253..3a83896 100644
+--- a/src/dynarmic/backend/arm64/address_space.h
++++ b/src/dynarmic/backend/arm64/address_space.h
+@@ -65,7 +65,7 @@ protected:
+     size_t GetRemainingSize();
+     EmittedBlockInfo Emit(IR::Block ir_block);
+     void Link(EmittedBlockInfo& block);
+-    void LinkBlockLinks(const CodePtr entry_point, const CodePtr target_ptr, const std::vector<BlockRelocation>& block_relocations_list);
++    void LinkBlockLinks(const CodePtr entry_point, const CodePtr target_ptr, const BlockRelocationList& block_relocations_list);
+     void RelinkForDescriptor(IR::LocationDescriptor target_descriptor, CodePtr target_ptr);
+ 
+     FakeCall FastmemCallback(u64 host_pc);
+@@ -75,12 +75,19 @@ protected:
+     oaknut::CodeBlock mem;
+     oaknut::CodeGenerator code;
+ 
++    // Where the per-block bookkeeping below lives; rewound when the cache is dropped.
++    BlockArena block_arena;
++
+     // A IR::LocationDescriptor will have one current CodePtr.
+     // However, there can be multiple other CodePtrs which are older, previously invalidated blocks.
+     tsl::robin_map<IR::LocationDescriptor, CodePtr> block_entries;
+-    std::map<CodePtr, IR::LocationDescriptor> reverse_block_entries;
++    std::map<CodePtr, IR::LocationDescriptor, std::less<CodePtr>,
++             ArenaAllocator<std::pair<const CodePtr, IR::LocationDescriptor>>>
++        reverse_block_entries;
+     tsl::robin_map<CodePtr, EmittedBlockInfo> block_infos;
+-    tsl::robin_map<IR::LocationDescriptor, tsl::robin_set<CodePtr>> block_references;
++    tsl::robin_map<IR::LocationDescriptor,
++                   tsl::robin_set<CodePtr, std::hash<CodePtr>, std::equal_to<CodePtr>, ArenaAllocator<CodePtr>>>
++        block_references;
+ 
+     ExceptionHandler exception_handler;
+     FastmemManager fastmem_manager;
+diff --git a/src/dynarmic/backend/arm64/block_arena.h b/src/dynarmic/backend/arm64/block_arena.h
+new file mode 100644
+index 0000000..aa7c0d1
+--- /dev/null
++++ b/src/dynarmic/backend/arm64/block_arena.h
+@@ -0,0 +1,146 @@
++/* This file is part of the dynarmic project.
++ * SPDX-License-Identifier: 0BSD
++ */
++
++#pragma once
++
++#include <cstddef>
++#include <cstdlib>
++#include <functional>
++#include <new>
++#include <utility>
++#include <vector>
++
++namespace Dynarmic::Backend::Arm64 {
++
++/// Memory for the per-block bookkeeping of one address space (relocations, fastmem patch
++/// tables, back references), handed out by bumping a pointer and taken back all at once.
++///
++/// That bookkeeping is millions of small allocations by the time the code cache is full.
++/// Freeing them one by one when the cache is dropped took about 25 seconds on a Switch,
++/// with the guest frozen. From here they cost nothing to free: dropping the cache rewinds
++/// the arena. What a container outgrows is not reused until then.
++class BlockArena {
++public:
++    BlockArena() = default;
++    BlockArena(const BlockArena&) = delete;
++    BlockArena& operator=(const BlockArena&) = delete;
++    ~BlockArena() {
++        for (void* chunk : chunks) {
++            std::free(chunk);
++        }
++        for (void* block : large) {
++            std::free(block);
++        }
++    }
++
++    void* Allocate(std::size_t bytes, std::size_t align) {
++        if (bytes > CHUNK / 4) {
++            void* block = std::malloc(bytes);
++            if (block == nullptr) {
++                throw std::bad_alloc{};
++            }
++            large.push_back(block);
++            large_bytes += bytes;
++            return block;
++        }
++        offset = (offset + align - 1) & ~(align - 1);
++        if (current == chunks.size() || offset + bytes > CHUNK) {
++            if (current < chunks.size()) {
++                ++current;
++            }
++            if (current == chunks.size()) {
++                void* chunk = std::malloc(CHUNK);
++                if (chunk == nullptr) {
++                    throw std::bad_alloc{};
++                }
++                chunks.push_back(chunk);
++            }
++            offset = 0;
++        }
++        void* out = static_cast<char*>(chunks[current]) + offset;
++        offset += bytes;
++        return out;
++    }
++
++    /// Everything handed out is gone. The chunks are kept for the next round.
++    void Reset() {
++        for (void* block : large) {
++            std::free(block);
++        }
++        large.clear();
++        large_bytes = 0;
++        current = 0;
++        offset = 0;
++    }
++
++    std::size_t Used() const {
++        return current * CHUNK + offset + large_bytes;
++    }
++
++    /// The arena allocations on this thread go to, while one of these is alive.
++    class Scope {
++    public:
++        explicit Scope(BlockArena& arena) : previous{Current()} {
++            Current() = &arena;
++        }
++        ~Scope() {
++            Current() = previous;
++        }
++        Scope(const Scope&) = delete;
++        Scope& operator=(const Scope&) = delete;
++
++    private:
++        BlockArena* previous;
++    };
++
++    static BlockArena*& Current() {
++        static thread_local BlockArena* current_arena = nullptr;
++        return current_arena;
++    }
++
++private:
++    static constexpr std::size_t CHUNK = 1024 * 1024;
++
++    std::vector<void*> chunks;
++    std::vector<void*> large;
++    std::size_t large_bytes = 0;
++    std::size_t current = 0;
++    std::size_t offset = 0;
++};
++
++/// Allocates from the current thread's arena; frees nothing. Outside any arena's scope it
++/// falls back to the heap, and that memory is never returned (it does not happen in practice:
++/// every path that fills these containers runs inside a scope).
++template<typename T>
++struct ArenaAllocator {
++    using value_type = T;
++
++    ArenaAllocator() noexcept = default;
++    template<typename U>
++    ArenaAllocator(const ArenaAllocator<U>&) noexcept {}
++
++    T* allocate(std::size_t n) {
++        const std::size_t align = alignof(T) > alignof(std::max_align_t) ? alignof(T) : alignof(std::max_align_t);
++        if (BlockArena* arena = BlockArena::Current()) {
++            return static_cast<T*>(arena->Allocate(n * sizeof(T), align));
++        }
++        void* out = std::malloc(n * sizeof(T));
++        if (out == nullptr) {
++            throw std::bad_alloc{};
++        }
++        return static_cast<T*>(out);
++    }
++    void deallocate(T*, std::size_t) noexcept {}
++
++    template<typename U>
++    bool operator==(const ArenaAllocator<U>&) const noexcept {
++        return true;
++    }
++    template<typename U>
++    bool operator!=(const ArenaAllocator<U>&) const noexcept {
++        return false;
++    }
++};
++
++}  // namespace Dynarmic::Backend::Arm64
+diff --git a/src/dynarmic/backend/arm64/emit_arm64.h b/src/dynarmic/backend/arm64/emit_arm64.h
+index 58ccb0e..0977d5d 100644
+--- a/src/dynarmic/backend/arm64/emit_arm64.h
++++ b/src/dynarmic/backend/arm64/emit_arm64.h
+@@ -13,6 +13,8 @@
+ #include <mcl/stdint.hpp>
+ #include <tsl/robin_map.h>
+ 
++#include "dynarmic/backend/arm64/block_arena.h"
++
+ #include "dynarmic/backend/arm64/fastmem.h"
+ #include "dynarmic/interface/A32/coprocessor.h"
+ #include "dynarmic/interface/optimization_flags.h"
+@@ -98,12 +100,21 @@ struct BlockRelocation {
+     BlockRelocationType type;
+ };
+ 
++// The containers of a block's bookkeeping take their memory from the address space's arena
++// (block_arena.h): there are millions of them, and freeing them one by one froze the guest.
++using BlockRelocationList = std::vector<BlockRelocation, ArenaAllocator<BlockRelocation>>;
++
+ struct EmittedBlockInfo {
+     CodePtr entry_point;
+     size_t size;
+-    std::vector<Relocation> relocations;
+-    tsl::robin_map<IR::LocationDescriptor, std::vector<BlockRelocation>> block_relocations;
+-    tsl::robin_map<std::ptrdiff_t, FastmemPatchInfo> fastmem_patch_info;
++    std::vector<Relocation, ArenaAllocator<Relocation>> relocations;
++    tsl::robin_map<IR::LocationDescriptor, BlockRelocationList, std::hash<IR::LocationDescriptor>,
++                   std::equal_to<IR::LocationDescriptor>,
++                   ArenaAllocator<std::pair<IR::LocationDescriptor, BlockRelocationList>>>
++        block_relocations;
++    tsl::robin_map<std::ptrdiff_t, FastmemPatchInfo, std::hash<std::ptrdiff_t>, std::equal_to<std::ptrdiff_t>,
++                   ArenaAllocator<std::pair<std::ptrdiff_t, FastmemPatchInfo>>>
++        fastmem_patch_info;
+ };
+ 
+ struct EmitConfig {
+diff --git a/src/dynarmic/backend/block_range_information.cpp b/src/dynarmic/backend/block_range_information.cpp
+index 7ffd0af..0ea2fb6 100644
+--- a/src/dynarmic/backend/block_range_information.cpp
++++ b/src/dynarmic/backend/block_range_information.cpp
+@@ -15,11 +15,29 @@ namespace Dynarmic::Backend {
+ template<typename ProgramCounterType>
+ void BlockRangeInformation<ProgramCounterType>::AddRange(boost::icl::discrete_interval<ProgramCounterType> range, IR::LocationDescriptor location) {
+     block_ranges.add(std::make_pair(range, std::set<IR::LocationDescriptor>{location}));
++    Reap(32);
+ }
+ 
+ template<typename ProgramCounterType>
+ void BlockRangeInformation<ProgramCounterType>::ClearCache() {
+-    block_ranges.clear();
++    if (block_ranges.empty()) {
++        return;
++    }
++    dropped.emplace_back();
++    dropped.back().swap(block_ranges);
++}
++
++template<typename ProgramCounterType>
++void BlockRangeInformation<ProgramCounterType>::Reap(size_t intervals) {
++    while (intervals > 0 && !dropped.empty()) {
++        RangeMap& map = dropped.back();
++        if (map.empty()) {
++            dropped.pop_back();
++            continue;
++        }
++        map.erase(map.begin());
++        --intervals;
++    }
+ }
+ 
+ template<typename ProgramCounterType>
+diff --git a/src/dynarmic/backend/block_range_information.h b/src/dynarmic/backend/block_range_information.h
+index 3402b15..137bb13 100644
+--- a/src/dynarmic/backend/block_range_information.h
++++ b/src/dynarmic/backend/block_range_information.h
+@@ -5,7 +5,9 @@
+ 
+ #pragma once
+ 
++#include <cstddef>
+ #include <set>
++#include <vector>
+ 
+ #include <boost/icl/interval_map.hpp>
+ #include <boost/icl/interval_set.hpp>
+@@ -20,10 +22,16 @@ class BlockRangeInformation {
+ public:
+     void AddRange(boost::icl::discrete_interval<ProgramCounterType> range, IR::LocationDescriptor location);
+     void ClearCache();
++    /// Frees a little of what ClearCache set aside. Called as blocks are added.
++    void Reap(size_t intervals);
+     tsl::robin_set<IR::LocationDescriptor> InvalidateRanges(const boost::icl::interval_set<ProgramCounterType>& ranges);
+ 
+ private:
+-    boost::icl::interval_map<ProgramCounterType, std::set<IR::LocationDescriptor>> block_ranges;
++    using RangeMap = boost::icl::interval_map<ProgramCounterType, std::set<IR::LocationDescriptor>>;
++    RangeMap block_ranges;
++    // Maps of dropped caches. Freeing one outright is a few hundred thousand frees with
++    // the guest waiting; they are taken apart a few nodes at a time instead.
++    std::vector<RangeMap> dropped;
+ };
+ 
+ }  // namespace Dynarmic::Backend
