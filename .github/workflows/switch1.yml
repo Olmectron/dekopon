@@ -116,7 +116,7 @@ jobs:
       - name: Symbolize crash addresses
         if: always()
         run: |
-          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 bash -c '
+          docker run --rm --entrypoint bash -v "${{ github.workspace }}:/src" dekopon-switch2 -c '
             elf=$(find /src/build/switch1 -type f \( -name citra_switch.elf -o -name citra_switch \) | head -1)
             echo "ELF: $elf"
             tool=$(ls /opt/devkitpro/devkitA64/bin/aarch64-none-elf-addr2line)
