@@ -12,6 +12,18 @@ It is a continuation of [Dekopon](https://github.com/PalindromicBreadLoaf/dekopo
 PalindromicBreadLoaf, which is itself the Switch port of [Azahar](https://github.com/azahar-emu/azahar).
 Everything that makes games run is theirs; see [Credits](#credits).
 
+> [!CAUTION]
+> **Use it at your own risk.** Toronja and Toronja Link are unofficial homebrew, given as
+> they are and with no warranty of any kind. The authors are **not responsible** for any
+> damage or loss that comes from using them: to a console, an SD card, save data, an
+> account, or anything else, a ban included.
+
+> [!IMPORTANT]
+> **Much of this project was written with AI.** Most of the code, the documentation and
+> these notes that are new in Toronja were produced with heavy use of an AI assistant
+> (Claude), directed and tested by one person on two consoles. Expect mistakes that a
+> larger, human-reviewed project would have caught.
+
 > **Status.** This is homebrew under active development, built and tested by one person on
 > two consoles. Things marked *untested* below compile and are believed to work, and that is
 > all that is claimed for them.
