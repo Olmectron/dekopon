@@ -434,6 +434,10 @@ void NetworkThread() {
     u64 stat_bytes = 0, stat_encode_us = 0, stat_capture_us = 0;
     auto stat_start = Clock::now();
 
+    // With nobody connected there is nothing to pace: the thread then wakes twenty times a
+    // second to listen, not a thousand. On the first Switch those wake-ups were taking time
+    // from the game (three cores for everything).
+    int listen_ms = 50;
     while (s_running.load(std::memory_order_relaxed)) {
         if (usb) {
             bool any = false;
@@ -465,7 +469,7 @@ void NetworkThread() {
                 }
             }
         } else if (pollfd pfd{.fd = sock, .events = POLLIN, .revents = 0};
-                   poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN) != 0) {
+                   poll(&pfd, 1, listen_ms) > 0 && (pfd.revents & POLLIN) != 0) {
             sockaddr_in from{};
             socklen_t from_len = sizeof(from);
             const ssize_t got = recvfrom(sock, recv_buffer, sizeof(recv_buffer), 0,
@@ -486,6 +490,7 @@ void NetworkThread() {
                 target = s.client_addr;
                 audio = active && s.audio_wanted && s_audio_enabled.load();
             }
+            listen_ms = active ? 1 : 50;
             const auto send = [&](const u8* data, std::size_t size) {
                 if (usb) {
                     GameShareUsb::Send(data, size);
