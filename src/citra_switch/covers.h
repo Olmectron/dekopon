@@ -37,6 +37,9 @@ struct CoverArt {
 std::shared_ptr<const CoverArt> GetCover(const std::string& game_code, std::uint64_t program_id,
                                          int& budget);
 
+/// Whether there is a cover file for this game at all (it may not be loaded yet).
+bool HasCoverFile(const std::string& game_code, std::uint64_t program_id);
+
 /// Creates the covers folders and a readme saying what goes in them.
 void EnsureCoverFolders();
 

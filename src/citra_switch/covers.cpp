@@ -398,6 +398,14 @@ std::shared_ptr<const CoverArt> GetCover(const std::string& game_code, std::uint
     return art;
 }
 
+bool HasCoverFile(const std::string& game_code, std::uint64_t program_id) {
+    bool full = false;
+    if (!FindCoverFile(game_code, full).empty()) {
+        return true;
+    }
+    return program_id != 0 && !FindCoverFile(TitleIdText(program_id), full).empty();
+}
+
 void EnsureCoverFolders() {
     const std::string dir = CoversDir();
     mkdir(dir.c_str(), 0777);

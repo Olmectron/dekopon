@@ -14,8 +14,6 @@ set(HASH_FILES
     "${VIDEO_CORE}/renderer_vulkan/vk_shader_util.h"
     "${VIDEO_CORE}/renderer_vulkan/vk_shader_disk_cache.cpp"
     "${VIDEO_CORE}/renderer_vulkan/vk_shader_disk_cache.h"
-    "${VIDEO_CORE}/renderer_vulkan/vk_pipeline_cache.cpp"
-    "${VIDEO_CORE}/renderer_vulkan/vk_pipeline_cache.h"
     "${VIDEO_CORE}/shader/generator/glsl_fs_shader_gen.cpp"
     "${VIDEO_CORE}/shader/generator/glsl_fs_shader_gen.h"
     "${VIDEO_CORE}/shader/generator/glsl_shader_decompiler.cpp"

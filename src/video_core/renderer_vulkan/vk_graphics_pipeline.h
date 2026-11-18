@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include "common/hash.h"
 #include "common/thread_worker.h"
 #include "video_core/pica/regs_pipeline.h"
@@ -343,7 +345,16 @@ private:
     PipelineInfo info;
     std::array<Shader*, 3> stages;
     bool is_pending{};
+    // Whoever sets this builds the pipeline: the worker it was queued for, or the render
+    // thread once it has waited long enough (see TryBuild).
+    std::atomic_bool build_claimed{false};
+    std::chrono::steady_clock::time_point queued_at{};
 };
+
+/// Set while the pipeline cache is being torn down: builds still in the queue are
+/// dropped instead of run. Nothing will draw with them, and on Switch 1 a full queue
+/// took fifty seconds to empty when a game was closed.
+inline std::atomic_bool g_abandon_pipeline_builds{false};
 
 } // namespace Vulkan
 

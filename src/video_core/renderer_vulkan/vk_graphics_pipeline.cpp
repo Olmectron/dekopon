@@ -92,14 +92,39 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
     // The pipeline is currently being compiled. We can either wait for it
     // or skip the draw.
     if (is_pending) {
+#if defined(__SWITCH__) && !defined(__SWITCH2__)
+        // Switch 1 has one worker, at low priority on the audio core, and a pipeline can
+        // take it most of a second. After an update emptied the caches, Kirby: Planet
+        // Robobot queued them faster than that for minutes on end: tens of thousands of
+        // draws skipped every five seconds, a level with nothing in it but the sky. A
+        // draw that has waited this long builds its pipeline here instead - a hitch, but
+        // the picture is whole.
+        if (!wait_built && std::chrono::steady_clock::now() - queued_at >
+                               std::chrono::milliseconds{350}) {
+            const bool shaders_ready = std::none_of(
+                stages.begin(), stages.end(),
+                [](Shader* shader) { return shader && !shader->IsDone(); });
+            if (shaders_ready) {
+                if (!build_claimed.exchange(true)) {
+                    Build();
+                }
+                return true; // The caller waits for whoever is building it.
+            }
+        }
+#endif
         return wait_built;
     }
 
     const auto queue_build = [this] {
         VideoCore::NotifyShaderCompileBegin();
         is_pending = true;
+        build_claimed = false;
+        queued_at = std::chrono::steady_clock::now();
         worker->QueueWork([this] {
-            Build();
+            if (!g_abandon_pipeline_builds.load(std::memory_order_relaxed) &&
+                !build_claimed.exchange(true)) {
+                Build();
+            }
             VideoCore::NotifyShaderCompileEnd();
         });
     };

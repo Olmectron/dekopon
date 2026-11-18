@@ -903,13 +903,19 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
         0, // Switch 1: less memory to hold them and a slower card to read them from.
 #endif
         kCoverQualityNames);
-    t << Modal({"Download Covers Now",
-                "Fetches the box art that is missing, from GameTDB. Needs an internet "
-                "connection; what came of it is shown here and in the library."},
-               SettingsModal::DownloadCovers, [] {
+    t << Modal({"Download Missing Covers",
+                "Fetches box art from GameTDB for the games that have none. Covers "
+                "already on the card are left alone. Needs an internet connection; what "
+                "came of it is shown here and in the library."},
+               SettingsModal::DownloadMissingCovers, [] {
                    const std::string status = CoverDownloadStatus();
                    return status.empty() ? std::string{"Start"} : status;
                });
+    t << Modal({"Download All Covers Again",
+                "Fetches the box art for every game, replacing the covers already on the "
+                "card - after changing Cover Quality, or to pick up better art. Asks "
+                "before it overwrites anything."},
+               SettingsModal::DownloadCovers, [] { return std::string{"Start"}; });
 
     t.Group("Share Covers With Another Console");
     t << Modal({"Send Covers",

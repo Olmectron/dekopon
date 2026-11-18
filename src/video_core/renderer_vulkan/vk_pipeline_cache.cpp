@@ -241,7 +241,10 @@ void PipelineCache::BuildLayout() {
 }
 
 PipelineCache::~PipelineCache() {
+    // What is still queued will never be drawn with: drop it rather than build it.
+    g_abandon_pipeline_builds = true;
     WaitForCompileWorkers();
+    g_abandon_pipeline_builds = false;
     SaveDriverPipelineDiskCache();
 }
 

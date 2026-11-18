@@ -70,6 +70,7 @@ enum class SettingsModal {
     CheckForUpdates,
     ReleaseNotes,
     DownloadCovers,
+    DownloadMissingCovers,
     SendCovers,
     ReceiveCovers,
     Username,

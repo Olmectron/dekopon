@@ -1585,6 +1585,47 @@ private:
             shelf_spin_pitch = 0.0f;
         }
 
+        // Until the covers round the selected game are in memory the shelf waits, behind
+        // a bar: icons turning into covers one at a time looked like something going
+        // wrong. Fifteen seconds at most; a game with no cover file is not waited for.
+        if (covers_loading && (!IsCoversShown() || count == 0)) {
+            covers_loading = false;
+        }
+        if (covers_loading) {
+            int total = 0, ready = 0;
+            int load_budget = 1;
+            for (int i = std::max(0, selected - 6); i < count && i <= selected + 6; ++i) {
+                const GameEntry& game = games[filtered[i]];
+                if (!HasCoverFile(game.game_code, game.program_id)) {
+                    continue;
+                }
+                ++total;
+                const int before = load_budget;
+                const auto art = GetCover(game.game_code, game.program_id, load_budget);
+                // Loaded, or tried before and unreadable: either way no longer awaited.
+                if (art || (load_budget == before && before > 0)) {
+                    ++ready;
+                }
+            }
+            const float waited = UiTime() - covers_loading_since;
+            if (ready >= total || waited > 15.0f || waited < 0.0f) {
+                covers_loading = false;
+            } else {
+                FillGradientV(c, 0, 0, g_screen_w, g_screen_h, kColShelfTop, kColShelfHorizon);
+                g_font.Draw(c, 28, 40, "Toronja", 24, kColText);
+                const std::string text = "Loading covers  " + std::to_string(ready) + " / " +
+                                         std::to_string(total);
+                g_font.Draw(c, (g_screen_w - g_font.Measure(text, 22)) / 2, g_screen_h / 2 - 22,
+                            text, 22, kColText);
+                const int bar_w = std::min(460, g_screen_w - 120);
+                const int bar_x = (g_screen_w - bar_w) / 2, bar_y = g_screen_h / 2 + 4;
+                c.FillRoundRect(bar_x, bar_y, bar_w, 12, 6, kColSurfaceHi);
+                c.FillRoundRect(bar_x, bar_y, std::max(12, bar_w * ready / std::max(1, total)), 12,
+                                6, kColAccent);
+                return;
+            }
+        }
+
         frame_covers.clear();
         int budget = 1; // At most one cover decoded per frame.
         const auto get = [&](int i) {
@@ -1733,6 +1774,8 @@ private:
     bool cover_download_seen{}; // A cover download was running the last time we looked.
     int cover_share_serial{};   // The last cover transfer news that was shown.
     bool settings_adjusting{};  // A number has been taken hold of: left and right change it.
+    bool covers_loading{};      // The library waits for its first covers behind a bar.
+    float covers_loading_since{};
     bool usb_volume_seen{};     // A USB drive has been mounted during this run.
     std::vector<SettingsRow> settings_rows;
     // Kept per page so switching back lands where the cursor was left.
@@ -1854,6 +1897,8 @@ private:
         EnsureCoverFolders();
         ResetCoverCache();
         RequestCovers();
+        covers_loading = true;
+        covers_loading_since = UiTime();
     }
 
     // A drive appearing or leaving changes what the second ROM folder holds, and the library has
@@ -3040,17 +3085,17 @@ private:
         const int missing = CountCoversMissing(requests);
         const int stored = CoverStoredQuality();
         const bool other_quality = stored >= 0 && stored != GetCoverQuality();
-        if (present == 0 || (missing > 0 && !other_quality)) {
-            RequestCovers(true);
+        if (present == 0) {
+            RequestCovers(true); // Nothing to overwrite: it is the same as the other button.
             return;
         }
         const char* quality = GetCoverQuality() != 0 ? "High" : "Standard";
         ConfirmPrompt prompt{
-            "Download the covers again?",
+            "Download all the covers again?",
             {other_quality ? std::string{"The covers on the card were downloaded in "} +
                                  (stored != 0 ? "High" : "Standard") + " quality; the setting is now " +
                                  quality + "."
-                           : std::string{"Every game already has a cover."},
+                           : std::string{"This fetches every cover, not only the missing ones."},
              std::to_string(present) + (present == 1 ? " cover" : " covers") +
                  " on the card will be overwritten with " + quality + " quality ones.",
              "Covers GameTDB does not have are left as they are."},
@@ -3059,10 +3104,7 @@ private:
             [this] { RequestCovers(true, true); },
             {},
         };
-        if (missing > 0) {
-            prompt.on_cancel = [this] { RequestCovers(true); };
-            prompt.cancel_label = "Only the missing";
-        }
+        (void)missing;
         confirm = std::move(prompt);
     }
 
@@ -3134,6 +3176,13 @@ private:
             break;
         case SettingsModal::ReleaseNotes:
             OpenReleaseNotes();
+            break;
+        case SettingsModal::DownloadMissingCovers:
+            if (IsCoverDownloadActive()) {
+                ShowNotice("Covers are already being downloaded", false);
+            } else {
+                RequestCovers(true);
+            }
             break;
         case SettingsModal::DownloadCovers:
             if (IsCoverDownloadActive()) {
