@@ -1216,6 +1216,12 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
         return QuickMenuAction::None;
     }
 
+    if (nav.cancel && s_adjusting) {
+        // B lets go of a number before it does anything else.
+        s_adjusting = false;
+        Repaint();
+        return QuickMenuAction::None;
+    }
     if (nav.cancel) {
         s_overwrite_armed = false;
         if (CurrentPage() != Page::Home && !s_side_focus) {

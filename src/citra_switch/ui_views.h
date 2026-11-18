@@ -209,7 +209,7 @@ inline void BlitQuad(Canvas& c, const Image& img, const Quad& q, float u0, float
 // ---------------------------------------------------------------------------------------------
 // Icons, drawn from primitives so they scale and need no assets.
 
-enum class Icon { Gear, Power, Search, Flip, Shelf, Info, Refresh, Back, Warning, Check };
+enum class Icon { Gear, Power, Search, Flip, Shelf, Info, Refresh, Back, Warning, Check, Link };
 
 inline void DrawIcon(Canvas& c, Icon icon, float cx, float cy, float size, u32 color) {
     const float r = size / 2;
@@ -282,6 +282,24 @@ inline void DrawIcon(Canvas& c, Icon icon, float cx, float cy, float size, u32 c
         StrokeLine(c, cx - r * 0.18f, cy + r * 0.55f, cx + r * 0.78f, cy - r * 0.50f, w * 1.2f,
                    color);
         break;
+    case Icon::Link: {
+        // A signal: a dot and two arcs fanning up from it.
+        const float by = cy + r * 0.62f;
+        FillDisc(c, cx, by, w * 1.1f, color);
+        for (const float radius : {r * 0.62f, r * 1.12f}) {
+            float px = 0.0f, py = 0.0f;
+            for (int i = 0; i <= 10; ++i) {
+                const float a = -2.36f + i * 0.157f; // 45 degrees either side of straight up
+                const float x = cx + std::cos(a) * radius, y = by + std::sin(a) * radius;
+                if (i > 0) {
+                    StrokeLine(c, px, py, x, y, w * 1.1f, color);
+                }
+                px = x;
+                py = y;
+            }
+        }
+        break;
+    }
     }
 }
 
@@ -1454,6 +1472,7 @@ struct HomeView {
     float look_scale{1.0f};     // Forward: nearer or farther, and the view moved.
     float look_x{}, look_y{};
     bool forward{};             // A case is forward: A starts it, B puts it back.
+    int link_state{};           // Toronja Link: 0 off, 1 waiting, 2 connected, 3 failed.
 };
 
 /// One pill of the bar, with where it ended up (for touch).
@@ -1465,6 +1484,7 @@ struct HomePill {
 /// Where the touchable parts of the home screen ended up.
 struct HomeLayout {
     int options_cx{}, options_cy{};
+    int link_cx{}, link_cy{}; // Toronja Link, beside the options.
     int exit_cx{}, exit_cy{};
     int button_radius{};
     int prev_x{}, next_x{}, arrows_y{}, arrow_radius{}; // The two arrows beside the title.
@@ -1479,6 +1499,8 @@ inline HomeLayout LayoutHome(int screen_w, int screen_h) {
     l.options_cx = 26 + l.button_radius;
     l.exit_cx = screen_w - 26 - l.button_radius;
     l.options_cy = l.exit_cy = screen_h - 22 - l.button_radius;
+    l.link_cx = l.options_cx + 2 * l.button_radius + 18;
+    l.link_cy = l.options_cy;
     l.shelf_x = 0;
     l.shelf_y = 58;
     l.shelf_w = screen_w;
@@ -1562,6 +1584,14 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
 
     // The bar: round buttons in the corners, actions in the middle.
     DrawRoundButton(c, font, Icon::Gear, l.options_cx, l.options_cy, l.button_radius, "-", false);
+    DrawRoundButton(c, font, Icon::Link, l.link_cx, l.link_cy, l.button_radius, "RS",
+                    v.link_state == 2);
+    if (v.link_state == 1) {
+        // Waiting for the other console: a dot that breathes.
+        const float pulse = 0.5f + 0.5f * std::sin(v.time * 4.0f);
+        FillDisc(c, l.link_cx + l.button_radius * 0.72f, l.link_cy + l.button_radius * 0.72f,
+                 6.0f + 2.0f * pulse, kColAccent);
+    }
     DrawRoundButton(c, font, Icon::Power, l.exit_cx, l.exit_cy, l.button_radius, "", false);
     struct Pill {
         const char* hint;

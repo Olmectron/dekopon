@@ -28,14 +28,20 @@ struct InputState;
 //                                 u16 width, u16 height, u8 screen, then up to 1200 bytes of JPEG
 //   4 WELCOME host -> receiver   u16 width, u16 height, u8 screen   (answer to HELLO)
 //   5 COMMAND receiver -> host   u8 what, u8 value: 1 = screen the host shows (0 its own
-//                                 layout, 1 top only, 2 bottom only), 2 = host FPS counter
+//                                 layout, 1 top only, 2 bottom only), 2 = host FPS counter,
+//                                 3 = open or close the host's in-game menu
 //   6 AUDIO   host -> receiver   u32 seq, u16 frames, then s16 stereo PCM at 32728 Hz
 //   7 STATUS  host -> receiver   u8 flags (1 game wants an Amiibo, 2 sound is being sent,
-//                                 4 host FPS counter on, 8 host allows sound), u8 host screen,
+//                                 4 host FPS counter on, 8 host allows sound, 16 no game is
+//                                 running: the library is on screen), u8 host screen,
 //                                 u8 the game's frames per second
 //   8 AMIIBO  receiver -> host   libnx NfpData (0x298), UID (7), u16 character, u8 variant,
 //                                 u8 type, u16 model, u8 series
-// HELLO: u8 screen (0 top, 1 bottom, 2 both: top above bottom in 400 x 480), u8 quality,
+// While no game runs the host sends its companion screen instead (screen 3, 640 x 480): a
+// picture it draws for the receiver - the games as a grid, the option in focus - and the
+// receiver's touches come back in the same 320 x 240 units as on the bottom screen.
+// HELLO: u8 screen (0 top, 1 bottom, 2 both: top above bottom in 400 x 480, 3 companion),
+//        u8 quality,
 //        u8 frames per second, then optionally u8 flags (1 = send the sound too)
 namespace SwitchFrontend {
 struct AmiiboCapture;
@@ -71,6 +77,29 @@ void SetAmiiboWanted(bool wanted);
 
 /// An Amiibo the receiver read and sent over, if one arrived since the last call.
 bool TakeRemoteAmiibo(AmiiboCapture& out);
+
+/// Sharing from the library, before any game is started: the same link, kept across games
+/// until StopLobby. Turns the GameShare option on, as starting a game would need it.
+void StartLobby();
+void StopLobby();
+bool IsLobbyOn();
+/// 0 off, 1 waiting for a receiver, 2 a receiver is connected, 3 could not start (no
+/// local wireless, no socket).
+int LinkState();
+/// The library's companion picture. Due says the receiver is ready for another; Submit
+/// takes it (pixels as the launcher's canvas has them, 0xAABBGGRR).
+bool LobbyFrameDue();
+void SubmitLobbyFrame(const unsigned int* pixels, int width, int height);
+/// What the receiver's pad is doing, for menus on this console. False when there is none.
+struct RemotePad {
+    unsigned int buttons{}; // bit = SwitchFrontend::InputButton
+    short stick_x{}, stick_y{}, right_x{}, right_y{};
+    bool touching{};
+    int touch_x{}, touch_y{}; // 0..319, 0..239
+};
+bool GetRemotePad(RemotePad& out);
+/// The receiver asked for the in-game menu (its + and - together), once per request.
+bool TakeMenuRequest();
 
 /// Starts listening for a receiver. Safe to call again while running.
 void Start();

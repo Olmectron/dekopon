@@ -122,6 +122,10 @@ std::atomic<bool> s_audio_enabled{true};
 std::atomic<int> s_pending_layout{-1};
 std::atomic<int> s_pending_fps{-1};
 std::atomic<int> s_host_layout{0}; // What the receiver last asked this console to show.
+std::atomic<bool> s_lobby{false};        // The library is on screen: no game to capture.
+std::atomic<bool> s_lobby_wanted{false}; // Sharing was started from the library: keep the link.
+std::atomic<bool> s_link_failed{false};  // The thread gave up (no local wireless, no socket).
+std::atomic<bool> s_menu_request{false}; // The receiver asked for the in-game menu.
 
 // Whether the game is looking for an Amiibo (set by the Amiibo session), so the
 // receiver can offer its own NFC reader.
@@ -169,11 +173,17 @@ void WriteU32(u8* p, u32 v) {
 }
 
 u32 ScreenWidth(u8 screen) {
+    if (screen == 3) {
+        return 640;
+    }
     return screen == 1 ? 320 : 400;
 }
 // Both screens are sent as the 3DS has them: the top one above, the bottom one centred
 // under it, in a 400 x 480 picture.
 u32 ScreenHeight(u8 screen) {
+    if (screen == 3) {
+        return 480;
+    }
     return screen == 2 ? 480 : 240;
 }
 
@@ -235,7 +245,7 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
                      s.client_addr.sin_port != from.sin_port;
             s.client_active = true;
             s.client_addr = from;
-            s.screen = body[0] <= 2 ? body[0] : 1;
+            s.screen = body[0] <= 3 ? body[0] : 1;
             s.audio_wanted = body_size >= 4 && (body[3] & 1) != 0;
             s.quality = body[1];
             s.max_fps = std::clamp<u8>(body[2], 5, 60);
@@ -310,6 +320,8 @@ void HandlePacket(int sock, const u8* data, std::size_t size, const sockaddr_in&
             s_pending_layout.store(body[1]);
         } else if (body[0] == 2) {
             s_pending_fps.store(body[1] != 0 ? 1 : 0);
+        } else if (body[0] == 3) {
+            s_menu_request.store(true);
         }
     } else if (type == PacketType::Amiibo) {
         // An Amiibo read by the receiver's NFC reader: libnx NfpData, then the UID and
@@ -343,6 +355,7 @@ void NetworkThread() {
     }
     if (s_mode.load() == static_cast<int>(Mode::LocalWireless) && !local_wireless) {
         LOG_ERROR(Frontend, "GameShare: local wireless is not available; not sharing");
+        s_link_failed.store(true);
         return;
     }
 
@@ -361,6 +374,7 @@ void NetworkThread() {
     const int sock = usb ? -1 : socket(AF_INET, SOCK_DGRAM, 0);
     if (!usb && sock < 0) {
         LOG_ERROR(Frontend, "GameShare: could not create the socket");
+        s_link_failed.store(true);
         return;
     }
     sockaddr_in addr{};
@@ -489,10 +503,13 @@ void NetworkThread() {
                 out[HEADER] = static_cast<u8>((s_amiibo_wanted.load() ? 1 : 0) |
                                               (audio ? 2 : 0) |
                                               (Settings::values.show_fps.GetValue() ? 4 : 0) |
-                                              (s_audio_enabled.load() ? 8 : 0));
+                                              (s_audio_enabled.load() ? 8 : 0) |
+                                              (s_lobby.load() ? 16 : 0));
                 out[HEADER + 1] = static_cast<u8>(s_host_layout.load());
                 // The game's frame rate, for the receiver to show beside the picture.
-                const double game_fps = Core::System::GetInstance().GetLastPerfStats().game_fps;
+                const double game_fps =
+                    s_lobby.load() ? 0.0
+                                   : Core::System::GetInstance().GetLastPerfStats().game_fps;
                 out[HEADER + 2] = static_cast<u8>(std::clamp(game_fps + 0.5, 0.0, 255.0));
                 send(out, sizeof(out));
             }
@@ -680,12 +697,17 @@ void SetMode(int mode) {
 
 void Start() {
     s_session.store(true);
+    s_lobby.store(false);
     if (!s_enabled.load()) {
         return;
     }
     if (s_running.exchange(true)) {
         return;
     }
+    if (s_thread.joinable()) {
+        s_thread.join(); // One that gave up earlier.
+    }
+    s_link_failed.store(false);
     {
         std::lock_guard lock{s.mutex};
         s.client_active = false;
@@ -696,8 +718,106 @@ void Start() {
     s_thread = std::thread{NetworkThread};
 }
 
+void StartLobby() {
+    s_lobby_wanted.store(true);
+    s_enabled.store(true);
+    if (s_link_failed.load()) {
+        // The last attempt gave up; this is a new one.
+        s_running.store(false);
+    }
+    Start();
+    s_session.store(false);
+    s_lobby.store(true);
+}
+
+void StopLobby() {
+    s_lobby_wanted.store(false);
+    s_lobby.store(false);
+    s_enabled.store(false);
+    Stop();
+}
+
+bool IsLobbyOn() {
+    return s_lobby_wanted.load();
+}
+
+int LinkState() {
+    if (!s_running.load()) {
+        return 0;
+    }
+    if (s_link_failed.load()) {
+        return 3;
+    }
+    std::lock_guard lock{s.mutex};
+    return s.client_active ? 2 : 1;
+}
+
+bool LobbyFrameDue() {
+    if (!s_running.load(std::memory_order_relaxed) || !s_lobby.load()) {
+        return false;
+    }
+    std::lock_guard lock{s.mutex};
+    if (!s.client_active || s.frame_ready || s.screen != 3) {
+        return false;
+    }
+    // Menus do not need a game's frame rate, and a still one costs the link nothing.
+    return Clock::now() - s.last_capture >= std::chrono::milliseconds{66};
+}
+
+void SubmitLobbyFrame(const unsigned int* pixels, int width, int height) {
+    std::lock_guard lock{s.mutex};
+    const std::size_t count = static_cast<std::size_t>(width) * height;
+    s.ready.resize(count * 4);
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned int p = pixels[i]; // 0xAABBGGRR -> B G R A
+        s.ready[i * 4 + 0] = static_cast<u8>(p >> 16);
+        s.ready[i * 4 + 1] = static_cast<u8>(p >> 8);
+        s.ready[i * 4 + 2] = static_cast<u8>(p);
+        s.ready[i * 4 + 3] = 0xFF;
+    }
+    s.ready_width = static_cast<u32>(width);
+    s.ready_height = static_cast<u32>(height);
+    s.ready_screen = 3;
+    s.capture_micros = 0;
+    s.last_capture = Clock::now();
+    s.frame_ready = true;
+}
+
+bool GetRemotePad(RemotePad& out) {
+    if (!s_running.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    std::lock_guard lock{s.mutex};
+    if (!s.client_active || Clock::now() - s.input.when > INPUT_TIMEOUT) {
+        return false;
+    }
+    out.buttons = s.input.buttons;
+    out.stick_x = s.input.stick_x;
+    out.stick_y = s.input.stick_y;
+    out.right_x = s.input.right_x;
+    out.right_y = s.input.right_y;
+    out.touching = s.input.touching;
+    out.touch_x = s.input.touch_x;
+    out.touch_y = s.input.touch_y;
+    return true;
+}
+
+bool TakeMenuRequest() {
+    return s_menu_request.exchange(false);
+}
+
 void Stop() {
     s_session.store(false);
+    if (s_lobby_wanted.load()) {
+        // The link was made from the library: the game ending hands it back there.
+        s_lobby.store(true);
+        s_pending_layout.store(-1);
+        s_host_layout.store(0);
+        std::lock_guard lock{s.mutex};
+        s.capture_pending = false;
+        s.frame_ready = false;
+        return;
+    }
     if (!s_running.exchange(false)) {
         return;
     }
@@ -730,7 +850,7 @@ void Tick(Core::System& system) {
         if (now - s.last_capture < interval - interval / 4) {
             return;
         }
-        screen = s.screen;
+        screen = s.screen == 3 ? 1 : s.screen;
         s.capture_pending = true;
         s.capture_requested = now;
         s.last_capture = now;
@@ -773,7 +893,7 @@ void Tick(Core::System& system) {
 }
 
 void MergeRemoteInput(InputState& state) {
-    if (!s_running.load(std::memory_order_relaxed)) {
+    if (!s_running.load(std::memory_order_relaxed) || s_lobby.load()) {
         return;
     }
     // What the receiver asked this console to do.

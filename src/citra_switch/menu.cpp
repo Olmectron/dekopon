@@ -901,7 +901,7 @@ public:
             padUpdate(&pad);
             ApplyRotation();
             // A tap on a dialog counts as the button it stands for.
-            const u64 down = padGetButtonsDown(&pad) | ModalTap();
+            u64 down = padGetButtonsDown(&pad) | ModalTap();
             held = padGetButtons(&pad);
             stick_right = padGetStickPos(&pad, 1);
             stick_left = padGetStickPos(&pad, 0);
@@ -927,7 +927,9 @@ public:
                 return {MenuAction::Exit, {}};
             }
 
-            const HidAnalogStickState ls = padGetStickPos(&pad, 0);
+            HidAnalogStickState ls = padGetStickPos(&pad, 0);
+            down |= PollRemote(ls);
+            WatchLink();
             constexpr int dz = 12000;
             // Rotated separately so that the split below stays in menu space: under a rotated menu
             // a physical stick left is a menu up, and that still has to move the cursor.
@@ -981,6 +983,8 @@ public:
                 // The worker is pumped above and its modal is drawn below.
             } else if (install_active) {
                 PumpInstall();
+            } else if (link_open) {
+                HandleLink(down, nav);
             } else if (confirm) {
                 HandleConfirm(down);
             } else if (preset_picker_open) {
@@ -1030,7 +1034,7 @@ public:
             if (!install_active && !update_download_active && !update_installed &&
                 !UpdateModalOpen() && !info_card && !details_open && !saves_open &&
                 !layout_picker_open && !remap_open && !preset_picker_open && !country_picker_open &&
-                !confirm && !PerGameOpen() && !info_sheet_open) {
+                !confirm && !PerGameOpen() && !info_sheet_open && !link_open) {
                 HandleTouch();
             }
             if (exit_requested) {
@@ -1047,6 +1051,7 @@ public:
                 OpenShareNotice(path);
             }
 
+            UpdateCompanion();
             Draw();
             Present();
             if (g_notice_frames > 0) {
@@ -1127,7 +1132,7 @@ private:
     bool share_ack = false;
 
     bool NeedsShareNotice() const {
-        return GameShare::IsEnabled() && !share_ack;
+        return GameShare::IsEnabled() && !share_ack && !GameShare::IsLobbyOn();
     }
 
     void OpenShareNotice(const std::string& path) {
@@ -1337,6 +1342,9 @@ private:
             ApplyFilter();
             shelf_back = false;
         }
+        if (down & HidNpadButton_StickR) {
+            OpenLink();
+        }
         if (down & HidNpadButton_StickL) {
             ShowBusy("Refreshing library…");
             search.clear();
@@ -1395,7 +1403,7 @@ private:
     // The buttons a tap stands for while something is open over the page. Lists inside
     // pickers are still pad-only.
     u64 ModalTap() {
-        const bool modal = info_sheet_open || info_card || confirm || details_open;
+        const bool modal = info_sheet_open || info_card || confirm || details_open || link_open;
         if (!modal) {
             return 0;
         }
@@ -1405,6 +1413,18 @@ private:
         }
         if (info_sheet_open) {
             return HidNpadButton_B; // Anywhere closes it.
+        }
+        if (link_open && !confirm && !info_card) {
+            for (int i = 0; i < 2; ++i) {
+                if (link_option_rect[i].Contains(tx, ty)) {
+                    link_sel = i;
+                    return HidNpadButton_A;
+                }
+            }
+            if (link_accept_rect.Contains(tx, ty)) {
+                return HidNpadButton_A;
+            }
+            return link_cancel_rect.Contains(tx, ty) ? HidNpadButton_B : 0;
         }
         if (info_card) {
             const int last = static_cast<int>(info_card->pages.size()) - 1;
@@ -1484,7 +1504,9 @@ private:
             }
             return;
         }
-        if (within(l.options_cx, l.options_cy, l.button_radius)) {
+        if (within(l.link_cx, l.link_cy, l.button_radius)) {
+            OpenLink();
+        } else if (within(l.options_cx, l.options_cy, l.button_radius)) {
             OpenOptions();
         } else if (within(l.exit_cx, l.exit_cy, l.button_radius)) {
             confirm = ConfirmPrompt{"Close Toronja?", {"Returns to the Homebrew Menu."}, "",
@@ -1610,6 +1632,7 @@ private:
         view.spin_yaw = shelf_spin_yaw;
         view.spin_pitch = shelf_spin_pitch;
         view.forward = shelf_forward;
+        view.link_state = GameShare::LinkState();
         view.look_scale = shelf_look_scale;
         view.look_x = shelf_look_x;
         view.look_y = shelf_look_y;
@@ -2400,6 +2423,613 @@ private:
                 return;
             }
         }
+    }
+
+    // ------------------------------------------------------------ Toronja Link from the library
+    //
+    // The link to the other console can be made here, before any game: the receiver then
+    // works these menus with its buttons and sticks, and shows a companion screen this
+    // console draws for it - the games as a grid of icons, a large Play button once one is
+    // picked, and in the options what the row in focus does and every value it can take.
+
+    enum class CompKind {
+        Game,
+        Play,
+        Back,
+        Flip,
+        GridSmaller,
+        GridLarger,
+        PagePrev,
+        PageNext,
+        Choose,
+        StepDown,
+        StepUp,
+        PressA,
+    };
+    struct CompHit {
+        int x{}, y{}, w{}, h{};
+        CompKind kind{};
+        int value{};
+        bool Contains(int px, int py) const {
+            return px >= x && px < x + w && py >= y && py < y + h;
+        }
+    };
+
+    bool link_open = false;
+    int link_sel = 0;        // 0 direct wireless (the default), 1 the network the console is on.
+    int link_seen_state = 0; // To notice a receiver arriving or leaving.
+    TapRect link_option_rect[2]{};
+    TapRect link_accept_rect{};
+    TapRect link_cancel_rect{};
+    u64 remote_prev = 0;
+    Canvas companion;
+    std::vector<CompHit> comp_hits;
+    int comp_rows = 3;
+    int comp_first_col = 0;
+    int comp_cols_visible = 1;
+    int comp_seen_selected = -1;
+    bool comp_grid_shown = false;
+    bool comp_touching = false;
+    bool comp_has_press = false;
+    CompHit comp_press{};
+    int comp_down_x = 0, comp_last_x = 0, comp_last_y = 0;
+    u32 comp_hash = 0;
+    float comp_sent_at = 0.0f;
+
+    void OpenLink() {
+        link_open = true;
+        link_sel = 0; // Direct wireless every time; the network is the one to ask for.
+    }
+
+    // A dialog or panel that takes the buttons: the companion screen stands aside for it.
+    bool DialogOpen() const {
+        return info_sheet_open || info_card || update_installed || update_download_active ||
+               install_active || confirm || preset_picker_open || country_picker_open ||
+               layout_picker_open || remap_open || saves_open || details_open || link_open;
+    }
+
+    void HandleLink(u64 down, u32 nav) {
+        const int state = GameShare::LinkState();
+        if (state == 0 || state == 3) {
+            if (nav & (DirUp | DirDown)) {
+                link_sel = 1 - link_sel;
+            }
+            if (down & HidNpadButton_A) {
+                if (state == 3) {
+                    GameShare::StopLobby();
+                }
+                GameShare::SetMode(static_cast<int>(link_sel == 0 ? GameShare::Mode::LocalWireless
+                                                                  : GameShare::Mode::Network));
+                GameShare::StartLobby();
+                settings_dirty = true; // GameShare is on now, in that mode: the options say so.
+            } else if (down & HidNpadButton_B) {
+                if (state == 3) {
+                    GameShare::StopLobby();
+                    settings_dirty = true;
+                }
+                link_open = false;
+            }
+            return;
+        }
+        if (state == 1) {
+            // Waiting. Leaving this window gives up: nothing stays on unseen.
+            if (down & (HidNpadButton_A | HidNpadButton_B)) {
+                GameShare::StopLobby();
+                settings_dirty = true;
+                link_open = false;
+            }
+            return;
+        }
+        // Connected: A turns it off, B just closes the window.
+        if (down & HidNpadButton_A) {
+            GameShare::StopLobby();
+            settings_dirty = true;
+            link_open = false;
+            ShowNotice("Toronja Link turned off", false);
+        } else if (down & HidNpadButton_B) {
+            link_open = false;
+        }
+    }
+
+    // A receiver arriving or leaving is said out loud, and arriving closes the wait.
+    void WatchLink() {
+        const int state = GameShare::LinkState();
+        if (state == link_seen_state) {
+            return;
+        }
+        if (state == 2) {
+            ShowNotice("Toronja Link connected", false);
+            link_open = false;
+        } else if (link_seen_state == 2 && state == 1) {
+            ShowNotice("Toronja Link disconnected: waiting for it again", false);
+        }
+        link_seen_state = state;
+    }
+
+    void DrawLink(Canvas& c) {
+        const int state = GameShare::LinkState();
+        const bool choosing = state == 0 || state == 3;
+        const int w = std::min(680, g_screen_w - 48);
+        const int h = choosing ? 372 : 268;
+        const int x = (g_screen_w - w) / 2;
+        const int y = (g_screen_h - h) / 2;
+        c.FillRect(0, 0, g_screen_w, g_screen_h, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+        g_font.Draw(c, x + 24, y + 46, "Toronja Link", 24, kColText);
+        link_option_rect[0] = link_option_rect[1] = {};
+        int hint_y = y + h - 46;
+        const char* accept = "Connect";
+        const char* cancel = "Close";
+        if (choosing) {
+            g_font.Draw(c, x + 24, y + 76,
+                        state == 3 ? "That connection could not be started here. Choose again:"
+                                   : "Play from another console running Toronja Link. Choose how:",
+                        17, state == 3 ? kColError : kColTextDim);
+            const char* const title[2] = {"Direct wireless", "Local network (Wi-Fi / LAN)"};
+            const char* const text[2] = {
+                "Console to console, no router. This console's Wi-Fi drops meanwhile.",
+                "Both consoles on the same network. Needs one, and adds its delay."};
+            for (int i = 0; i < 2; ++i) {
+                const int ry = y + 98 + i * 96;
+                const bool on = link_sel == i;
+                c.FillRoundRect(x + 20, ry, w - 40, 84, 12, on ? kColAccent : kColSurfaceHi);
+                const u32 fg = on ? kColOnAccent : kColText;
+                g_font.Draw(c, x + 40, ry + 36, title[i], 21, fg);
+                g_font.Draw(c, x + 40, ry + 64, g_font.Truncate(text[i], 16, w - 80), 16,
+                            on ? kColOnAccent : kColTextDim);
+                link_option_rect[i] = {x + 20, ry, w - 40, 84};
+            }
+        } else if (state == 1) {
+            const bool wireless =
+                GameShare::GetMode() == static_cast<int>(GameShare::Mode::LocalWireless);
+            g_font.Draw(c, x + 24, y + 84,
+                        wireless ? "Waiting for the other console (direct wireless)..."
+                                 : "Waiting for the other console (local network)...",
+                        20, kColText);
+            g_font.Draw(c, x + 24, y + 116, "Open Toronja Link on it and choose the same kind of", 17,
+                        kColTextDim);
+            g_font.Draw(c, x + 24, y + 140, "connection. This window closes when it arrives.", 17,
+                        kColTextDim);
+            g_font.Draw(c, x + 24, y + 172, "Closing it turns the connection off.", 17, kColAccent);
+            accept = "Turn off";
+            cancel = "Turn off and close";
+        } else {
+            g_font.Draw(c, x + 24, y + 84, "Connected.", 20, kColText);
+            g_font.Draw(c, x + 24, y + 116, "The other console works these menus and shows the games.",
+                        17, kColTextDim);
+            g_font.Draw(c, x + 24, y + 140, "It stays connected when a game starts and when it ends.",
+                        17, kColTextDim);
+            accept = "Turn off";
+        }
+        int hx = x + 24;
+        const int accept_w = DrawHint(c, hx, hint_y, "A", accept);
+        link_accept_rect = {hx - 12, hint_y - 14, accept_w + 24, 54};
+        hx += accept_w + 22;
+        const int cancel_w = DrawHint(c, hx, hint_y, "B", cancel);
+        link_cancel_rect = {hx - 10, hint_y - 14, cancel_w + 24, 54};
+    }
+
+    // The receiver's pad: its buttons join this console's, its sticks stand in for these
+    // when they are at rest, and its touches go to the companion screen. Returns what it
+    // has newly pressed.
+    u64 PollRemote(HidAnalogStickState& left) {
+        GameShare::RemotePad remote;
+        if (!GameShare::IsLobbyOn() || !GameShare::GetRemotePad(remote)) {
+            remote_prev = 0;
+            if (comp_touching) {
+                CompanionTouch(false, 0, 0);
+            }
+            return 0;
+        }
+        // Not its + and -: together those close Toronja here.
+        static constexpr u64 map[16] = {
+            HidNpadButton_A,    HidNpadButton_B,    HidNpadButton_X,     HidNpadButton_Y,
+            HidNpadButton_Up,   HidNpadButton_Down, HidNpadButton_Left,  HidNpadButton_Right,
+            HidNpadButton_L,    HidNpadButton_R,    0,                   0,
+            HidNpadButton_ZL,   HidNpadButton_ZR,   HidNpadButton_StickL, HidNpadButton_StickR};
+        u64 now = 0;
+        for (int bit = 0; bit < 16; ++bit) {
+            if (remote.buttons & (1u << bit)) {
+                now |= map[bit];
+            }
+        }
+        const u64 pressed = now & ~remote_prev;
+        remote_prev = now;
+        held |= now;
+        constexpr int rest = 9000;
+        if (std::abs(left.x) < rest && std::abs(left.y) < rest) {
+            left.x = remote.stick_x;
+            left.y = remote.stick_y;
+        }
+        if (std::abs(stick_left.x) < rest && std::abs(stick_left.y) < rest) {
+            stick_left.x = remote.stick_x;
+            stick_left.y = remote.stick_y;
+        }
+        if (std::abs(stick_right.x) < rest && std::abs(stick_right.y) < rest) {
+            stick_right.x = remote.right_x;
+            stick_right.y = remote.right_y;
+        }
+        CompanionTouch(remote.touching, remote.touch_x * 2, remote.touch_y * 2);
+        return pressed;
+    }
+
+    void CompanionTouch(bool touching, int x, int y) {
+        if (touching) {
+            if (!comp_touching) {
+                comp_touching = true;
+                comp_down_x = x;
+                comp_has_press = false;
+                for (const CompHit& hit : comp_hits) {
+                    if (hit.Contains(x, y)) {
+                        comp_press = hit;
+                        comp_has_press = true;
+                        break;
+                    }
+                }
+            }
+            comp_last_x = x;
+            comp_last_y = y;
+            return;
+        }
+        if (!comp_touching) {
+            return;
+        }
+        comp_touching = false;
+        const int dx = comp_last_x - comp_down_x;
+        if (comp_grid_shown && std::abs(dx) > 70) {
+            // A swipe across the grid turns its page.
+            ActivateCompHit({0, 0, 0, 0, dx < 0 ? CompKind::PageNext : CompKind::PagePrev, 0});
+        } else if (comp_has_press && comp_press.Contains(comp_last_x, comp_last_y)) {
+            ActivateCompHit(comp_press);
+        }
+        comp_has_press = false;
+    }
+
+    // The row of the options the cursor is on, if there is one to act on.
+    const SettingsRow* CompanionRow() {
+        if ((tab != Tab::Settings && !PerGameOpen()) || DialogOpen() ||
+            (focus == Focus::Rail && !PerGameOpen())) {
+            return nullptr;
+        }
+        const int sel = SettingsSel();
+        if (sel < 0 || sel >= static_cast<int>(settings_rows.size()) ||
+            settings_rows[sel].is_header) {
+            return nullptr;
+        }
+        return &settings_rows[sel];
+    }
+
+    void ActivateCompHit(const CompHit& hit) {
+        const int count = static_cast<int>(filtered.size());
+        switch (hit.kind) {
+        case CompKind::Game:
+            if (ShelfMode() && !DialogOpen() && hit.value >= 0 && hit.value < count) {
+                selected = hit.value;
+                shelf_back = false;
+                shelf_forward = true; // Brought forward here; Play starts it.
+                UiSound::Play(UiSound::Kind::Select);
+            }
+            break;
+        case CompKind::Play:
+            if (ShelfMode() && !DialogOpen() && count > 0) {
+                shelf_forward = false;
+                pending_launch = games[filtered[selected]].path;
+                UiSound::Play(UiSound::Kind::Select);
+            }
+            break;
+        case CompKind::Back:
+            shelf_forward = false;
+            shelf_back = false;
+            UiSound::Play(UiSound::Kind::Back);
+            break;
+        case CompKind::Flip:
+            shelf_back = !shelf_back;
+            break;
+        case CompKind::GridSmaller:
+            comp_rows = std::min(4, comp_rows + 1);
+            comp_seen_selected = -1;
+            break;
+        case CompKind::GridLarger:
+            comp_rows = std::max(1, comp_rows - 1);
+            comp_seen_selected = -1;
+            break;
+        case CompKind::PagePrev:
+            comp_first_col = std::max(0, comp_first_col - comp_cols_visible);
+            break;
+        case CompKind::PageNext:
+            comp_first_col += comp_cols_visible; // Clamped when drawn.
+            break;
+        default: {
+            const SettingsRow* row = CompanionRow();
+            if (row == nullptr) {
+                break;
+            }
+            const bool per_game = PerGameOpen();
+            if (hit.kind == CompKind::PressA) {
+                if (row->modal != SettingsModal::None) {
+                    OpenSettingsModal(row->modal);
+                    break;
+                }
+            }
+            if (per_game && row->set_global && row->using_global()) {
+                row->set_global(false);
+            }
+            if (hit.kind == CompKind::Choose) {
+                if (row->boolean && row->step) {
+                    row->step(hit.value != 0 ? +1 : -1);
+                } else if (row->choose) {
+                    row->choose(hit.value);
+                }
+            } else if (hit.kind == CompKind::StepDown && row->step) {
+                row->step(-1);
+            } else if (hit.kind == CompKind::StepUp && row->step) {
+                row->step(+1);
+            } else if (hit.kind == CompKind::PressA) {
+                CycleSettingsRow(*row);
+            }
+            (per_game ? per_game_dirty : settings_dirty) = true;
+            UiSound::Play(UiSound::Kind::Select);
+            break;
+        }
+        }
+    }
+
+    // Draws the companion picture when the receiver is ready for one, and sends it if it
+    // differs from the last (or once a second, so the receiver knows we are still here).
+    void UpdateCompanion() {
+        if (!GameShare::LobbyFrameDue()) {
+            return;
+        }
+        if (companion.Width() != 640 || companion.Height() != 480) {
+            companion.Resize(640, 480);
+        }
+        DrawCompanion(companion);
+        u32 hash = 2166136261u;
+        const u32* pixels = companion.Data();
+        for (int i = 0; i < 640 * 480; i += 3) {
+            hash = (hash ^ pixels[i]) * 16777619u;
+        }
+        const float now = UiTime();
+        if (hash == comp_hash && std::abs(now - comp_sent_at) < 1.0f) {
+            return;
+        }
+        comp_hash = hash;
+        comp_sent_at = now;
+        GameShare::SubmitLobbyFrame(pixels, 640, 480);
+    }
+
+    void CompButton(Canvas& c, int x, int y, int w, int h, std::string_view label, int size,
+                    bool strong, CompKind kind, int value) {
+        const CompHit hit{x, y, w, h, kind, value};
+        // Held down it sinks a little, as the 3DS's own buttons do.
+        const bool down = comp_touching && comp_has_press && comp_press.kind == kind &&
+                          comp_press.value == value && comp_press.x == x && comp_press.y == y;
+        const int in = down ? 4 : 0;
+        const u32 fill = strong ? kColAccent : kColSurfaceHi;
+        c.FillRoundRect(x + in, y + in, w - 2 * in, h - 2 * in, std::min(h / 3, 16),
+                        down ? MixColor(fill, MakeColor(0, 0, 0), 0.25f) : fill);
+        const std::string text = g_font.Truncate(label, size, w - 20);
+        g_font.Draw(c, x + (w - g_font.Measure(text, size)) / 2, CenterBaseline(y, h, size), text,
+                    size, strong ? kColOnAccent : kColText);
+        comp_hits.push_back(hit);
+    }
+
+    void CompMessage(Canvas& c, std::string_view title, std::string_view text) {
+        g_font.Draw(c, 24, 130, g_font.Truncate(title, 26, 592), 26, kColText);
+        int y = 170;
+        for (const std::string& line : WrapLines(g_font, text, 18, 592)) {
+            g_font.Draw(c, 24, y, line, 18, kColTextDim);
+            y += 26;
+        }
+    }
+
+    void DrawCompanion(Canvas& c) {
+        constexpr int W = 640, H = 480;
+        c.Clear(kColBg);
+        comp_hits.clear();
+        comp_grid_shown = false;
+        c.FillRect(0, 0, W, 48, kColRail);
+        g_font.Draw(c, 18, 32, "Toronja", 22, kColText);
+        const auto header = [&](std::string_view text) {
+            g_font.Draw(c, 18 + g_font.Measure("Toronja", 22) + 14, 32, g_font.Truncate(text, 16, 300),
+                        16, kColTextDim);
+        };
+
+        if (DialogOpen()) {
+            header("A window is open");
+            CompMessage(c, "Continue on the other console",
+                        "A window is open there. The buttons and sticks of this console work it.");
+            return;
+        }
+
+        if (ShelfMode()) {
+            const int count = static_cast<int>(filtered.size());
+            if (count == 0) {
+                header("Games");
+                CompMessage(c, "No games yet", "Add games to the games folder on the other console.");
+                return;
+            }
+            const GameEntry& game = games[filtered[selected]];
+            if (shelf_forward) {
+                header("Ready to play");
+                // The icon, alive: it bobs, and a ring breathes behind it.
+                const float t = UiTime();
+                const int size = 136;
+                const int ix = (W - size) / 2;
+                const int iy = 70 + static_cast<int>(std::lround(std::sin(t * 2.2f) * 5.0f));
+                const float pulse = 0.5f + 0.5f * std::sin(t * 3.0f);
+                FillDisc(c, W / 2.0f, iy + size / 2.0f, size * 0.66f + 6.0f * pulse,
+                         MixColor(kColAccent, kColBg, 0.72f - 0.14f * pulse));
+                c.FillRoundRect(ix - 6, iy - 6, size + 12, size + 12, 18, kColSurfaceHi);
+                if (!game.icon.empty() && game.icon_size > 0) {
+                    c.BlitIcon(game.icon, game.icon_size, ix, iy, size);
+                } else if (!game.title.empty()) {
+                    const std::string letter{game.title.substr(0, 1)};
+                    g_font.Draw(c, W / 2 - g_font.Measure(letter, 72) / 2, iy + size / 2 + 26, letter,
+                                72, kColText);
+                }
+                int ty = 252;
+                const std::vector<std::string> lines = WrapLines(g_font, game.title, 23, 600);
+                for (std::size_t i = 0; i < lines.size() && i < 2; ++i) {
+                    g_font.Draw(c, (W - g_font.Measure(lines[i], 23)) / 2, ty, lines[i], 23, kColText);
+                    ty += 28;
+                }
+                if (!game.publisher.empty()) {
+                    const std::string pub = g_font.Truncate(game.publisher, 16, 600);
+                    g_font.Draw(c, (W - g_font.Measure(pub, 16)) / 2, ty - 2, pub, 16, kColTextDim);
+                }
+                CompButton(c, 110, 326, 420, 84, "Play", 36, true, CompKind::Play, 0);
+                CompButton(c, 16, 424, 170, 46, "Back", 19, false, CompKind::Back, 0);
+                CompButton(c, 454, 424, 170, 46, "Turn the case", 19, false, CompKind::Flip, 0);
+                return;
+            }
+
+            // The games as the 3DS shows them: a grid of icons that turns sideways, in a
+            // size the two buttons change.
+            comp_grid_shown = true;
+            header(std::to_string(selected + 1) + " of " + std::to_string(count));
+            CompButton(c, W - 108, 6, 46, 36, "-", 24, false, CompKind::GridSmaller, 0);
+            CompButton(c, W - 56, 6, 46, 36, "+", 24, false, CompKind::GridLarger, 0);
+            constexpr int top = 60, bottom = 414, gap = 10, side = 56;
+            const int rows = std::clamp(comp_rows, 1, 4);
+            const int cell = std::min((bottom - top - (rows - 1) * gap) / rows, 230);
+            const int cols_visible = std::max(1, (W - 2 * side + gap) / (cell + gap));
+            const int cols = (count + rows - 1) / rows;
+            comp_cols_visible = cols_visible;
+            // Follow the cursor when the other console moves it.
+            if (selected != comp_seen_selected) {
+                comp_seen_selected = selected;
+                const int col = selected / rows;
+                if (col < comp_first_col) {
+                    comp_first_col = col;
+                } else if (col >= comp_first_col + cols_visible) {
+                    comp_first_col = col - cols_visible + 1;
+                }
+            }
+            comp_first_col = std::clamp(comp_first_col, 0, std::max(0, cols - cols_visible));
+            const int shown = std::min(cols_visible, cols);
+            const int grid_w = shown * cell + (shown - 1) * gap;
+            const int grid_h = rows * cell + (rows - 1) * gap;
+            const int x0 = (W - grid_w) / 2;
+            const int y0 = top + (bottom - top - grid_h) / 2;
+            for (int col = 0; col < shown; ++col) {
+                for (int row = 0; row < rows; ++row) {
+                    const int index = (comp_first_col + col) * rows + row;
+                    if (index >= count) {
+                        continue;
+                    }
+                    const GameEntry& entry = games[filtered[index]];
+                    const int x = x0 + col * (cell + gap), y = y0 + row * (cell + gap);
+                    const bool down = comp_touching && comp_has_press &&
+                                      comp_press.kind == CompKind::Game && comp_press.value == index;
+                    const bool current = index == selected;
+                    const int in = down ? 6 : 0;
+                    c.FillRoundRect(x + in, y + in, cell - 2 * in, cell - 2 * in, cell / 7,
+                                    current ? kColAccent : kColSurface);
+                    const int pad = std::max(6, cell / 12) + in;
+                    const int isz = cell - 2 * pad;
+                    if (!entry.icon.empty() && entry.icon_size > 0) {
+                        c.BlitIcon(entry.icon, entry.icon_size, x + pad, y + pad, isz);
+                    } else if (!entry.title.empty()) {
+                        const std::string letter{entry.title.substr(0, 1)};
+                        const int fs = std::max(18, isz / 2);
+                        g_font.Draw(c, x + (cell - g_font.Measure(letter, fs)) / 2,
+                                    y + cell / 2 + fs / 3, letter, fs,
+                                    current ? kColOnAccent : kColText);
+                    }
+                    if (down) {
+                        // Pressed: dimmed until the finger lifts.
+                        c.FillRoundRect(x + in, y + in, cell - 2 * in, cell - 2 * in, cell / 7,
+                                        MakeColor(0, 0, 0, 0x50));
+                    }
+                    comp_hits.push_back({x, y, cell, cell, CompKind::Game, index});
+                }
+            }
+            if (comp_first_col > 0) {
+                CompButton(c, 6, (top + bottom) / 2 - 40, 42, 80, "<", 26, false, CompKind::PagePrev, 0);
+            }
+            if (comp_first_col + cols_visible < cols) {
+                CompButton(c, W - 48, (top + bottom) / 2 - 40, 42, 80, ">", 26, false,
+                           CompKind::PageNext, 0);
+            }
+            c.FillRect(0, 424, W, H - 424, kColRail);
+            const std::string title = g_font.Truncate(game.title, 20, W - 36);
+            g_font.Draw(c, (W - g_font.Measure(title, 20)) / 2, 458, title, 20, kColText);
+            return;
+        }
+
+        if (tab == Tab::Settings || PerGameOpen()) {
+            header(PerGameOpen() ? "Settings for one game" : CategoryName(settings_page));
+            const SettingsRow* row = CompanionRow();
+            if (row == nullptr) {
+                CompMessage(c, PerGameOpen() ? "Game settings" : CategoryName(settings_page),
+                            "Choose a page on the other console, then an option: what it does and "
+                            "the values it can take show here.");
+                return;
+            }
+            int y = 86;
+            for (const std::string& line : WrapLines(g_font, row->label, 24, 600)) {
+                g_font.Draw(c, 20, y, line, 24, kColText);
+                y += 30;
+            }
+            const std::string value = row->value ? row->value() : std::string{};
+            if (!value.empty()) {
+                g_font.Draw(c, 20, y, g_font.Truncate(value, 19, 600), 19, kColAccent);
+                y += 30;
+            }
+            int lines_left = 5;
+            for (const std::string& line : WrapLines(g_font, row->description, 16, 600)) {
+                if (lines_left-- <= 0) {
+                    break;
+                }
+                g_font.Draw(c, 20, y, line, 16, kColTextDim);
+                y += 22;
+            }
+            if (row->needs_restart) {
+                g_font.Draw(c, 20, y + 4, "Takes effect the next time a game starts.", 15,
+                            kColWarnText);
+                y += 26;
+            }
+            y = std::max(y + 12, 262);
+            if (row->modal != SettingsModal::None) {
+                CompButton(c, 170, y + 20, 300, 72, "Open", 26, true, CompKind::PressA, 0);
+            } else if (row->boolean) {
+                const bool on = row->boolean();
+                CompButton(c, 24, y + 20, 286, 72, "Off", 26, !on, CompKind::Choose, 0);
+                CompButton(c, 330, y + 20, 286, 72, "On", 26, on, CompKind::Choose, 1);
+            } else if (row->choices && row->choose) {
+                // Every value it can take; the one set is lit.
+                const std::vector<std::string> names = row->choices();
+                const int current = row->choice_index ? row->choice_index() : -1;
+                const int total = static_cast<int>(names.size());
+                const int columns = total > 4 ? 2 : 1;
+                const int room = H - 12 - y;
+                const int per_column = std::max(1, std::min((total + columns - 1) / columns, room / 44));
+                const int capacity = per_column * columns;
+                const int first = std::clamp(current - capacity / 2, 0, std::max(0, total - capacity));
+                const int bw = columns == 2 ? 290 : 592;
+                const int bh = std::min(52, room / per_column - 6);
+                for (int i = first; i < total && i < first + capacity; ++i) {
+                    const int slot = i - first;
+                    const int bx = 24 + (slot % columns) * (bw + 12);
+                    const int by = y + (slot / columns) * (bh + 6);
+                    CompButton(c, bx, by, bw, bh, names[static_cast<std::size_t>(i)], 18, i == current,
+                               CompKind::Choose, i);
+                }
+            } else if (row->numeric) {
+                CompButton(c, 40, y + 20, 150, 72, "-", 34, false, CompKind::StepDown, 0);
+                g_font.Draw(c, (W - g_font.Measure(value, 30)) / 2, y + 68, value, 30, kColText);
+                CompButton(c, 450, y + 20, 150, 72, "+", 34, false, CompKind::StepUp, 0);
+            } else if (row->step) {
+                CompButton(c, 170, y + 20, 300, 72, "Change", 26, true, CompKind::PressA, 0);
+            }
+            return;
+        }
+
+        header(tab == Tab::Install ? "Install titles" : tab == Tab::Paths ? "Folders" : "Artic Base");
+        CompMessage(c, "Continue on the other console",
+                    "This page has nothing to show here. The buttons and sticks of this console "
+                    "still work it.");
     }
 
     // Download Covers Now. Covers already on the card are only fetched again when asked:
@@ -3979,6 +4609,9 @@ private:
         }
         if (confirm) {
             DrawConfirm(c);
+        }
+        if (link_open) {
+            DrawLink(c);
         }
         if (install_active) {
             DrawInstallProgress(c);

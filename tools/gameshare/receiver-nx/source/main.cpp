@@ -69,6 +69,8 @@ constexpr ButtonMap BUTTONS[] = {
     {HidNpadButton_Left, 6},  {HidNpadButton_Right, 7},  {HidNpadButton_L, 8},
     {HidNpadButton_R, 9},     {HidNpadButton_Plus, 10},  {HidNpadButton_Minus, 11},
     {HidNpadButton_ZL, 12},   {HidNpadButton_ZR, 13},
+    // The stick clicks: sent only while the other console is in its menus (see below).
+    {HidNpadButton_StickL, 14}, {HidNpadButton_StickR, 15},
 };
 
 void WriteU16(u8* p, u16 v) {
@@ -556,10 +558,13 @@ int main(int, char**) {
         if ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus)) {
             if (quit_since_ns == 0) {
                 quit_since_ns = now;
+                // + and - together: the other console's in-game menu, as on that console.
+                // (This app's own menu is on its tab.)
+                if (host_known && !console_active && !ui.IsLobby() && !ui.IsOpen()) {
+                    ui.QueueCommand(3, 1);
+                }
             } else if (now - quit_since_ns > 3'000'000'000ULL) {
                 break;
-            } else if (now - quit_since_ns > 400'000'000ULL && !ui.IsOpen() && !console_active) {
-                ui.Open();
             }
         } else {
             quit_since_ns = 0;
@@ -633,6 +638,12 @@ int main(int, char**) {
                     if (!ui.IsOpen() && (held & map.pad)) {
                         buttons |= 1U << map.bit;
                     }
+                }
+                if (!ui.IsLobby()) {
+                    buttons &= ~((1U << 14) | (1U << 15)); // In a game the clicks stay here.
+                }
+                if ((held & HidNpadButton_Plus) && (held & HidNpadButton_Minus)) {
+                    buttons &= ~((1U << 10) | (1U << 11)); // The chord is not Start + Select.
                 }
                 HidAnalogStickState stick = padGetStickPos(&pad, 0);
                 HidAnalogStickState right = padGetStickPos(&pad, 1);

@@ -130,6 +130,9 @@ public:
 
     /// The screen to ask for in HELLO: 0 top, 1 bottom, 2 both.
     u8 RequestedScreen() const {
+        if (lobby) {
+            return 3; // No game yet: the other console's companion screen.
+        }
         switch (static_cast<Screens>(settings.screens)) {
         case Screens::TopHereBottomThere:
         case Screens::TopHere:
@@ -160,6 +163,16 @@ public:
         hello_due = true;
     }
 
+    /// Something to ask the host for outright (3: its in-game menu).
+    void QueueCommand(u8 what, u8 value) {
+        commands.push_back({what, value});
+    }
+
+    /// The other console is in its library: no game is running.
+    bool IsLobby() const {
+        return lobby;
+    }
+
     std::vector<Command> TakeCommands() {
         std::vector<Command> out;
         out.swap(commands);
@@ -175,6 +188,9 @@ public:
 
     /// Quick switch between the top and the bottom screen (both stick clicks).
     void ToggleView() {
+        if (lobby) {
+            return; // There are no game screens to switch between yet.
+        }
         switch (static_cast<Screens>(settings.screens)) {
         case Screens::BottomHereTopThere:
             settings.screens = static_cast<int>(Screens::TopHereBottomThere);
@@ -197,6 +213,13 @@ public:
     // ------------------------------------------------------------------ status from the host
 
     void OnStatus(u8 flags, int game_fps) {
+        const bool now_lobby = (flags & 16) != 0;
+        if (now_lobby != lobby) {
+            // A game started or ended on the other console: ask for the right picture.
+            lobby = now_lobby;
+            hello_due = true;
+            dirty = true;
+        }
         host_allows_audio = (flags & 8) != 0;
         amiibo_wanted = (flags & 1) != 0;
         if (game_fps != fps) {
@@ -322,7 +345,10 @@ public:
         bool has_top = false, has_bottom = false;
         if (rgb != nullptr && picture_w > 0) {
             Place(picture_w, picture_h, top, has_top, bottom, has_bottom);
-            if (picture_h > 240) {
+            if (picture_w == 640 && picture_h == 480) {
+                // The companion screen: one picture, drawn for this console.
+                Blit(rgb, picture_w, 0, 0, 640, 480, bottom);
+            } else if (picture_h > 240) {
                 // Both screens arrive as the 3DS has them: top above, bottom centred under it.
                 if (has_top) {
                     Blit(rgb, picture_w, 0, 0, 400, 240, top);
@@ -532,7 +558,8 @@ private:
                         "small, in a corner beside the picture when there is room."});
         rows.push_back({"Menu tab", opacity[settings.tab_opacity],
                         "The tab that opens this menu. Hidden, it still works: tap its corner or "
-                        "swipe away from it. Holding + and - opens the menu too."});
+                        "swipe away from it. (+ and - together open the other console's "
+                        "in-game menu; held for three seconds they close this app.)"});
         rows.push_back({"Tab corner", corner[settings.tab_corner], "Where the tab sits."});
         rows.push_back({"Theme", settings.light ? "Light" : "Dark",
                         "The look of this app's own screens."});
@@ -603,8 +630,10 @@ private:
         canvas.FillRect(MENU_X, 0, MENU_W, SCREEN_H, kColRail);
         canvas.FillRect(MENU_X, 0, 1, SCREEN_H, kColLine);
         font.Draw(canvas, MENU_X + 28, 52, "Toronja Link", 28, kColText);
-        font.Draw(canvas, MENU_X + 28, 76, "The game keeps running on the other console", 15,
-                  kColTextDim);
+        font.Draw(canvas, MENU_X + 28, 76,
+                  lobby ? "No game is running: these options are for games"
+                        : "The game keeps running on the other console",
+                  15, kColTextDim);
         for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
             const Row& row = rows[i];
             const int y = ROW_TOP + i * ROW_H;
@@ -705,6 +734,13 @@ private:
     void Place(int picture_w, int picture_h, Rect& top, bool& has_top, Rect& bottom,
                bool& has_bottom) const {
         const Rect all{0, 0, SCREEN_W, SCREEN_H};
+        if (picture_w == 640 && picture_h == 480) {
+            // The companion screen takes the whole display; touches on it go back as
+            // bottom-screen touches do.
+            bottom = Fit(all, 640, 480);
+            has_bottom = true;
+            return;
+        }
         if (picture_h <= 240) {
             // One screen: which one is told by its width.
             if (picture_w >= 400) {
@@ -758,6 +794,7 @@ private:
     Canvas canvas;
     std::vector<Command> commands;
     bool hello_due = false;
+    bool lobby = false;
     bool dirty = true;
     bool open = false;
     bool quit = false;

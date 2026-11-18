@@ -451,7 +451,39 @@ void RunGame(PadState& pad, const std::string& rom) {
 
             SwitchFrontend::InputState state;
             const u64 held = PollInput(pad, state);
-            const u64 pressed = held & ~prev_held;
+            u64 pressed = held & ~prev_held;
+            // The receiver's pad works this console's in-game menu too: its buttons arrive
+            // as InputButton bits, its stick as directions.
+            static u64 prev_remote = 0;
+            u64 remote = 0;
+            SwitchFrontend::GameShare::RemotePad remote_pad;
+            if (SwitchFrontend::GameShare::GetRemotePad(remote_pad)) {
+                static constexpr u64 map[] = {
+                    HidNpadButton_A,    HidNpadButton_B,     HidNpadButton_X,  HidNpadButton_Y,
+                    HidNpadButton_Up,   HidNpadButton_Down,  HidNpadButton_Left,
+                    HidNpadButton_Right, HidNpadButton_L,    HidNpadButton_R,  0,
+                    0,                  HidNpadButton_ZL,    HidNpadButton_ZR, 0,
+                    0};
+                for (int bit = 0; bit < 16; ++bit) {
+                    if (remote_pad.buttons & (1u << bit)) {
+                        remote |= map[bit];
+                    }
+                }
+                constexpr int far = 16000;
+                remote |= remote_pad.stick_y > far ? HidNpadButton_StickLUp : 0;
+                remote |= remote_pad.stick_y < -far ? HidNpadButton_StickLDown : 0;
+                remote |= remote_pad.stick_x < -far ? HidNpadButton_StickLLeft : 0;
+                remote |= remote_pad.stick_x > far ? HidNpadButton_StickLRight : 0;
+            }
+            const u64 remote_pressed = remote & ~prev_remote;
+            prev_remote = remote;
+            if (SwitchFrontend::IsQuickMenuOpen()) {
+                pressed |= remote_pressed;
+            }
+            // Its + and - together ask for the menu, as they do here.
+            if (SwitchFrontend::GameShare::TakeMenuRequest()) {
+                SwitchFrontend::ToggleQuickMenu();
+            }
             // Emulator actions are edge-detected in the remappable InputButton space.
             const u64 input_pressed = state.buttons & ~prev_input;
 
@@ -616,6 +648,7 @@ int main(int argc, char* argv[]) {
         } else {
             const SwitchFrontend::MenuResult choice = SwitchFrontend::RunMenu(pad);
             if (choice.action == SwitchFrontend::MenuAction::Exit) {
+                SwitchFrontend::GameShare::StopLobby(); // Before the sockets go.
                 break;
             }
             rom = choice.path;
