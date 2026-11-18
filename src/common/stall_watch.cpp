@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <thread>
 
@@ -26,7 +25,7 @@ std::array<Note, RING> s_ring;
 std::atomic<std::uint64_t> s_beat{0}; // Notes written so far; the newest is at (beat - 1) % RING.
 std::atomic<bool> s_idle{true};
 char s_service[48] = "service";
-std::once_flag s_started;
+std::atomic<bool> s_started{false};
 
 std::string Describe(std::uint64_t beat, std::size_t back) {
     if (beat <= back) {
@@ -113,7 +112,16 @@ void MarkIdle() noexcept {
 }
 
 void Begin() {
-    std::call_once(s_started, [] { std::thread{Watch}.detach(); });
+    // Not std::call_once: on this toolchain it throws instead of calling.
+    if (s_started.exchange(true)) {
+        return;
+    }
+    try {
+        std::thread{Watch}.detach();
+    } catch (...) {
+        // No thread to spare: the emulation runs without being watched.
+        LOG_WARNING(Core, "Stall watch: could not start its thread");
+    }
 }
 
 } // namespace Common::StallWatch
