@@ -28,6 +28,13 @@ Everything that makes games run is theirs; see [Credits](#credits).
 > two consoles. Things marked *untested* below compile and are believed to work, and that is
 > all that is claimed for them.
 
+## What to expect
+
+On a **Switch 2**, most games should run at **full speed at 4x internal resolution** most of
+the time. That is the author's experience with the games tried, not a compatibility list:
+expect short dips the first time a place is entered or a shader is built, and heavier games
+that want a lower resolution. A Switch 1 is slower; lower the resolution there.
+
 ## What is different from Dekopon
 
 ### Runs on Switch 2
