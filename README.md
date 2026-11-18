@@ -107,6 +107,20 @@ both: direct wireless, or the local network.
 On a Switch 1, start Toronja Link from the Homebrew Menu opened through the **Album**: opened
 over a game, the system refuses to join another title's wireless network.
 
+**Which console can be the second one**
+
+| Second console (runs Toronja Link) | Direct wireless | Local network |
+| --- | --- | --- |
+| Switch 1, Homebrew Menu from the Album | Works | Works |
+| Switch 1, Homebrew Menu over a game | Refused by the system (`0xc2cb`) | Works |
+| Switch 2 | **Not working yet** | *Untested* |
+
+On a Switch 2 homebrew currently runs as an application, never as an applet (there is no
+Album route there yet), so the same refusal is to be expected when it joins - and in the one
+attempt made so far the wireless service would not even start for Toronja Link
+(`ldnInitialize` returned `0x2ecb`). Until that changes, use a Switch 1 as the second console
+for direct wireless. The Switch 2 as the *main* console (the one that opens the network) works.
+
 ## Building
 
 There is no local toolchain to set up: every push is built by GitHub Actions
