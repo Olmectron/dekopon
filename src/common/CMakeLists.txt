@@ -92,6 +92,8 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
     swap.h
     texture.cpp
     texture.h
+    stall_watch.cpp
+    stall_watch.h
     thread.cpp
     thread.h
     thread_queue_list.h

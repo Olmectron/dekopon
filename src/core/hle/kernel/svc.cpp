@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <fmt/format.h>
+#include "common/stall_watch.h"
 #include "common/archives.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -2429,6 +2430,7 @@ MICROPROFILE_DEFINE(Kernel_SVC, "Kernel", "SVC", MP_RGB(70, 200, 70));
 
 void SVC::CallSVC(u32 immediate) {
     MICROPROFILE_SCOPE(Kernel_SVC);
+    const Common::StallWatch::Scope stall_watch{"system call", immediate, "after a system call"};
     system.perf_stats->BeginSVCProcessing();
 
     // Lock the kernel mutex when we enter the kernel HLE.

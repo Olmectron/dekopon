@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <fmt/format.h>
+#include "common/stall_watch.h"
 #include "common/assert.h"
 #include "common/hacks/hack_manager.h"
 #include "common/logging/log.h"
@@ -185,7 +186,9 @@ void ServiceFrameworkBase::HandleSyncRequest(Kernel::HLERequestContext& context)
 
     LOG_TRACE(Service, "{}",
               MakeFunctionString(info->name, GetServiceName(), context.CommandBuffer()));
+    Common::StallWatch::MarkService(GetServiceName().c_str(), context.CommandBuffer()[0]);
     handler_invoker(this, info->handler_callback, context);
+    Common::StallWatch::Mark("system call, after a service request");
 }
 
 std::string ServiceFrameworkBase::GetFunctionName(IPC::Header header) const {

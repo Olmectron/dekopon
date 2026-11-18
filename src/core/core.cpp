@@ -10,6 +10,7 @@
 #include "audio_core/dsp_interface.h"
 #include "audio_core/hle/hle.h"
 #include "audio_core/lle/lle.h"
+#include "common/stall_watch.h"
 #include "common/arch.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -97,6 +98,8 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
     }
 
     MICROPROFILE_SCOPE(Core_RunLoop);
+    Common::StallWatch::Begin();
+    const Common::StallWatch::Scope stall_watch{"the run loop", 0, nullptr};
 
 #ifdef ENABLE_GDBSTUB
     if (GDBStub::IsServerEnabled()) {

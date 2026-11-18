@@ -6,6 +6,7 @@
 #include <cstring>
 #include <dynarmic/interface/A32/a32.h>
 #include <dynarmic/interface/optimization_flags.h>
+#include "common/stall_watch.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -228,7 +229,9 @@ void ARM_Dynarmic::Run() {
     }
 
     CITRA_PROFILE_COUNT(jit_runs, 1);
+    Common::StallWatch::Mark("guest code (or the JIT compiling it)");
     jit->Run();
+    Common::StallWatch::Mark("back from guest code");
 }
 
 void ARM_Dynarmic::Step() {
@@ -346,12 +349,16 @@ void ARM_Dynarmic::PrepareReschedule() {
 }
 
 void ARM_Dynarmic::ClearInstructionCache() {
+    const Common::StallWatch::Scope stall_watch{"JIT: clearing all compiled code", 0,
+                                                "JIT: compiled code cleared"};
     for (const auto& j : jits) {
         j.second->ClearCache();
     }
 }
 
 void ARM_Dynarmic::InvalidateCacheRange(u32 start_address, std::size_t length) {
+    const Common::StallWatch::Scope stall_watch{"JIT: dropping compiled code for a range of this size",
+                                                static_cast<u32>(length), "JIT: range dropped"};
     for (const auto& j : jits) {
         j.second->InvalidateCacheRange(start_address, length);
     }
