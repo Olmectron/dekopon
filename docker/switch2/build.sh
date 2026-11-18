@@ -15,6 +15,9 @@ set -euo pipefail
 BUILD_DIR=${BUILD_DIR:-build/switch}
 cd /src
 
+echo ">>> Switch 2 devkit in this image:"
+cat "$DEVKITPRO/ounce-versions.txt" 2>/dev/null || echo "    (not recorded)"
+
 echo ">>> Submodules (the Switch 2 build does not use nxvk) ..."
 git config --global --add safe.directory /src 2>/dev/null || true
 git submodule update --init --recursive
