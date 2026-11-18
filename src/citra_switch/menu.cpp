@@ -1709,6 +1709,7 @@ private:
     Category settings_page{Category::General};
     bool cover_download_seen{}; // A cover download was running the last time we looked.
     int cover_share_serial{};   // The last cover transfer news that was shown.
+    bool settings_adjusting{};  // A number has been taken hold of: left and right change it.
     bool usb_volume_seen{};     // A USB drive has been mounted during this run.
     std::vector<SettingsRow> settings_rows;
     // Kept per page so switching back lands where the cursor was left.
@@ -2710,6 +2711,9 @@ private:
         }
 
         int& sel = SettingsSel();
+        if (nav & (DirUp | DirDown)) {
+            settings_adjusting = false;
+        }
         if (nav & DirUp) {
             sel = SettleSettingsSelection(std::max(0, sel - 1), -1);
         }
@@ -2730,11 +2734,14 @@ private:
         };
 
         const SettingsRow& row = settings_rows[sel];
+        (void)dpad_nav;
         if (row.modal != SettingsModal::None) {
-            if ((down & HidNpadButton_A) || (dpad_nav & DirRight)) {
+            settings_adjusting = false;
+            if (down & HidNpadButton_A) {
                 OpenSettingsModal(row.modal);
             }
-            if (down & HidNpadButton_B) {
+            // Left leaves the page for the list of pages, as B does.
+            if ((down & HidNpadButton_B) || ((nav & DirLeft) && !PerGameOpen())) {
                 back();
             }
             return false;
@@ -2760,16 +2767,38 @@ private:
         };
 
         // Settings::values is edited live. FlushSettings() only batches the config.ini write.
-        if (dpad_nav & DirLeft) {
-            edit(-1);
+        //
+        // A changes a value: On/Off flips, a list goes to its next entry and round to the
+        // first. Left and right move between the list of pages and the page, so they no
+        // longer change anything - except on a number, where A first takes hold of it.
+        if (settings_adjusting && !row.numeric) {
+            settings_adjusting = false;
         }
-        if (dpad_nav & DirRight) {
-            edit(+1);
+        if (settings_adjusting) {
+            if (nav & DirLeft) {
+                edit(-1);
+            }
+            if (nav & DirRight) {
+                edit(+1);
+            }
+            if (down & (HidNpadButton_A | HidNpadButton_B)) {
+                settings_adjusting = false;
+            }
+            return false;
         }
         if (down & HidNpadButton_A) {
-            edit(row.boolean && row.boolean() ? -1 : +1);
+            if (row.numeric) {
+                settings_adjusting = true;
+                ShowNotice("Left / Right to adjust, A when done", false);
+            } else {
+                if (PerGameOpen() && row.set_global && row.using_global()) {
+                    row.set_global(false);
+                }
+                CycleSettingsRow(row);
+                (PerGameOpen() ? per_game_dirty : settings_dirty) = true;
+            }
         }
-        if (down & HidNpadButton_B) {
+        if ((down & HidNpadButton_B) || ((nav & DirLeft) && !PerGameOpen())) {
             back();
         }
         return false;

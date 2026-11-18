@@ -121,7 +121,7 @@ constexpr int kCameraImagesPerPage = 6;
 
 std::atomic<bool> s_open{false};
 // The game is frozen while the in-game menu is open, unless turned off.
-std::atomic<bool> s_pause_in_menu{true};
+std::atomic<bool> s_pause_in_menu{false};
 
 // The side list, in the order L/R steps through it: Home, the live options, the launcher's
 // everyday pages, the game's own tools, then the Advanced pages.
@@ -399,6 +399,8 @@ std::vector<Cell> s_cells;
 int s_cell = 0;
 // List pages: the cursor is in the side list of pages rather than in the rows.
 bool s_side_focus = false;
+// A number row has been taken hold of with A: left and right change it.
+bool s_adjusting = false;
 float s_layout_label_y = 0.0f;
 float s_quick_label_y = 0.0f;
 
@@ -745,10 +747,7 @@ void Activate(const Row& row) {
         SayLocked();
         return;
     }
-    const SettingsRow& setting = s_settings[static_cast<std::size_t>(row.index)];
-    if (setting.step) {
-        setting.step(setting.boolean && setting.boolean() ? -1 : 1);
-    }
+    CycleSettingsRow(s_settings[static_cast<std::size_t>(row.index)]);
 }
 
 std::string ListSuffix(int page, int pages) {
@@ -924,6 +923,9 @@ void Repaint() {
     if (s_side_focus) {
         state.hint = "Up / Down  Page      A / Right  Open      B  Home";
         state.description.clear();
+    } else if (CurrentPage() == Page::Settings) {
+        state.hint = s_adjusting ? "Left / Right  Adjust      A  Done"
+                                 : "A  Change      Left / B  Pages      L / R  Next page";
     }
     state.items.reserve(static_cast<std::size_t>(visible));
     for (int i = first; i < first + visible; ++i) {
@@ -1317,13 +1319,40 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
     }
 
     const Row row = s_rows[static_cast<std::size_t>(s_selected)];
-    if (nav.left && !IsAction(row)) {
-        Adjust(row, -1);
-        changed = true;
+    // On a setting, left goes back to the list of pages and A changes the value; a number
+    // is taken hold of with A first, and then left and right adjust it. Other rows that
+    // carry a value (the save slot, the camera) still answer to left and right.
+    const bool is_setting = row.item == Item::Setting;
+    const bool is_number =
+        is_setting && s_settings[static_cast<std::size_t>(row.index)].numeric && !IsLocked(row);
+    if (nav.up || nav.down || !is_number) {
+        s_adjusting = false;
     }
-    if (nav.right && !IsAction(row)) {
-        Adjust(row, 1);
-        changed = true;
+    if (is_setting && !s_adjusting) {
+        if (nav.left) {
+            s_side_focus = true;
+            Repaint();
+            return QuickMenuAction::None;
+        }
+    } else {
+        if (nav.left && !IsAction(row)) {
+            Adjust(row, -1);
+            changed = true;
+        }
+        if (nav.right && !IsAction(row)) {
+            Adjust(row, 1);
+            changed = true;
+        }
+        if (s_adjusting && (nav.confirm || nav.cancel)) {
+            s_adjusting = false;
+            Repaint();
+            return QuickMenuAction::None;
+        }
+    }
+    if (is_number && nav.confirm && !s_adjusting) {
+        s_adjusting = true;
+        Repaint();
+        return QuickMenuAction::None;
     }
 
     if (row.item == Item::Section && nav.confirm) {

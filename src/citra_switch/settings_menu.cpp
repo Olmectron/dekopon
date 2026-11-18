@@ -9,6 +9,7 @@
 #include <ctime>
 #include <memory>
 #include <optional>
+#include <cctype>
 #include <string>
 
 #include "citra_switch/config.h"
@@ -343,6 +344,25 @@ std::vector<SettingsRow> RowsFor(const std::vector<const SettingEntry*>& entries
         row.step = entry->step;
         row.modal = entry->modal;
         row.boolean = entry->boolean;
+        row.choices = entry->choices;
+        row.choice_index = entry->choice_index;
+        row.choose = entry->choose;
+        row.numeric = entry->numeric;
+        if (!row.numeric && !row.boolean && !row.choices && row.value &&
+            entry->modal == SettingsModal::None) {
+            // Entries built by hand: a value that reads as a number is one.
+            const std::string text = row.value();
+            std::size_t i = !text.empty() && (text[0] == '-' || text[0] == '+') ? 1 : 0;
+            const std::size_t digits_from = i;
+            while (i < text.size() && (std::isdigit(static_cast<unsigned char>(text[i])) ||
+                                       text[i] == '.')) {
+                ++i;
+            }
+            const std::string rest = text.substr(i);
+            row.numeric = i > digits_from &&
+                          (rest.empty() || rest == "%" || rest == " ms" || rest == "ms" ||
+                           rest == " s" || rest == " px");
+        }
         row.description = entry->description != nullptr ? entry->description : "";
         row.needs_restart = (entry->flags & EntryFlag::Restart) != 0;
         row.live = entry->quick != QuickSection::None && !row.needs_restart &&

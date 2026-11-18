@@ -18,6 +18,10 @@ struct SettingsRow {
     std::function<void(int dir)> step;
     SettingsModal modal{SettingsModal::None};
     std::function<bool()> boolean;
+    std::function<std::vector<std::string>()> choices; // See SettingEntry.
+    std::function<int()> choice_index;
+    std::function<void(int)> choose;
+    bool numeric{};
     std::string description;
     bool is_header{};
     bool needs_restart{};
@@ -27,6 +31,31 @@ struct SettingsRow {
     std::function<bool()> using_global;
     std::function<void(bool)> set_global;
 };
+
+/// A on a row: an On/Off row flips, a list moves to its next value and goes round to the
+/// first after the last. (Left and right no longer change values: they move between the
+/// list of pages and the page.)
+inline void CycleSettingsRow(const SettingsRow& row) {
+    if (!row.step) {
+        return;
+    }
+    if (row.boolean) {
+        row.step(row.boolean() ? -1 : +1);
+        return;
+    }
+    const std::string before = row.value ? row.value() : std::string{};
+    row.step(+1);
+    if (row.value && row.value() == before) {
+        // It was the last one: walk back to the first.
+        for (int i = 0; i < 4096; ++i) {
+            const std::string at = row.value();
+            row.step(-1);
+            if (row.value() == at) {
+                break;
+            }
+        }
+    }
+}
 
 std::vector<SettingsRow> BuildCategoryRows(Category category);
 

@@ -234,6 +234,7 @@ SettingEntry Number(const Meta& meta, S& setting, int lo, int hi, int step,
         setting = static_cast<ValueOf<S>>(
             std::clamp(static_cast<int>(setting.GetValue()) + dir * step, lo, hi));
     };
+    entry.numeric = true;
     Persist(entry, setting);
     return entry;
 }
@@ -248,6 +249,11 @@ SettingEntry Choice(const Meta& meta, S& setting, const std::array<const char*, 
     entry.step = [&setting, &names](int dir) {
         setting = static_cast<ValueOf<S>>(
             std::clamp(static_cast<int>(setting.GetValue()) + dir, 0, static_cast<int>(N) - 1));
+    };
+    entry.choices = [&names] { return std::vector<std::string>(names.begin(), names.end()); };
+    entry.choice_index = [&setting] { return static_cast<int>(setting.GetValue()); };
+    entry.choose = [&setting](int index) {
+        setting = static_cast<ValueOf<S>>(std::clamp(index, 0, static_cast<int>(N) - 1));
     };
     Persist(entry, setting);
     return entry;
@@ -267,6 +273,7 @@ SettingEntry Percent(const Meta& meta, S& setting, int lo, int hi, int step) {
             static_cast<float>(std::clamp(as_percent(setting.GetValue()) + dir * step, lo, hi)) /
             100.0f;
     };
+    entry.numeric = true;
     Persist(entry, setting);
     return entry;
 }
@@ -279,6 +286,7 @@ SettingEntry ColorChannel(const Meta& meta, Settings::SwitchableSetting<float>& 
         setting = static_cast<float>(std::clamp(as_byte(setting.GetValue()) + dir * 8, 0, 255)) /
                   255.0f;
     };
+    entry.numeric = true;
     Persist(entry, setting);
     return entry;
 }
@@ -317,6 +325,7 @@ SettingEntry LocalNumber(const char* id, const Meta& meta, std::function<int()> 
     entry.step = [get, set, lo, hi, step](int dir) {
         set(std::clamp(get() + dir * step, lo, hi));
     };
+    entry.numeric = true;
     PersistLocal<int>(entry, id, get, set, fallback);
     return entry;
 }
@@ -333,6 +342,9 @@ SettingEntry LocalChoice(const char* id, const Meta& meta, std::function<int()> 
     entry.step = [get, set](int dir) {
         set(std::clamp(get() + dir, 0, static_cast<int>(N) - 1));
     };
+    entry.choices = [&names] { return std::vector<std::string>(names.begin(), names.end()); };
+    entry.choice_index = get;
+    entry.choose = [set](int index) { set(std::clamp(index, 0, static_cast<int>(N) - 1)); };
     PersistLocal<int>(entry, id, get, set, fallback);
     return entry;
 }
@@ -414,6 +426,15 @@ SettingEntry LocalEnum(const char* id, const Meta& meta, std::function<int()> ge
     SettingEntry entry = Base(meta);
     entry.value = [get, name] { return std::string{name(get())}; };
     entry.step = [get, set, count](int dir) { set(std::clamp(get() + dir, 0, count - 1)); };
+    entry.choices = [count, name] {
+        std::vector<std::string> names;
+        for (int i = 0; i < count; ++i) {
+            names.emplace_back(name(i));
+        }
+        return names;
+    };
+    entry.choice_index = get;
+    entry.choose = [set, count](int index) { set(std::clamp(index, 0, count - 1)); };
     PersistLocal<int>(entry, id, get, set, fallback);
     return entry;
 }
@@ -778,12 +799,6 @@ constexpr std::array<const char*, 3> kAmiiboRequestNames{"Scan a real Amiibo", "
 void BuildGeneral(std::vector<SettingEntry>& out) {
     Table t{out, Category::General};
 
-    t.Group("Performance");
-    t.Ini("Renderer");
-    t << FrameLimitEntry();
-    t.Ini("Core");
-    t << CpuClockEntry();
-
     t.Group("On-Screen");
     t.Ini("Renderer");
     t << Toggle({"Show FPS Counter", "Draws a framerate counter over the game.", EntryFlag::None,
@@ -919,10 +934,14 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
     t.Page(Category::General);
     t.Group("Quick Menu");
     t.Ini("Switch");
-    t << LocalBool("pause_in_quick_menu",
-                   {"Pause In Quick Menu", "Freezes the game while the in-game menu is open.",
+    // A new key: the old one (pause_in_quick_menu) defaulted to on and was written to
+    // every config file, so it would have kept the old behaviour for everyone.
+    t << LocalBool("pause_in_menu",
+                   {"Pause In Quick Menu",
+                    "Freezes the game while the in-game menu is open. Off, the game goes on "
+                    "behind the menu.",
                     EntryFlag::None, QuickSection::System},
-                   IsPauseInQuickMenu, SetPauseInQuickMenu, true);
+                   IsPauseInQuickMenu, SetPauseInQuickMenu, false);
 
     t.Group("Updates");
     t << LocalChoice(
@@ -1358,6 +1377,14 @@ void SetDelayedReadbackEnabled(bool enabled) {
 void BuildAdvanced(std::vector<SettingEntry>& out) {
     auto& v = Settings::values;
     Table t{out, Category::Advanced};
+
+    // Here, not on the first page: either of these makes games run wrong unless you
+    // know what you are after.
+    t.Group("Speed");
+    t.Ini("Renderer");
+    t << FrameLimitEntry();
+    t.Ini("Core");
+    t << CpuClockEntry();
 
     t.Group("CPU");
     t.Ini("Core");

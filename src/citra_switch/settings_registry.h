@@ -117,6 +117,13 @@ struct SettingEntry {
     std::function<bool()> boolean;
     SettingsModal modal{SettingsModal::None};
     std::function<bool()> quick_visible;
+    // A value picked from a list: every name in order, which one is set, and a way to set
+    // any of them outright (the companion screen offers them all at once).
+    std::function<std::vector<std::string>()> choices;
+    std::function<int()> choice_index;
+    std::function<void(int)> choose;
+    // A number on a scale: adjusted with left and right, not stepped through with A.
+    bool numeric{};
 
     std::function<std::string()> save;
     std::function<std::string()> default_text;
