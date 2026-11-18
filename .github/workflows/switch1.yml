@@ -1,11 +1,11 @@
-name: dekopon-switch1
+name: toronja-switch1
 
 # Builds the Switch 1 version (NXVK for Vulkan), so it keeps up with the Switch 2 port.
 # The NXVK driver is Mesa cross-built for the Switch; that takes a while, so its archives
 # are kept in the Actions cache, keyed by the NXVK commit.
 on:
   push:
-    branches: [master, switch2-gameshare]
+    branches: [main, switch2-gameshare]
     paths-ignore: ['**.md', 'tools/gameshare/**', 'tools/ui-preview/**', 'tools/branding/**',
                    'tools/covers/**', '.github/workflows/gameshare-receiver.yml',
                    '.github/workflows/ui-preview.yml', '.github/workflows/switch2.yml']
@@ -17,7 +17,7 @@ on:
         default: false
 
 concurrency:
-  group: dekopon-switch1-${{ github.ref }}-${{ inputs.profiler || false }}
+  group: toronja-switch1-${{ github.ref }}-${{ inputs.profiler || false }}
   cancel-in-progress: true
 
 permissions:
@@ -108,7 +108,7 @@ jobs:
           restore-keys: |
             switch1-ccache-
 
-      - name: Build dekopon.nro for Switch 1
+      - name: Build toronja.nro for Switch 1
         run: docker run --rm -e DEKOPON_ZONE_PROFILER=${{ inputs.profiler && 'ON' || 'OFF' }} -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch1/build.sh
 
       - name: Save ccache
@@ -122,6 +122,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: dekopon-switch1-nro${{ inputs.profiler && '-profiler' || '' }}
-          path: build/switch1/src/citra_switch/dekopon.nro
+          name: toronja-switch1-nro${{ inputs.profiler && '-profiler' || '' }}
+          path: build/switch1/src/citra_switch/toronja.nro
           if-no-files-found: error

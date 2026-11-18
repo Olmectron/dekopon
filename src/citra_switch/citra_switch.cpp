@@ -44,11 +44,41 @@ u32 __nx_applet_type = AppletType_Application;
 size_t __nx_heap_size = 0;
 }
 
+// The app's folder was sdmc:/switch/dekopon while this was Dekopon's port. It is
+// sdmc:/switch/toronja now; an existing folder is renamed, once, before anything is
+// opened in it - saves, settings, caches and games inside it come along untouched.
+// (Dekopon itself, if it is still on the card, starts afresh after that.)
+static void MoveOldUserFolder(FsFileSystem* sdmc) {
+    static bool done = false;
+    if (done || sdmc == nullptr) {
+        return;
+    }
+    done = true;
+    FsDir dir;
+    if (R_SUCCEEDED(fsFsOpenDirectory(sdmc, "/switch/toronja", FsDirOpenMode_ReadDirs, &dir))) {
+        fsDirClose(&dir);
+        return;
+    }
+    if (R_SUCCEEDED(fsFsOpenDirectory(sdmc, "/switch/dekopon", FsDirOpenMode_ReadDirs, &dir))) {
+        fsDirClose(&dir);
+        fsFsRenameDirectory(sdmc, "/switch/dekopon", "/switch/toronja");
+    }
+}
+
+#if !defined(__SWITCH2__)
+// libnx calls this at the end of its own start-up, before any global constructor runs -
+// and so before anything can create the new folder and leave the old one behind. (The
+// Switch 2 build has its own userAppInit below, which gets there through its boot log.)
+extern "C" void userAppInit(void) {
+    MoveOldUserFolder(fsdevGetDeviceFileSystem("sdmc"));
+}
+#endif
+
 namespace {
 
 #if defined(__SWITCH2__)
 // Switch 2 bring-up breadcrumb. A crash before Bootstrap() leaves no normal log,
-// so record how far startup got by rewriting sdmc:/switch/dekopon/log/boot.txt
+// so record how far startup got by rewriting sdmc:/switch/toronja/log/boot.txt
 // (raw fs, like the exception handler). Absent file => died before main.
 //
 // The log lives in a plain char buffer on purpose: it is written from
@@ -79,9 +109,10 @@ void Switch2BootMark(const char* stage) {
         return;
     }
     fsFsCreateDirectory(sdmc, "/switch");
-    fsFsCreateDirectory(sdmc, "/switch/dekopon");
-    fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
-    const char* path = "/switch/dekopon/log/boot.txt";
+    MoveOldUserFolder(sdmc);
+    fsFsCreateDirectory(sdmc, "/switch/toronja");
+    fsFsCreateDirectory(sdmc, "/switch/toronja/log");
+    const char* path = "/switch/toronja/log/boot.txt";
     fsFsDeleteFile(sdmc, path);
     if (R_FAILED(fsFsCreateFile(sdmc, path, static_cast<s64>(s_boot_log_len), 0))) {
         return;
@@ -166,7 +197,7 @@ void userAppInit(void) {
 // --- Global-constructor tracer -------------------------------------------------
 // Replaces newlib's __libc_init_array (called at the end of __libnx_init) with a
 // copy that records, BEFORE calling each constructor, its index and its offset
-// from the module base into sdmc:/switch/dekopon/log/ctor.txt (one fixed-size
+// from the module base into sdmc:/switch/toronja/log/ctor.txt (one fixed-size
 // record, overwritten in place and flushed). If startup dies inside a global
 // constructor - by exception, abort, trap or CPU fault - the record left on the
 // SD names the culprit: resolve the offset with docker/switch2/symbolize.py and
@@ -207,10 +238,11 @@ __attribute__((no_stack_protector)) void __libc_init_array(void) {
     static char buf[96];
 
     if (FsFileSystem* sdmc = fsdevGetDeviceFileSystem("sdmc")) {
-        const char* path = "/switch/dekopon/log/ctor.txt";
+        const char* path = "/switch/toronja/log/ctor.txt";
         fsFsCreateDirectory(sdmc, "/switch");
-        fsFsCreateDirectory(sdmc, "/switch/dekopon");
-        fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
+        MoveOldUserFolder(sdmc);
+        fsFsCreateDirectory(sdmc, "/switch/toronja");
+        fsFsCreateDirectory(sdmc, "/switch/toronja/log");
         fsFsDeleteFile(sdmc, path);
         if (R_SUCCEEDED(fsFsCreateFile(sdmc, path, SWITCH2_CTOR_RECORD_SIZE, 0)) &&
             R_SUCCEEDED(fsFsOpenFile(sdmc, path, FsOpenMode_Write, &s_ctor_file))) {
@@ -603,6 +635,7 @@ void RunGame(PadState& pad, const std::string& rom) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    MoveOldUserFolder(fsdevGetDeviceFileSystem("sdmc")); // Already done unless start-up skipped it.
     SWITCH2_BOOT_MARK("01 main entered");
     SwitchFrontend::SetUpdaterExecutablePath(argc > 0 && argv[0] != nullptr ? argv[0] : "");
     const bool have_socket = R_SUCCEEDED(socketInitializeDefault());
@@ -626,7 +659,7 @@ int main(int argc, char* argv[]) {
     // Resolve SD-card dirs and create folders/files if not present
     const int launch_count = SwitchFrontend::Bootstrap();
     SWITCH2_BOOT_MARK("03 bootstrap done");
-    std::printf("FS & logging up (launch #%d). Logs are located at sdmc:/switch/dekopon/log/\n",
+    std::printf("FS & logging up (launch #%d). Logs are located at sdmc:/switch/toronja/log/\n",
                 launch_count);
 
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);

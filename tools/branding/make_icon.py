@@ -1,11 +1,17 @@
 """Draws the Toronja icon (a grapefruit half) and writes it as a 256x256 JPEG.
 
-Usage: python make_icon.py <out.jpg> [<out.png>]
+Usage: python make_icon.py [--link] <out.jpg> [<out.png>]
+
+--link draws Toronja Link's: the same fruit on a blue ground, with a signal badge in the
+corner, so the two apps can be told apart at a glance in the Homebrew Menu.
 """
 import math
 import sys
 
 from PIL import Image, ImageDraw, ImageFilter
+
+LINK = "--link" in sys.argv
+ARGS = [a for a in sys.argv[1:] if a != "--link"]
 
 S = 4  # supersampling
 N = 256 * S
@@ -15,7 +21,13 @@ d = ImageDraw.Draw(img)
 # Background: deep green, lighter towards the top left.
 for y in range(N):
     t = y / N
-    d.line([(0, y), (N, y)], fill=(int(22 + 10 * (1 - t)), int(52 + 34 * (1 - t)), int(46 + 22 * (1 - t))))
+    if LINK:
+        # Toronja Link: deep blue, where Toronja itself is green.
+        d.line([(0, y), (N, y)],
+               fill=(int(20 + 12 * (1 - t)), int(40 + 30 * (1 - t)), int(86 + 52 * (1 - t))))
+    else:
+        d.line([(0, y), (N, y)],
+               fill=(int(22 + 10 * (1 - t)), int(52 + 34 * (1 - t)), int(46 + 22 * (1 - t))))
 
 cx, cy = N // 2, N // 2 + 2 * S
 R = 104 * S
@@ -65,8 +77,21 @@ g.arc([cx - R + 3 * S, cy - R + 3 * S, cx + R - 3 * S, cy + R - 3 * S], 200, 262
 gloss = gloss.filter(ImageFilter.GaussianBlur(1.5 * S))
 img.paste((255, 244, 214), mask=gloss)
 
+if LINK:
+    # A badge in the lower right corner: a dot and two arcs, the sign of a wireless link.
+    d = ImageDraw.Draw(img)
+    bx, by, br = 190 * S, 190 * S, 56 * S
+    d.ellipse([bx - br - 5 * S, by - br - 5 * S, bx + br + 5 * S, by + br + 5 * S],
+              fill=(244, 248, 255))
+    d.ellipse([bx - br, by - br, bx + br, by + br], fill=(28, 74, 168))
+    dot_y = by + 24 * S
+    d.ellipse([bx - 8 * S, dot_y - 8 * S, bx + 8 * S, dot_y + 8 * S], fill=(255, 255, 255))
+    for radius in (26 * S, 46 * S):
+        d.arc([bx - radius, dot_y - radius, bx + radius, dot_y + radius], 225, 315,
+              fill=(255, 255, 255), width=9 * S)
+
 out = img.resize((256, 256), Image.LANCZOS)
-out.save(sys.argv[1], "JPEG", quality=93)
-if len(sys.argv) > 2:
-    out.save(sys.argv[2], "PNG")
-print("ok", sys.argv[1])
+out.save(ARGS[0], "JPEG", quality=93)
+if len(ARGS) > 1:
+    out.save(ARGS[1], "PNG")
+print("ok", ARGS[0])

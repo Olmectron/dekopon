@@ -1,10 +1,10 @@
-name: dekopon-link
+name: toronja-link
 
-# Builds Dekopon Link, the GameShare receiver, for Switch 1 and Switch 2 with the same
+# Builds Toronja Link, the GameShare receiver, for Switch 1 and Switch 2 with the same
 # toolchain image as the Switch 2 port.
 on:
   push:
-    branches: [switch2-gameshare]
+    branches: [main, switch2-gameshare]
     paths:
       - 'tools/gameshare/receiver-nx/**'
       - 'src/citra_switch/ui_canvas.h'
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dekopon-link-${{ github.ref }}
+  group: toronja-link-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -74,6 +74,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dekopon-link
+          name: toronja-link
           path: tools/gameshare/receiver-nx/out/**/*.nro
           if-no-files-found: warn

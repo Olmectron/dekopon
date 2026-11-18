@@ -113,7 +113,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--host", help="console's FTP address")
     parser.add_argument("--port", type=int, default=5000)
-    parser.add_argument("--user-dir", default="/switch/dekopon", help="the app's folder on the SD card")
+    parser.add_argument("--user-dir", default="/switch/toronja", help="the app's folder on the SD card")
     parser.add_argument("--roms", help="games folder on the SD card (default: <user dir>/roms)")
     parser.add_argument("--codes", nargs="*", default=[], help="game codes to fetch, instead of scanning")
     parser.add_argument("--out", help="keep the covers in this local folder instead of uploading")

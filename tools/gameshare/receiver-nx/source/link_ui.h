@@ -22,7 +22,8 @@ using namespace SwitchFrontend::Ui;
 
 constexpr int SCREEN_W = 1280;
 constexpr int SCREEN_H = 720;
-constexpr const char* SETTINGS_FILE = "sdmc:/switch/dekopon-link.ini";
+constexpr const char* SETTINGS_FILE = "sdmc:/switch/toronja-link.ini";
+constexpr const char* OLD_SETTINGS_FILE = "sdmc:/switch/dekopon-link.ini"; // Before the rename.
 
 /// Which screens go where: here and on the console that runs the game.
 enum class Screens {
@@ -55,6 +56,11 @@ struct Settings {
 
     void Load() {
         std::FILE* file = std::fopen(SETTINGS_FILE, "r");
+        if (file == nullptr) {
+            // Settings from before the files were renamed come along.
+            std::rename(OLD_SETTINGS_FILE, SETTINGS_FILE);
+            file = std::fopen(SETTINGS_FILE, "r");
+        }
         if (file == nullptr) {
             return;
         }

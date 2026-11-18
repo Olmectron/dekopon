@@ -1,4 +1,4 @@
-name: dekopon-switch2
+name: toronja-switch2
 
 # Builds the Switch 2 port (ounce-devkit / OunceVK) in CI so no local devkitPro
 # install is needed. The build log in the PR is the feedback loop for finishing
@@ -7,7 +7,7 @@ name: dekopon-switch2
 # build), and a newer push cancels the build of the one before it.
 on:
   push:
-    branches: [master, switch2-ounce-devkit, switch2-async-shaders, switch2-gameshare]
+    branches: [main, switch2-gameshare]
     # Docs-only pushes do not build (and so do not cancel a build in progress).
     paths-ignore: ['**.md', 'tools/gameshare/**', 'tools/ui-preview/**', 'tools/branding/**', 'tools/covers/**',
                    '.github/workflows/gameshare-receiver.yml', '.github/workflows/ui-preview.yml',
@@ -30,7 +30,7 @@ on:
         default: ''
 
 concurrency:
-  group: dekopon-switch2-${{ github.ref }}
+  group: toronja-switch2-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -87,7 +87,7 @@ jobs:
           restore-keys: |
             switch2-ccache-
 
-      - name: Build dekopon.nro
+      - name: Build toronja.nro
         run: docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch2/build.sh
 
       # Saved even when the build fails, so the next attempt reuses what compiled.
@@ -102,12 +102,12 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: dekopon-switch2-nro
-          path: build/switch/src/citra_switch/dekopon.nro
+          name: toronja-switch2-nro
+          path: build/switch/src/citra_switch/toronja.nro
           if-no-files-found: error
 
-      # The updater looks for a release asset named exactly dekopon.nro and checks
-      # the sha256 digest GitHub records for it, as upstream's releases have.
+      # The updater looks for a release asset named exactly toronja-switch2.nro (a Switch 1
+      # looks for toronja-switch1.nro) and checks the sha256 digest GitHub records for it.
       - name: Publish release
         if: success() && github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
         env:
@@ -116,17 +116,18 @@ jobs:
           NOTES: ${{ inputs.notes }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          version=$(sed -n '/NINTENDO_SWITCH2/,/endif/s/.*set(DEKOPON_VERSION "\(.*\)").*/\1/p' CMakeLists.txt | head -n1)
+          version=$(sed -n 's/.*set(DEKOPON_VERSION "\(.*\)").*/\1/p' CMakeLists.txt | head -n1)
           if [ "$TAG" != "v$version" ]; then
             echo "::error::release_tag '$TAG' does not match the built version 'v$version' (DEKOPON_VERSION in CMakeLists.txt)"
             exit 1
           fi
-          [ -n "$NOTES" ] || NOTES="Dekopon for Switch 2 $TAG"
+          [ -n "$NOTES" ] || NOTES="Toronja $TAG"
           flags=()
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
-          gh release create "$TAG" build/switch/src/citra_switch/dekopon.nro \
+          cp build/switch/src/citra_switch/toronja.nro toronja-switch2.nro
+          gh release create "$TAG" toronja-switch2.nro \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Dekopon for Switch 2 $TAG" --notes "$NOTES" "${flags[@]}"
+            --title "Toronja $TAG" --notes "$NOTES" "${flags[@]}"
 
       # Collect the unstripped ELF wherever CMake/nx_create_nro left it, so a
       # crash.txt pc/lr offset can be resolved with aarch64-none-elf-addr2line.
@@ -147,6 +148,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dekopon-switch2-debug
+          name: toronja-switch2-debug
           path: debug/
           if-no-files-found: warn

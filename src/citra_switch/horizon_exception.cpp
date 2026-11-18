@@ -34,7 +34,7 @@ namespace {
 constexpr std::uint32_t ESR_EC_DATA_ABORT_LOWER = 0x24;
 constexpr std::uint32_t ESR_EC_DATA_ABORT_SAME = 0x25;
 
-constexpr const char* CRASH_PATH = "/switch/dekopon/log/crash.txt";
+constexpr const char* CRASH_PATH = "/switch/toronja/log/crash.txt";
 
 char s_report[8192];
 std::size_t s_report_len;
@@ -114,8 +114,8 @@ void WriteReportToSd() {
     }
 
     fsFsCreateDirectory(sdmc, "/switch");
-    fsFsCreateDirectory(sdmc, "/switch/dekopon");
-    fsFsCreateDirectory(sdmc, "/switch/dekopon/log");
+    fsFsCreateDirectory(sdmc, "/switch/toronja");
+    fsFsCreateDirectory(sdmc, "/switch/toronja/log");
     fsFsDeleteFile(sdmc, CRASH_PATH);
     if (R_FAILED(fsFsCreateFile(sdmc, CRASH_PATH, static_cast<s64>(s_report_len), 0))) {
         return;

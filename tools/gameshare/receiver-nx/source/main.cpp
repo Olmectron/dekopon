@@ -8,7 +8,7 @@
 //
 // The host is found by broadcast. When the two consoles are not on the same subnet (for
 // example this one on a PC's Wi-Fi hotspot and the host on that PC's Ethernet), list the
-// host's address in sdmc:/switch/dekopon-link.txt, one IPv4 address per line.
+// host's address in sdmc:/switch/toronja-link.txt, one IPv4 address per line.
 //
 // Controls:  everything is sent to the game, except
 //   Both stick clicks      switch between the bottom and the top screen
@@ -143,7 +143,7 @@ constexpr u16 LDN_SCENE_ID = 0x4453; // "DS"
 constexpr u8 LDN_PASSPHRASE[0x10] = {0x44, 0x65, 0x6b, 0x6f, 0x70, 0x6f, 0x6e, 0x47,
                                      0x61, 0x6d, 0x65, 0x53, 0x68, 0x61, 0x72, 0x65};
 
-constexpr const char* LOG_FILE = "sdmc:/switch/dekopon-link.log";
+constexpr const char* LOG_FILE = "sdmc:/switch/toronja-link.log";
 int s_log_lines = 0;
 
 /// printf that also appends to LOG_FILE (the first few hundred lines), so the result of a
@@ -345,13 +345,18 @@ bool JoinLocalWireless(PadState& pad, in_addr& host_addr, bool& quit) {
     return true;
 }
 
-constexpr const char* HOSTS_FILE = "sdmc:/switch/dekopon-link.txt";
+constexpr const char* HOSTS_FILE = "sdmc:/switch/toronja-link.txt";
 
 /// Extra addresses to try besides the broadcast. Creates the file with an example the first
 /// time.
 std::vector<in_addr> LoadHosts() {
     std::vector<in_addr> hosts;
     std::FILE* file = std::fopen(HOSTS_FILE, "r");
+    if (file == nullptr) {
+        // A list written before the files were renamed comes along.
+        std::rename("sdmc:/switch/dekopon-link.txt", HOSTS_FILE);
+        file = std::fopen(HOSTS_FILE, "r");
+    }
     if (file == nullptr) {
         file = std::fopen(HOSTS_FILE, "w");
         if (file != nullptr) {

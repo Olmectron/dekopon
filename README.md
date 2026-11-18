@@ -1,274 +1,153 @@
-<h1 align="center">Dekopon</h1>
+<h1 align="center">Toronja</h1>
 
 <p align="center">
-  <img src="docs/dekopon_square.webp" alt="Dekopon logo" width="220">
+  <img src="docs/toronja.jpg" alt="Toronja icon: half a grapefruit" width="180">
 </p>
 
-<p align="center"><sub>Logo by <a href="https://stickymangorice.com/">StickyMangoRice</a></sub></p>
-
-<b>Dekopon</b> is an open-source 3DS emulator for the Nintendo Switch based on Azahar.
-
-The Azahar base currently in use is Azahar 2126.1.1
-
-Many many thanks to the Azahar team for creating such an amazing project in the first place!
-
-<p align="center">
-  <a href="https://ko-fi.com/palindromicbreadloaf">Support Dekopon development on Ko-fi</a>
-</p>
-
-
-# Project status
-
-Currently, the project boots and runs games at mostly full speed (see the (outdated) compatibility list for details: https://cryptpad.fr/sheet/#/2/sheet/view/PJKtoq0haezswSwH8qgEJkp7NWO57qNNL7cq04JsJAM/)\
-\
-Other features include:
-- Full gyro support
-- CIA installation support
-- Switch software (and hardware) keyboard support
-- Multiple screen layouts via R3 (Press the right stick)
-- Virtual touch input
-- Full button remapping support
-- In-game menu accessible via '+' and '-'
-- Cheat, mod (LayeredFS), and texture-pack support
-- System language/region toggle
-- Arctic Base/Azahar Setup Tool support
-  - It should be noted that Streetpass and Spotpass should not be used in games.
-  - There may be a crash related to trying to access these features, so do try to avoid them.
-- Full 3D support via Nintendo Labo VR Kit/Virtual Boy for Nintendo Switch
-- (Virtual) Cartridge insertion support
-- Resolution Upscaling
-- Native 1080p output when docked, switching live as the console is docked and undocked
-- Amiibo (both actual and .bin amiibo images placed in `amiibo`)
-- Camera support via static images placed in `camera`
-- Loading ROMs via USB Mass Storage
-- In-built auto-updater
-- Save management
-- Save states
-- Per-game options
-- Frame generation via LSFG
-- And other things I'm probably forgetting.
-
-Features currently in the pipeline are:
-- More performance improvements
-- Streetpass/spotpass (If even possible)
-
-Feel free to request more features, but do note they may or may not be implemented due to either feasibility or time.
-
-# Installation
-
-Installation is as simple as downloading the release nro from the [releases](https://github.com/PalindromicBreadLoaf/dekopon/releases) page
-and copying it to your SD card in your standard homebrew location (probably /switch).
-
-Your legally acquired ROMs go in `/switch/dekopon/roms/`
-(This can be changed in settings)
-
-# Cheats, mods and texture packs
-
-All three use the same folder layout as desktop Azahar/Citra, rooted at the dekopon directory on
-your SD card (`/switch/dekopon/` by default). In every path below, `<TITLE_ID>` is the game's Title ID
-in uppercase (e.g. `00040000000EC800`). If you have changed the default path, please reflect that in any of the directories below.
-
-## Cheats
-
-- Put a cheat file at `/switch/dekopon/cheats/<TITLE_ID>.txt`. The format is the standard Gateway / Action Replay format.
-- Open the in-game menu (`+` and `-`) to switch individual cheats on and off while the game runs.
-  Your choices are written back to the cheat file, so they persist across launches.
-
-## Mods
-
-Place mod files under `/switch/dekopon/load/mods/<TITLE_ID>/`:
-
-Mods are applied when the game boots.
-
-Currently, selecting a mod from a list is not supported. Be sure that the folders under titleID are
-`romfs` `exefs` and/or `exheader.bin`
-
-## Texture packs
-
-- Loading: drop a pack in `/switch/dekopon/load/textures/<TITLE_ID>/`, then enable
-  **Custom Textures** in the in-game menu (`+` and `-`). This toggle applies immediately and is
-  remembered. For large packs, `preload_textures = true` loads the whole pack at boot to avoid 
-  in-game hitching, at the cost of more memory. This may run you out of RAM depending on the texture pack size.
-  It's best to use no more than 1080p textures since you'll run out of RAM fast using 4K textures for basically zero visual gain.
-  Also, note that you may run into a crash trying to use too many custom textures and higher resolutions than 1x. There are
-  some safeguards in place to prevent crashes, but it may still happen.
-- Dumping): set `dump_textures = true` in the `[Utility]` config section. Textures
-  the game uses are written to `/switch/dekopon/dump/textures/<TITLE_ID>/`. This setting takes
-  effect on the next launch. (You should also really just do this on PC. Performance will be degraded
-  using this option.)
-
-# Save management
-
-Press `+` on a title in the library to open its details panel, then `Y` for the save tools.
-Inside that panel:
-
-- `X` makes a new backup of the save currently on the emulated card.
-- `A` restores the highlighted backup over the emulated save.
-- `Y` deletes the highlighted backup.
-- Left/Right switches between save data and extdata, if the title has extdata.
-
-Backups are written to the SD card in Checkpoint's layout, so a real 3DS running Checkpoint
-reads them directly and vice versa:
-
-```
-sdmc:/3ds/Checkpoint/saves/0x<UNIQUEID> <Title>/<backup name>/
-sdmc:/3ds/Checkpoint/extdata/0x<EXTDATAID> <Title>/<backup name>/
-```
-
-**Games that use secure values (notably Pokemon games) will not work copying saves from
-Dekopon -> 3DS.** Going the other way is fine.
-
-# Loading games from USB storage
-
-Dekopon mounts USB mass storage automatically, so drives plugged into the dock (or into the console)
-show up without any extra setup. Yyou'll get a notice naming the mount point when one is inserted or
-the opposite if it is removed.
-
-FAT12/16/32, exFAT, NTFS, and EXT2/3/4 (recommended) are the supported filesystems.
-
-To use a ROM folder on an external drive, go to the Paths tab and set **second ROM folder** to a
-folder on said drive.
-
-Please only use the second folder rather for USB. This folder is rescanned asynchronously on each 
-boot so it's okay to be swapped around constantly.
-
-# Updating
-
-Dekopon can update itself. This is found under **Settings > General**.
-
-- **Check for Updates** asks GitHub what the newest release is and offers to install it, or
-  says if you are on the latest version.
-- **Update Channel** picks between *Stable* and *Prerelease*. Stable releases are less likely to
-  have bugs, but may be behind in features.
-- **Release Notes** shows the notes for the build you're on.
-- **Show What's New** controls whether you get a pop-up on boot after a new update explaining what
-  has changed.
-
-Obviously, this needs a working internet connection.
-
-# LSFG
-
-2/3/4x frame generation is supported via LSFG. You must supply your own Lossless.dll downloaded from
-[Steam](https://store.steampowered.com/app/993090/Lossless_Scaling/) to use this feature. Lossless.dll
-should be placed in `sdmc:/switch/dekopon/lsfg/Lossless.dll`. The settings UI (Under Settings > Graphics >
-Frame Generation) will tell you if the file was detected. This has a very large GPU performance impact 
-(much more than increase render resolution), so expect to have to overclock the GPU to get good results
-out of it. I found that 2x is possible in handheld at 460MHz with 25% flow scale. Mess around with the 
-settings to see what best suits you and your perferances.
-
-To enable frame generation, set the `Frame Generation` option to `On:`. This will look weird in the menu,
-as it will say `On: Off`, but that's because the menu is already 60fps, and thus doesn`t need framegen running.
-The second variable is just the status of it currently. In-game, this will change to active for sub-60fps games.
-
-Note on first boot there will be a significant delay when starting the game as the frame generation shaders need
-to be compiled first. This only needs to happen once, then games will boot at the same speed as before again.
-
-There is also the option to increase the multiplier for those that have overclocked their display beyond 60Hz. 
-Note that this is untested (I only have an Erista model...), but it in theory should work? This also greatly 
-increases GPU usage, so a much higher overclock will be needed.
-
-# Amiibo
-
-You can use your actual amiibo figures now in games! Just go to the `Amiibo` tab in the quick menu, then choose
-to scan a real amiibo figure. After this, amiibo scanning will work as it does normally.
-
-Note that this can corrupt your amiibo, so be safe and have backups. I've never experienced corruption, but it is
-possible.
-
-There is one quirk, however, when saving a new game to the amiibo, you will get an error stating to open the menu
-to delete the previously saved data (only one game can exist on an amiibo at a time). This requires you to continue
-to hold the amiibo over the nfc touchpoint while navigating the menu to delete the previously stored information so
-that the game can save the new information to it. It's super janky, I know, but it's the best way I could find, and 
-it only happens once per new amiibo registered to a game. It's easier to just fully wipe the amiibo beforehand if you
-wish to do this. 
-
-# Build instructions
-
-## Required packages
-The current build requires DevkitPro. Please install from here [DevkitPro Install](https://devkitpro.org/wiki/Getting_Started)
-### DevkitPro Packages
-- switch-dev
-- switch-freetype
-- switch-bzip2
-- switch-libpng
-- switch-zlib
-- switch-curl
-- switch-ntfs-3g and switch-lwext4 *(optional. Without them USB drives mount FAT and exFAT only\*\*)*
-- switch-mesa *(only for the legacy GLES backend\*)*
-### System Packages
-- cmake
-- git
-
-\*The default GPU backend is Vulkan. On Switch 2 it is provided by
-[OunceVK](https://github.com/ouncebrew/ouncevk), installed with
-[ounce-devkit](https://github.com/ouncebrew/ounce-devkit) and linked with `-lvulkan`.
-On Switch 1 it is provided by [NXVK](https://github.com/PalindromicBreadLoaf/nxvk).
-The Vulkan driver and switch-mesa cannot be included simultaneously, so the backend
-is chosen at build time.
-
-\*\*Both are detected at configure time. If they are missing, configuring prints
-`libusbhsfs: FAT and exFAT support only` and NTFS/EXT drives simply won't mount in that build.
-
-## 1. Clone the repository
-```shell
-git clone --recursive https://github.com/PalindromicBreadLoaf/dekopon.git
-cd dekopon
-```
-
-## 2. Build for Switch 2 (ounce-devkit)
-Install [ounce-devkit](https://github.com/ouncebrew/ounce-devkit) on top of
-devkitPro. OunceVK provides Vulkan, so no NXVK build is required. Configure with
-the ounce CMake toolchain:
-
-```shell
-source $DEVKITPRO/switch2vars.sh
-cmake -S . -B build/switch \
-    -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/libounce/cmake/Switch2.cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake --build build/switch --target citra_switch_nro -j$(nproc)
-```
-
-The toolchain defines `NINTENDO_SWITCH2`, which selects OunceVK (`-lvulkan`) as
-the Vulkan driver. See `PORT_SWITCH2.md` for the status and open items of the
-Switch 2 port.
-
-## 3. Build for Switch 1 (NXVK)
-Switch 1 still uses NXVK. Build it first following the
-[NXVK repository](https://github.com/PalindromicBreadLoaf/nxvk) to produce a
-`libnvk.a`; configuring looks for `switch/build/cross/src/nouveau/vulkan/libnvk.a`
-under `externals/nxvk`. The `nxvk` submodule was removed from the default set, so
-fetch it explicitly, then configure with the stock devkitPro Switch toolchain:
-
-```shell
-git -c submodule.nxvk.url=https://github.com/PalindromicBreadLoaf/nxvk.git \
-    submodule add -b switch https://github.com/PalindromicBreadLoaf/nxvk.git externals/nxvk
-cmake -S . -B build/switch \
-    -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake --build build/switch --target citra_switch_nro -j$(nproc)
-```
-
-The output nro should be located in build/switch/src/citra_switch/dekopon.nro
-
-# How can I contribute?
-
-### Pull requests
-
-If you want to implement a change and have the technical capability to do so, we would be happy to accept your contributions.
-
-If you are contributing a new feature, it is highly suggested that you first make a Feature Request issue to discuss the addition before writing any code. This is to ensure that your time isn't wasted working on a feature which isn't deemed appropriate for the project.
-
-After creating a pull request, please don't repeatedly merge `master` into your branch. A maintainer will update the branch for you if/when it is appropriate to do so.
-
-### Compatibility reports
-
-Do not ever contact the upstream Azahar project about any issues regarding this port. 
-They have no relation to this project whatsoever and do not wish to deal with random issues regarding it.
-Please only create issues in this repository regarding bugs found here unless they are directly applicable upstream and also happen 
-the exact same as here.
-
-To do so, simply read https://github.com/azahar-emu/compatibility-list/blob/master/CONTRIBUTING.md and follow the instructions.
-
-Contributing compatibility data helps more accurately reflect the current capabilities of the emulator, so it would be highly appreciated if you could go through the reporting process after completing/playing a game.
+**Toronja** is a Nintendo 3DS emulator for the **Nintendo Switch 2** and the **Nintendo Switch**,
+with a companion app, **Toronja Link**, that lets a second console show one of the 3DS's two
+screens and play along.
+
+It is a continuation of [Dekopon](https://github.com/PalindromicBreadLoaf/dekopon) by
+PalindromicBreadLoaf, which is itself the Switch port of [Azahar](https://github.com/azahar-emu/azahar).
+Everything that makes games run is theirs; see [Credits](#credits).
+
+> **Status.** This is homebrew under active development, built and tested by one person on
+> two consoles. Things marked *untested* below compile and are believed to work, and that is
+> all that is claimed for them.
+
+## What is different from Dekopon
+
+### Runs on Switch 2
+
+- A port to the Switch 2 (kaiHEN + ounce-devkit, Vulkan through OunceVK/NVK), alongside the
+  Switch 1 build, from the same source and with the same version number.
+- Performance work found by profiling real games on both consoles:
+  - Majora's Mask 3D's Sheikah Stone visions list went from 9 fps to 30 on Switch 2
+    (`std::call_once` on every guest `LDREX`/`STREX`, in dynarmic's spin lock).
+  - The slowdown with the sun in view in the Zelda games (a depth-buffer read-back every
+    frame): host-imported download memory on Switch 2; on Switch 1, a copy out of uncached
+    driver memory and a read-back of only the part the game looks at.
+  - Switch 1: pipelines that had waited too long are built by the draw that needs them, so
+    a game no longer shows an empty level while one slow worker catches up; closing a game
+    no longer builds the whole queue first; shader caches survive app updates.
+- Reset presets that stay correct ("Default", "Default without async shaders").
+
+### GameShare and Toronja Link
+
+- **Toronja Link**, a second homebrew app for another Switch or Switch 2: it shows the top
+  screen, the bottom screen or both, sends its buttons, sticks, touch screen and motion
+  back, and can play the game's sound.
+- Console to console over **direct wireless** (no router), or over the network both are on.
+- The link can be made **from the library, before any game**: Toronja Link then shows the
+  games as a grid of icons, a large Play button with the game's animated banner once one is
+  picked, and in the options what the focused setting does and every value it can take.
+- The second console's Amiibo reader can serve the game; `+` and `-` on it open the in-game
+  menu on the main console.
+
+### Library
+
+- A shelf of game **cases** instead of a list: nine styles (Coverflow, Shelf, Carousel, Arc,
+  Stack, Spotlight, Bookshelf, Pile, Showroom), cases drawn in 3D with spine, hinge and seam.
+- **Covers** from GameTDB, downloaded by the console, sent from a PC
+  (`tools/covers/fetch_covers.py`) or **shared from one console to another** for a console
+  kept off the internet.
+- `A` brings the selected case forward to turn and look at before starting - or shows the
+  game's **animated 3D banner**, the one the 3DS shows in its HOME Menu, read out of the game
+  and drawn in software (`src/citra_switch/banner3d.h`).
+- Dark and light themes, menu sounds, touch everywhere.
+
+### Menus
+
+- Options in a drawer of pages, with the risky ones under *Advanced* behind a warning, and
+  an explanation for every setting (`X`).
+- A redesigned in-game menu: screen layouts as tiles, quick actions (save states, GameShare,
+  resolution, FPS, Amiibo, cheats), full settings with the ones that cannot change mid-game
+  locked.
+- Amiibo with nothing to set up: the reader turns on when the game asks.
+- The screen layout last used is the one the next game starts in.
+
+## Installing
+
+1. Take the file for your console from the [releases](https://github.com/Olmectron/toronja/releases)
+   (or from the artifacts of the latest build under *Actions*):
+   `toronja-switch2.nro` or `toronja-switch1.nro`, and `toronja-link.nro` for a second console.
+2. Copy it to `/switch/` on the SD card and start it from the Homebrew Menu.
+3. Put your own game dumps in the games folder shown under *Options > Folders*
+   (`/switch/toronja/roms/` by default).
+
+Coming from Dekopon, or from a build of Toronja that still used `/switch/dekopon/`: the folder
+is renamed to `/switch/toronja/` the first time this version starts, with everything in it.
+Dekopon itself, if you keep it on the card, starts afresh after that.
+
+No games, keys or system files are included, and none will be provided.
+
+## Folders
+
+Everything lives under `/switch/toronja/` (changeable in the options):
+
+| Folder | What goes in it |
+| --- | --- |
+| `roms/` | Your games |
+| `covers/`, `covers/full/` | Front covers and whole wraps, named by game code (`AQEE.jpg`) |
+| `cheats/<TITLE_ID>.txt` | Gateway / Action Replay cheats |
+| `load/mods/<TITLE_ID>/` | LayeredFS mods (`romfs`, `exefs`, `exheader.bin`) |
+| `load/textures/<TITLE_ID>/` | Texture packs |
+| `amiibo/`, `camera/` | Amiibo dumps and still images for the cameras |
+| `log/` | `azahar_log.txt`, and `crash.txt` after a crash |
+
+Save backups use Checkpoint's layout under `sdmc:/3ds/Checkpoint/`, so a real 3DS can read them.
+
+## Toronja Link
+
+Open **Toronja Link** on the second console and, on the main one, the link button beside the
+options (right stick click) or *Options > GameShare*. Choose the same kind of connection on
+both: direct wireless, or the local network.
+
+On a Switch 1, start Toronja Link from the Homebrew Menu opened through the **Album**: opened
+over a game, the system refuses to join another title's wireless network.
+
+## Building
+
+There is no local toolchain to set up: every push is built by GitHub Actions
+(`.github/workflows/`), and the `.nro` files are the artifacts of each run.
+
+| Workflow | Builds |
+| --- | --- |
+| `toronja-switch2` | Toronja for Switch 2 |
+| `toronja-switch1` | Toronja for Switch 1 (with the NXVK Vulkan driver) |
+| `toronja-link` | Toronja Link for both consoles |
+| `ui-preview` | The library and options rendered to PNG on a PC, and the two icons |
+
+The toolchain image is described in `docker/switch2/Dockerfile`; `docker/switch2/build.sh` and
+`docker/switch1/build.sh` are the builds themselves. `SWITCH2_HANDOFF.md` has the notes of the
+port: what was tried, what the loader does and does not grant, and how each fix was found.
+
+## Known limits
+
+- USB sharing between consoles is written but switched off: the Switch 2 loader grants
+  neither `usb:ds` nor `usb:hs`.
+- The 3D banner is drawn unlit and without the material effects; its sound is not played.
+- Much of the newest work (the link from the library, cover sharing, the banner on the
+  console) is *untested* beyond compiling and a PC prototype.
+- Frame generation (LSFG) is not built into these binaries.
+
+## Credits
+
+- **[Azahar](https://github.com/azahar-emu/azahar)** and, before it, Citra and Lime3DS: the
+  emulator.
+- **[Dekopon](https://github.com/PalindromicBreadLoaf/dekopon)** by PalindromicBreadLoaf: the
+  Switch port Toronja continues - the frontend it grew from, the Vulkan work on NXVK, save
+  management, the updater, USB storage and much else.
+- **Olmectron**: Toronja - the Switch 2 port, GameShare and Toronja Link, the library, the
+  menus and the performance work listed above.
+- Cover art comes from [GameTDB](https://www.gametdb.com/) at the user's request; none is
+  distributed here.
+
+## License
+
+GPL-2.0-or-later, as Azahar and Dekopon (`license.txt`). Bundled dependencies keep their own
+licences; see `THIRD_PARTY_NOTICES.md`.
+
+Nintendo 3DS, Nintendo Switch and Nintendo Switch 2 are trademarks of Nintendo. Toronja is not
+affiliated with, authorised or endorsed by Nintendo.

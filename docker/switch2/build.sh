@@ -63,7 +63,7 @@ if command -v ccache >/dev/null 2>&1; then
 fi
 
 echo
-NRO="$BUILD_DIR/src/citra_switch/dekopon.nro"
+NRO="$BUILD_DIR/src/citra_switch/toronja.nro"
 if [ -f "$NRO" ]; then
   echo "=== OK: $NRO ==="
   ls -la "$NRO"

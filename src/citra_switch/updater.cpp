@@ -34,15 +34,15 @@ namespace {
 // Toronja updates from its own repository on both consoles: upstream's releases are
 // Dekopon, and must never be installed over this.
 constexpr std::string_view kReleasesApi =
-    "https://api.github.com/repos/Olmectron/dekopon/releases?per_page=20";
+    "https://api.github.com/repos/Olmectron/toronja/releases?per_page=20";
 // Each console takes its own file from a release, so a Switch 1 can never install the
 // Switch 2 build or the other way round.
 #if defined(__SWITCH2__)
-constexpr std::string_view kAssetName = "dekopon.nro";
+constexpr std::string_view kAssetName = "toronja-switch2.nro";
 #else
-constexpr std::string_view kAssetName = "dekopon-switch1.nro";
+constexpr std::string_view kAssetName = "toronja-switch1.nro";
 #endif
-constexpr std::string_view kUserAgent = "Dekopon-Updater/" DEKOPON_VERSION;
+constexpr std::string_view kUserAgent = "Toronja-Updater/" DEKOPON_VERSION;
 constexpr long kConnectTimeoutSeconds = 15;
 constexpr long kRequestTimeoutSeconds = 30;
 constexpr std::uint32_t kNroMagic = 0x304F524E;
@@ -457,7 +457,7 @@ UpdateCheckResult CheckForUpdate(UpdateChannel channel, const std::atomic<bool>*
     curl_global_cleanup();
 
     if (!newest) {
-        result.error = "No compatible dekopon.nro release was found.";
+        result.error = "No release for this console was found.";
         return result;
     }
     if (CompareReleaseVersions(newest->tag, CurrentVersion()) <= 0) {
@@ -568,7 +568,7 @@ UpdateInstallResult InstallUpdate(const UpdateRelease& release,
 
     result.success = true;
     result.backup_path = backup;
-    LOG_INFO(Frontend, "Updated Dekopon {} -> {}, backup at {}", CurrentVersion(), release.tag,
+    LOG_INFO(Frontend, "Updated Toronja {} -> {}, backup at {}", CurrentVersion(), release.tag,
              backup);
     return result;
 }

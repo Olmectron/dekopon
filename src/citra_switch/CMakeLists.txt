@@ -139,7 +139,7 @@ else()
     set(DEKOPON_NACP_NAME "Toronja")
 endif()
 
-nx_generate_nacp(OUTPUT dekopon.nacp
+nx_generate_nacp(OUTPUT toronja.nacp
     NAME "${DEKOPON_NACP_NAME}"
     AUTHOR "Olmectron (Azahar, Dekopon)"
     VERSION "${DEKOPON_VERSION}"
@@ -182,15 +182,15 @@ if (ENABLE_DEKO3D)
     set_property(TARGET dekopon_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK_DKSH_FILES})
 
     nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/toronja.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/toronja.nacp"
         ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
         ROMFS dekopon_romfs
     )
 else()
     nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/toronja.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/toronja.nacp"
         ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
     )
 endif()

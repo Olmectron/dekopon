@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# Dekopon Link - receiver for Dekopon's GameShare prototype.
+# Toronja Link - the receiver for Toronja's GameShare.
 #
 #   make                    Switch 1 build (devkitPro + libnx + switch-libjpeg-turbo)
 #   make PLATFORM=switch2   Switch 2 build (ounce-devkit)
 #
-# Output: out/<platform>/dekopon-link.nro
+# Output: out/<platform>/toronja-link.nro
 
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
 endif
 
 PLATFORM ?= switch1
-TARGET   := dekopon-link
+TARGET   := toronja-link
 OUT      := out/$(PLATFORM)
 
 ifeq ($(PLATFORM),switch2)
@@ -49,7 +49,7 @@ $(OUT):
 $(OUT)/main.o: source/main.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# The USB link is shared with Dekopon itself.
+# The USB link is shared with Toronja itself.
 $(OUT)/game_share_usb.o: ../../../src/citra_switch/game_share_usb.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

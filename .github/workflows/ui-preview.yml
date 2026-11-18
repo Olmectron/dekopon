@@ -4,7 +4,7 @@ name: ui-preview
 # can be looked at without a console.
 on:
   push:
-    branches: [switch2-gameshare]
+    branches: [main, switch2-gameshare]
     paths:
       - 'src/citra_switch/ui_canvas.h'
       - 'src/citra_switch/ui_views.h'
@@ -47,10 +47,15 @@ jobs:
               Image.open(path).save(path[:-4] + '.png')
           "
           rm preview/*.ppm
+          # The two apps' icons, to look at and to commit.
+          python3 tools/branding/make_icon.py preview/icon-toronja.jpg preview/icon-toronja.png
+          python3 tools/branding/make_icon.py --link preview/icon-toronja-link.jpg preview/icon-toronja-link.png
           ls -la preview
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: ui-preview
-          path: preview/*.png
+          path: |
+            preview/*.png
+            preview/*.jpg

@@ -31,9 +31,23 @@
 
 namespace {
 
-constexpr const char* kDefaultUserDir = "sdmc:/switch/dekopon/";
+constexpr const char* kDefaultUserDir = "sdmc:/switch/toronja/";
+// What it was while this was Dekopon's port: the folder is renamed at start-up, and
+// paths written down with the old name are read as the new one.
+constexpr std::string_view kOldUserDir = "sdmc:/switch/dekopon/";
 
-constexpr const char* kUserDirPointer = "sdmc:/switch/dekopon/user_dir.txt";
+constexpr const char* kUserDirPointer = "sdmc:/switch/toronja/user_dir.txt";
+
+// Every "sdmc:/switch/dekopon/" in `text` becomes the new folder. True if any was there.
+bool Rehome(std::string& text) {
+    bool changed = false;
+    for (std::size_t at = text.find(kOldUserDir); at != std::string::npos;
+         at = text.find(kOldUserDir, at)) {
+        text.replace(at, kOldUserDir.size(), kDefaultUserDir);
+        changed = true;
+    }
+    return changed;
+}
 
 std::string WithTrailingSlash(std::string path) {
     if (!path.empty() && path.back() != '/') {
@@ -47,6 +61,7 @@ std::string ReadUserDirPointer() {
     std::string contents;
     FileUtil::ReadFileToString(true, kUserDirPointer, contents);
     std::string path = WithTrailingSlash(Common::StripSpaces(contents));
+    Rehome(path);
     if (path == kDefaultUserDir) {
         return "";
     }
@@ -111,6 +126,8 @@ public:
         config_loc = FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir) + "config.ini";
         std::string ini_buffer;
         FileUtil::ReadFileToString(true, config_loc, ini_buffer);
+        // Folders written down before the app's own folder was renamed.
+        Rehome(ini_buffer);
         if (!ini_buffer.empty()) {
             config = std::make_unique<INIReader>(ini_buffer.c_str(), ini_buffer.size());
         }

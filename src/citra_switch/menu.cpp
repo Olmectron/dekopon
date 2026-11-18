@@ -2060,7 +2060,7 @@ private:
                paths.scan_recursive != live.scan_recursive;
     }
 
-    // The dekopon directory only moves on the next launch.
+    // The user directory only moves on the next launch.
     bool RestartPending() const {
         return paths.user_dir != GetActiveUserDir();
     }
@@ -3858,7 +3858,7 @@ private:
             "Update Toronja to " + release.tag + '?',
             {"Installed: " + std::string{CurrentVersion()},
              "Available: " + release.tag + " (" + kind + ")",
-             "The running dekopon.nro will be replaced after verification."},
+             "The running app will be replaced after verification."},
             "The current NRO is retained as a .backup file.",
             "Update",
             [this, release] { StartUpdate(release); },
