@@ -111,6 +111,19 @@ jobs:
       - name: Build toronja.nro for Switch 1
         run: docker run --rm -e DEKOPON_ZONE_PROFILER=${{ inputs.profiler && 'ON' || 'OFF' }} -v "${{ github.workspace }}:/src" dekopon-switch2 docker/switch1/build.sh
 
+      # Names for the addresses of a crash report (tools/crash/addresses.txt, offsets into
+      # citra_switch as Atmosphere prints them), from the unstripped ELF of this very build.
+      - name: Symbolize crash addresses
+        if: always()
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src" dekopon-switch2 bash -c '
+            elf=$(find /src/build/switch1 -type f \( -name citra_switch.elf -o -name citra_switch \) | head -1)
+            echo "ELF: $elf"
+            tool=$(ls /opt/devkitpro/devkitA64/bin/aarch64-none-elf-addr2line)
+            for a in $(cat /src/tools/crash/addresses.txt); do
+              echo "== $a"; $tool -f -C -i -e "$elf" $a
+            done' || true
+
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
