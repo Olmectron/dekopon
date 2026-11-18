@@ -683,15 +683,19 @@ bool IsEnabled() {
 
 void SetEnabled(bool enabled) {
     s_enabled.store(enabled);
+    if (!enabled) {
+        // Off is off everywhere, at once: in a game, and a link left waiting in the
+        // library.
+        const bool session = s_session.load();
+        s_lobby_wanted.store(false);
+        s_lobby.store(false);
+        Stop();
+        s_session.store(session);
+        return;
+    }
     // Mid-game (the in-game menu's switch): takes effect at once.
     if (s_session.load()) {
-        if (enabled) {
-            Start();
-        } else {
-            const bool session = s_session.load();
-            Stop();
-            s_session.store(session);
-        }
+        Start();
     }
 }
 
@@ -749,6 +753,13 @@ void Start() {
     s_session.store(true);
     s_lobby.store(false);
     if (!s_enabled.load()) {
+        // Switched off between the library and the game (the notice before a game lets
+        // one do that): a link made in the library goes with it.
+        if (s_running.load()) {
+            s_lobby_wanted.store(false);
+            Stop();
+            s_session.store(true);
+        }
         return;
     }
     if (s_running.exchange(true)) {
@@ -858,6 +869,12 @@ bool TakeMenuRequest() {
 
 void Stop() {
     s_session.store(false);
+    // A link that is up when a game ends goes back to the library with it, whether it
+    // was made there or in the game: the other console then shows the games, not the
+    // last picture of the one that closed.
+    if (s_enabled.load() && s_running.load() && !s_link_failed.load()) {
+        s_lobby_wanted.store(true);
+    }
     if (s_lobby_wanted.load()) {
         // The link was made from the library: the game ending hands it back there.
         s_lobby.store(true);

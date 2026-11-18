@@ -392,6 +392,10 @@ public:
     /// 0: choosing how to connect, 1: Wi-Fi / LAN, 2: local wireless.
     int startup_mode = 0;
 
+    /// Why local wireless cannot be offered here; empty when it can. Its card is then
+    /// greyed out and says this instead.
+    std::string wireless_blocked;
+
     /// A line of progress, shown in the status card (a trailing newline is dropped; several
     /// lines may come in one call).
     void AddLog(std::string_view text) {
@@ -445,6 +449,18 @@ public:
             for (int i = 0; i < 3; ++i) {
                 const Rect r = CardRect(i);
                 const bool active = startup_mode == i + 1;
+                if (i == 1 && !wireless_blocked.empty()) {
+                    // Not on offer: flat, dim, and saying why.
+                    canvas.RoundBorder(r.x, r.y, r.w, r.h, 18, 2, kColLine, kColBg);
+                    font.Draw(canvas, r.x + 30, r.y + 36, "Local wireless: not available here", 20,
+                              kColTextDim);
+                    int by = r.y + 60;
+                    for (const std::string& line : WrapLines(font, wireless_blocked, 15, r.w - 60)) {
+                        font.Draw(canvas, r.x + 30, by, line, 15, kColTextDim);
+                        by += 19;
+                    }
+                    continue;
+                }
                 if (active) {
                     canvas.RoundBorder(r.x, r.y, r.w, r.h, 18, 3, kColAccent,
                                        kColSurfaceHi);

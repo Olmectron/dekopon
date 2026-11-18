@@ -1586,11 +1586,17 @@ inline HomeLayout DrawHome(Canvas& c, Font& font, const HomeView& v,
     DrawRoundButton(c, font, Icon::Gear, l.options_cx, l.options_cy, l.button_radius, "-", false);
     DrawRoundButton(c, font, Icon::Link, l.link_cx, l.link_cy, l.button_radius, "RS",
                     v.link_state == 2);
-    if (v.link_state == 1) {
-        // Waiting for the other console: a dot that breathes.
-        const float pulse = 0.5f + 0.5f * std::sin(v.time * 4.0f);
-        FillDisc(c, l.link_cx + l.button_radius * 0.72f, l.link_cy + l.button_radius * 0.72f,
-                 6.0f + 2.0f * pulse, kColAccent);
+    if (v.link_state != 0) {
+        // A badge says where it stands: amber and breathing while it is on and waiting
+        // for the other console, green once one is connected (the button itself is lit
+        // then), red if it could not be started.
+        const float bx = l.link_cx + l.button_radius * 0.74f, by = l.link_cy - l.button_radius * 0.74f;
+        const float pulse = v.link_state == 1 ? 0.5f + 0.5f * std::sin(v.time * 4.0f) : 1.0f;
+        const u32 colour = v.link_state == 1   ? MakeColor(245, 170, 40)
+                           : v.link_state == 2 ? MakeColor(60, 205, 115)
+                                               : MakeColor(230, 70, 70);
+        FillDisc(c, bx, by, 12.0f, kColBg);
+        FillDisc(c, bx, by, 6.5f + 2.5f * pulse, colour);
     }
     DrawRoundButton(c, font, Icon::Power, l.exit_cx, l.exit_cy, l.button_radius, "", false);
     struct Pill {

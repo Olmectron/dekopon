@@ -416,12 +416,24 @@ int main(int, char**) {
     Present();
     // Started on top of a game title (or as an installed forwarder), the system only lets
     // local wireless join networks that title's NACP lists. Say so before it is tried.
+    // Joining another console's network is only allowed to an applet: started on top of a
+    // game title the system checks the host's network id against that title's NACP and
+    // refuses (0xc2cb). So the option is taken away where it cannot work, with the reason.
     const AppletType applet = appletGetAppletType();
-    if (applet == AppletType_Application || applet == AppletType_SystemApplication) {
-        Say("Running as a game title: local wireless is only allowed if");
-        Say("that title lists the host's network id (README: forwarders).");
-        Say("From the Album's Homebrew Menu it works as is.");
+    const bool as_title = applet == AppletType_Application || applet == AppletType_SystemApplication;
+#if defined(__SWITCH2__)
+    // On Switch 2 homebrew only runs as a title so far: there is no Album route yet.
+    (void)as_title;
+    ui.wireless_blocked = "Homebrew on Switch 2 cannot run as an applet yet, and the system only "
+                          "lets an applet join another console's network. Use Wi-Fi / LAN: both "
+                          "consoles on the same network.";
+#else
+    if (as_title) {
+        ui.wireless_blocked = "The Homebrew Menu was opened over a game, and the system then "
+                              "refuses to join another console's network. Open it from the Album "
+                              "instead, or use Wi-Fi / LAN.";
     }
+#endif
 
     // How to reach the host. The socket is created afterwards, so that with local wireless it
     // lives on that network.
@@ -479,6 +491,11 @@ int main(int, char**) {
             break;
         }
 #endif
+        if ((down & HidNpadButton_X) && !ui.wireless_blocked.empty()) {
+            Say("Local wireless is not available here: use Wi-Fi / LAN (A).\n");
+            Present();
+            continue;
+        }
         if (down & HidNpadButton_X) {
             ui.startup_mode = 2;
             Present();

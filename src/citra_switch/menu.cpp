@@ -1133,7 +1133,7 @@ private:
     bool share_ack = false;
 
     bool NeedsShareNotice() const {
-        return GameShare::IsEnabled() && !share_ack && !GameShare::IsLobbyOn();
+        return GameShare::IsEnabled() && !share_ack;
     }
 
     void OpenShareNotice(const std::string& path) {
@@ -2624,10 +2624,14 @@ private:
             return;
         }
         if (state == 1) {
-            // Waiting. Leaving this window gives up: nothing stays on unseen.
-            if (down & (HidNpadButton_A | HidNpadButton_B)) {
+            // Waiting. It may be left waiting: the button on the home screen shows it is
+            // on, and the other console can come along whenever. A turns it off.
+            if (down & HidNpadButton_A) {
                 GameShare::StopLobby();
                 settings_dirty = true;
+                link_open = false;
+                ShowNotice("Toronja Link turned off", false);
+            } else if (down & HidNpadButton_B) {
                 link_open = false;
             }
             return;
@@ -2702,9 +2706,9 @@ private:
                         kColTextDim);
             g_font.Draw(c, x + 24, y + 140, "connection. This window closes when it arrives.", 17,
                         kColTextDim);
-            g_font.Draw(c, x + 24, y + 172, "Closing it turns the connection off.", 17, kColAccent);
+            g_font.Draw(c, x + 24, y + 172, "It stays on if you close this: the button shows it waiting.",
+                        17, kColAccent);
             accept = "Turn off";
-            cancel = "Turn off and close";
         } else {
             g_font.Draw(c, x + 24, y + 84, "Connected.", 20, kColText);
             g_font.Draw(c, x + 24, y + 116, "The other console works these menus and shows the games.",
@@ -2733,17 +2737,22 @@ private:
             }
             return 0;
         }
-        // Not its + and -: together those close Toronja here.
+        // Its + and - too. Together they would close Toronja here; the receiver never
+        // sends them together, and the check below drops them if it ever did.
         static constexpr u64 map[16] = {
             HidNpadButton_A,    HidNpadButton_B,    HidNpadButton_X,     HidNpadButton_Y,
             HidNpadButton_Up,   HidNpadButton_Down, HidNpadButton_Left,  HidNpadButton_Right,
-            HidNpadButton_L,    HidNpadButton_R,    0,                   0,
+            HidNpadButton_L,    HidNpadButton_R,    HidNpadButton_Plus,  HidNpadButton_Minus,
             HidNpadButton_ZL,   HidNpadButton_ZR,   HidNpadButton_StickL, HidNpadButton_StickR};
         u64 now = 0;
         for (int bit = 0; bit < 16; ++bit) {
             if (remote.buttons & (1u << bit)) {
                 now |= map[bit];
             }
+        }
+        constexpr u64 both = HidNpadButton_Plus | HidNpadButton_Minus;
+        if ((now & both) == both) {
+            now &= ~both;
         }
         const u64 pressed = now & ~remote_prev;
         remote_prev = now;
@@ -3020,27 +3029,26 @@ private:
             const int rows = std::clamp(comp_rows, 1, 4);
             const int cell = std::min((bottom - top - (rows - 1) * gap) / rows, 230);
             const int cols_visible = std::max(1, (W - 2 * side + gap) / (cell + gap));
-            const int cols = (count + rows - 1) / rows;
-            comp_cols_visible = cols_visible;
+            // Row by row from the top left, as text is read; a page holds what fits, and
+            // the pages turn sideways. comp_first_col counts pages.
+            const int per_page = rows * cols_visible;
+            const int pages = (count + per_page - 1) / per_page;
+            comp_cols_visible = 1; // One page per turn.
             // Follow the cursor when the other console moves it.
             if (selected != comp_seen_selected) {
                 comp_seen_selected = selected;
-                const int col = selected / rows;
-                if (col < comp_first_col) {
-                    comp_first_col = col;
-                } else if (col >= comp_first_col + cols_visible) {
-                    comp_first_col = col - cols_visible + 1;
-                }
+                comp_first_col = selected / per_page;
             }
-            comp_first_col = std::clamp(comp_first_col, 0, std::max(0, cols - cols_visible));
-            const int shown = std::min(cols_visible, cols);
+            comp_first_col = std::clamp(comp_first_col, 0, std::max(0, pages - 1));
+            const int first_index = comp_first_col * per_page;
+            const int shown = cols_visible;
             const int grid_w = shown * cell + (shown - 1) * gap;
             const int grid_h = rows * cell + (rows - 1) * gap;
             const int x0 = (W - grid_w) / 2;
             const int y0 = top + (bottom - top - grid_h) / 2;
             for (int col = 0; col < shown; ++col) {
                 for (int row = 0; row < rows; ++row) {
-                    const int index = (comp_first_col + col) * rows + row;
+                    const int index = first_index + row * cols_visible + col;
                     if (index >= count) {
                         continue;
                     }
@@ -3074,7 +3082,7 @@ private:
             if (comp_first_col > 0) {
                 CompButton(c, 6, (top + bottom) / 2 - 40, 42, 80, "<", 26, false, CompKind::PagePrev, 0);
             }
-            if (comp_first_col + cols_visible < cols) {
+            if (comp_first_col + 1 < pages) {
                 CompButton(c, W - 48, (top + bottom) / 2 - 40, 42, 80, ">", 26, false,
                            CompKind::PageNext, 0);
             }
