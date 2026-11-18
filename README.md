@@ -19,11 +19,11 @@ Everything that makes games run is theirs; see [Credits](#credits).
 > account, or anything else, a ban included.
 
 > [!IMPORTANT]
-> **Much of this project was written with AI.** Most of the code, the documentation and
-> these notes that are new in Toronja were produced with heavy use of an AI assistant
-> (Claude), directed and tested by one person on two consoles. It is said here, up
-> front, so that anyone who would rather not use or support AI-assisted software can
-> decide before downloading.
+> **Much of this project was written with AI.** A lot of the code, the documentation and
+> these notes that are new in Toronja were produced with heavy use of an AI assistant,
+> directed and tested by one person on two consoles. It is said here, up front, so that
+> anyone who would rather not use or support AI-assisted software can decide before
+> downloading.
 
 > **Status.** This is homebrew under active development, built and tested by one person on
 > two consoles. Things marked *untested* below compile and are believed to work, and that is
