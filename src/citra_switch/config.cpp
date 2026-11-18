@@ -386,10 +386,17 @@ int Bootstrap() {
     log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(log_filter);
 
+    // A file named diag.txt in the log folder turns the diagnostic trace on for this run.
+    const bool diag_trace =
+        FileUtil::Exists(FileUtil::GetUserPath(FileUtil::UserPath::LogDir) + "diag.txt");
+    Common::Log::diag_trace = diag_trace;
+
     // Persist the bumped launch count and any defaulted settings for next time.
     s_config->Save();
 
     LOG_INFO(Frontend, "Dekopon launch #{}", s_config->LaunchCount());
+    LOG_INFO(Frontend, "Toronja {}{}", DEKOPON_VERSION,
+             diag_trace ? " (diagnostic trace on: log/diag.txt)" : "");
     LOG_INFO(Frontend, "User directory: {}", s_active_user_dir);
     LOG_INFO(Frontend, "ROM directory: {} (recursive: {})", s_paths.roms_dir,
              s_paths.scan_recursive);

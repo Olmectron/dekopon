@@ -4,6 +4,7 @@
 
 #include <mutex>
 #include <utility>
+#include "common/logging/log.h"
 #include "common/horizon_thread.h"
 #include "common/microprofile.h"
 #include "common/thread.h"
@@ -153,7 +154,9 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
             // Perform the work, tracking whether the chunk was a submission
             // before executing.
             const bool has_submit = work->HasSubmit();
+            LOG_DIAG(Render_Vulkan, "worker: chunk begin submit={}", has_submit);
             work->ExecuteAll(current_cmdbuf);
+            LOG_DIAG(Render_Vulkan, "worker: chunk end");
 
             // If the chunk was a submission, reallocate the command buffer.
             if (has_submit) {
@@ -184,11 +187,14 @@ void Scheduler::SubmitExecution(vk::Semaphore signal_semaphore, vk::Semaphore wa
     const u64 signal_value = master_semaphore->NextTick();
 
     on_submit();
+    LOG_DIAG(Render_Vulkan, "submit: tick {}", signal_value);
 
     Record([signal_semaphore, wait_semaphore, signal_value, this](vk::CommandBuffer cmdbuf) {
         MICROPROFILE_SCOPE(Vulkan_Submit);
         std::scoped_lock lock{submit_mutex};
+        LOG_DIAG(Render_Vulkan, "submit: to the driver, tick {}", signal_value);
         master_semaphore->SubmitWork(cmdbuf, wait_semaphore, signal_semaphore, signal_value);
+        LOG_DIAG(Render_Vulkan, "submit: accepted, tick {}", signal_value);
     });
 
     master_semaphore->Refresh();

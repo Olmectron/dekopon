@@ -221,6 +221,7 @@ std::vector<u32> CompileGLSL(std::string_view code, vk::ShaderStageFlagBits stag
 }
 
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
+    LOG_DIAG(Render_Vulkan, "shader module: {} words", code.size());
     const vk::ShaderModuleCreateInfo shader_info = {
         .codeSize = code.size() * sizeof(u32),
         .pCode = code.data(),

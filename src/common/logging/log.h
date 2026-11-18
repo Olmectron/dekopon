@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <string_view>
 
 #include "common/logging/formatter.h"
@@ -43,6 +44,13 @@ void FmtLogMessage(Class log_class, Level log_level, const char* filename, unsig
                       fmt::make_format_args(args...));
 }
 
+
+/// Diagnostic trace, turned on by a file named log/diag.txt in the user folder. While it is
+/// on, every log line reaches the card before the call returns, and the renderer names each
+/// step before taking it (LOG_DIAG). It is for a process that is killed without a report:
+/// the last line in the log is then the last thing that was started. It is slow.
+extern std::atomic_bool diag_trace;
+
 } // namespace Common::Log
 
 // Define the fmt lib macros
@@ -67,6 +75,12 @@ void FmtLogMessage(Class log_class, Level log_level, const char* filename, unsig
     Common::Log::FmtLogMessage(Common::Log::Class::log_class, Common::Log::Level::Info,            \
                                Common::Log::TrimSourcePath(__FILE__), __LINE__, __func__,          \
                                __VA_ARGS__)
+#define LOG_DIAG(log_class, ...)                                                                   \
+    do {                                                                                           \
+        if (Common::Log::diag_trace.load(std::memory_order_relaxed)) [[unlikely]] {                \
+            LOG_INFO(log_class, __VA_ARGS__);                                                      \
+        }                                                                                          \
+    } while (0)
 #define LOG_WARNING(log_class, ...)                                                                \
     Common::Log::FmtLogMessage(Common::Log::Class::log_class, Common::Log::Level::Warning,         \
                                Common::Log::TrimSourcePath(__FILE__), __LINE__, __func__,          \

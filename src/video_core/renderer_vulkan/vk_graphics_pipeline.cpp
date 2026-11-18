@@ -4,6 +4,7 @@
 
 #include <boost/container/static_vector.hpp>
 
+#include "common/logging/log.h"
 #include "common/alignment.h"
 #include "common/hash.h"
 #include "common/microprofile.h"
@@ -169,6 +170,14 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
 bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     MICROPROFILE_SCOPE(Vulkan_Pipeline);
     AsyncStats::ScopedTimer timer{AsyncStats::pipeline_build};
+
+    LOG_DIAG(Render_Vulkan, "pipeline build: begin (fail_on_compile_required={})",
+             fail_on_compile_required);
+    struct DiagEnd {
+        ~DiagEnd() {
+            LOG_DIAG(Render_Vulkan, "pipeline build: end");
+        }
+    } diag_end;
 
     const u32 stride_alignment = instance.GetMinVertexStrideAlignment();
     std::array<vk::VertexInputBindingDescription, MAX_VERTEX_BINDINGS> bindings;

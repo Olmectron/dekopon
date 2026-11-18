@@ -114,6 +114,15 @@ void Switch2BootMark(const char* stage) {
     fsFsCreateDirectory(sdmc, "/switch/toronja");
     fsFsCreateDirectory(sdmc, "/switch/toronja/log");
     const char* path = "/switch/toronja/log/boot.txt";
+    // The first mark of a run keeps the file of the run before it: what a crash left there
+    // was otherwise gone the moment the app was opened again.
+    static bool s_kept_previous = false;
+    if (!s_kept_previous) {
+        s_kept_previous = true;
+        const char* old_path = "/switch/toronja/log/boot.old.txt";
+        fsFsDeleteFile(sdmc, old_path);
+        fsFsRenameFile(sdmc, path, old_path);
+    }
     fsFsDeleteFile(sdmc, path);
     if (R_FAILED(fsFsCreateFile(sdmc, path, static_cast<s64>(s_boot_log_len), 0))) {
         return;

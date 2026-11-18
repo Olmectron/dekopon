@@ -41,6 +41,8 @@
 
 namespace Common::Log {
 
+std::atomic_bool diag_trace{false};
+
 namespace {
 
 /**
@@ -416,6 +418,16 @@ public:
                                       std::move(message), time_origin);
         if (!regex_filter.empty() &&
             !boost::regex_search(FormatLogMessage(new_entry), regex_filter)) {
+            return;
+        }
+        if (diag_trace.load(std::memory_order_relaxed)) {
+            // Several threads trace at once, and the backends are written for one writer.
+            static std::mutex diag_mutex;
+            std::scoped_lock lock{diag_mutex};
+            ForEachBackend([&new_entry](Backend& backend) {
+                backend.Write(new_entry);
+                backend.Flush();
+            });
             return;
         }
         if (Settings::values.instant_debug_log.GetValue()) {

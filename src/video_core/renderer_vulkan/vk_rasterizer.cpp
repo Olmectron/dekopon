@@ -165,6 +165,7 @@ RasterizerVulkan::~RasterizerVulkan() {
 }
 
 void RasterizerVulkan::TickFrame() {
+    LOG_DIAG(Render_Vulkan, "frame tick");
     scheduler.WaitWorker();
     res_cache.TickFrame();
 }
@@ -655,6 +656,10 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     const bool shadow_rendering = regs.framebuffer.IsShadowRendering();
     const bool has_stencil = regs.framebuffer.HasStencil();
+    LOG_DIAG(Render_Vulkan, "draw: begin accel={} indexed={} shadow={} color={:#x} depth={:#x}",
+             accelerate, is_indexed, shadow_rendering,
+             regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress(),
+             regs.framebuffer.framebuffer.GetDepthBufferPhysicalAddress());
 
     const bool write_color_fb = shadow_rendering || pipeline_info.GetFinalColorWriteMask(instance);
     const bool write_depth_fb = pipeline_info.IsDepthWriteEnabled();
@@ -673,6 +678,9 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     pipeline_info.state.attachments.color = framebuffer->Format(SurfaceType::Color);
     pipeline_info.state.attachments.depth = framebuffer->Format(SurfaceType::Depth);
+    LOG_DIAG(Render_Vulkan, "draw: framebuffer color_fmt={} depth_fmt={}",
+             static_cast<u32>(framebuffer->Format(SurfaceType::Color)),
+             static_cast<u32>(framebuffer->Format(SurfaceType::Depth)));
 
     // Update scissor uniforms
     const auto [scissor_x1, scissor_y2, scissor_x2, scissor_y1] = fb_helper.Scissor();
@@ -689,14 +697,17 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     // Sync and bind the texture surfaces
     SyncTextureUnits(framebuffer);
     SyncUtilityTextures(framebuffer);
+    LOG_DIAG(Render_Vulkan, "draw: textures bound");
 
     // Sync and bind the shader
     pipeline_cache.UseFragmentShader(regs, user_config);
+    LOG_DIAG(Render_Vulkan, "draw: fragment shader chosen");
 
     // Sync the LUTs within the texture buffer
     SyncAndUploadLUTs();
     SyncAndUploadLUTsLF();
     UploadUniforms(accelerate);
+    LOG_DIAG(Render_Vulkan, "draw: tables and uniforms uploaded");
 
     // Begin rendering
     const auto draw_rect = fb_helper.DrawRect();
@@ -736,6 +747,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         });
     }
 
+    LOG_DIAG(Render_Vulkan, "draw: end ok={}", succeeded);
     vertex_batch.clear();
     return succeeded;
 }
@@ -841,6 +853,8 @@ void RasterizerVulkan::BindShadowCube(const Pica::TexturingRegs::FullTextureConf
                                       vk::DescriptorSet texture_set) {
     using CubeFace = Pica::TexturingRegs::CubeFace;
     auto info = Pica::Texture::TextureInfo::FromPicaRegister(texture.config, texture.format);
+    LOG_DIAG(Render_Vulkan, "shadow cube: width={} format={}", static_cast<u32>(texture.config.width),
+             static_cast<u32>(texture.format));
     constexpr std::array faces = {
         CubeFace::PositiveX, CubeFace::NegativeX, CubeFace::PositiveY,
         CubeFace::NegativeY, CubeFace::PositiveZ, CubeFace::NegativeZ,
@@ -875,6 +889,9 @@ void RasterizerVulkan::BindTextureCube(const Pica::TexturingRegs::FullTextureCon
         .format = texture.format,
     };
 
+    LOG_DIAG(Render_Vulkan, "texture cube: width={} levels={} format={} px={:#x}",
+             static_cast<u32>(config.width), static_cast<u32>(config.levels),
+             static_cast<u32>(config.format), static_cast<u32>(config.px));
     Surface& surface = res_cache.GetTextureCube(config);
     Sampler& sampler = res_cache.GetSampler(texture.config);
     update_queue.AddImageSampler(texture_set, 0, 0, surface.ImageView(), sampler.Handle());
@@ -914,14 +931,19 @@ void RasterizerVulkan::ClearAll(bool flush) {
 }
 
 bool RasterizerVulkan::AccelerateDisplayTransfer(const Pica::DisplayTransferConfig& config) {
+    LOG_DIAG(Render_Vulkan, "display transfer: {:#x} -> {:#x}", config.GetPhysicalInputAddress(),
+             config.GetPhysicalOutputAddress());
     return res_cache.AccelerateDisplayTransfer(config);
 }
 
 bool RasterizerVulkan::AccelerateTextureCopy(const Pica::DisplayTransferConfig& config) {
+    LOG_DIAG(Render_Vulkan, "texture copy: {:#x} -> {:#x}", config.GetPhysicalInputAddress(),
+             config.GetPhysicalOutputAddress());
     return res_cache.AccelerateTextureCopy(config);
 }
 
 bool RasterizerVulkan::AccelerateFill(const Pica::MemoryFillConfig& config) {
+    LOG_DIAG(Render_Vulkan, "fill: {:#x} to {:#x}", config.GetStartAddress(), config.GetEndAddress());
     return res_cache.AccelerateFill(config);
 }
 

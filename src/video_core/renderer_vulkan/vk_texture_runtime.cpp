@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_texture_runtime.h"
 
 #include <limits>
@@ -338,6 +339,8 @@ bool TextureRuntime::Reinterpret(Surface& source, Surface& dest,
                                  const VideoCore::TextureCopy& copy) {
     const PixelFormat src_format = source.pixel_format;
     const PixelFormat dst_format = dest.pixel_format;
+    LOG_DIAG(Render_Vulkan, "reinterpret: format {} -> {}", static_cast<u32>(src_format),
+             static_cast<u32>(dst_format));
     ASSERT_MSG(src_format != dst_format, "Reinterpretation with the same format is invalid");
 
     if (!source.traits.needs_conversion && !dest.traits.needs_conversion &&
@@ -358,6 +361,9 @@ bool TextureRuntime::Reinterpret(Surface& source, Surface& dest,
 }
 
 bool TextureRuntime::ClearTexture(Surface& surface, const VideoCore::TextureClear& clear) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "clear", surface.width, surface.height,
+             surface.res_scale, surface.levels, static_cast<u32>(surface.pixel_format), static_cast<u32>(surface.type),
+             static_cast<u32>(surface.texture_type), surface.addr);
     renderpass_cache.EndRendering();
 
     const RecordParams params = {
@@ -508,6 +514,12 @@ void TextureRuntime::ClearTextureWithRenderpass(Surface& surface,
 
 bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                                   std::span<const VideoCore::TextureCopy> copies) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "copy from", source.width, source.height,
+             source.res_scale, source.levels, static_cast<u32>(source.pixel_format), static_cast<u32>(source.type),
+             static_cast<u32>(source.texture_type), source.addr);
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "copy to", dest.width, dest.height,
+             dest.res_scale, dest.levels, static_cast<u32>(dest.pixel_format), static_cast<u32>(dest.type),
+             static_cast<u32>(dest.texture_type), dest.addr);
     renderpass_cache.EndRendering();
 
     const RecordParams params = {
@@ -610,6 +622,12 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
 
 bool TextureRuntime::BlitTextures(Surface& source, Surface& dest,
                                   const VideoCore::TextureBlit& blit) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "blit from", source.width, source.height,
+             source.res_scale, source.levels, static_cast<u32>(source.pixel_format), static_cast<u32>(source.type),
+             static_cast<u32>(source.texture_type), source.addr);
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "blit to", dest.width, dest.height,
+             dest.res_scale, dest.levels, static_cast<u32>(dest.pixel_format), static_cast<u32>(dest.type),
+             static_cast<u32>(dest.texture_type), dest.addr);
     const bool is_depth_stencil = source.type == VideoCore::SurfaceType::DepthStencil;
     const auto& depth_traits = instance.GetTraits(source.pixel_format);
     if (is_depth_stencil && !depth_traits.blit_support) {
@@ -719,6 +737,9 @@ bool TextureRuntime::BlitTextures(Surface& source, Surface& dest,
 }
 
 void TextureRuntime::GenerateMipmaps(Surface& surface) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "mipmaps", surface.width, surface.height,
+             surface.res_scale, surface.levels, static_cast<u32>(surface.pixel_format), static_cast<u32>(surface.type),
+             static_cast<u32>(surface.texture_type), surface.addr);
     if (VideoCore::IsCustomFormatCompressed(surface.custom_format)) {
         LOG_ERROR(Render_Vulkan, "Generating mipmaps for compressed formats unsupported!");
         return;
@@ -757,6 +778,9 @@ Surface::Surface(TextureRuntime& runtime_, const VideoCore::SurfaceParams& param
       scheduler{runtime_.GetScheduler()}, traits{instance.GetTraits(pixel_format)},
       handles{Handle(instance), Handle(instance), Handle(instance), Handle(instance)} {
 
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "surface new", this->width, this->height,
+             this->res_scale, this->levels, static_cast<u32>(this->pixel_format), static_cast<u32>(this->type),
+             static_cast<u32>(this->texture_type), this->addr);
     if (pixel_format == VideoCore::PixelFormat::Invalid || !traits.transfer_support) {
         return;
     }
@@ -879,6 +903,9 @@ Surface::Surface(TextureRuntime& runtime_, const VideoCore::SurfaceBase& surface
 
 void Surface::Upload(const VideoCore::BufferTextureCopy& upload,
                      const VideoCore::StagingData& staging) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "upload", this->width, this->height,
+             this->res_scale, this->levels, static_cast<u32>(this->pixel_format), static_cast<u32>(this->type),
+             static_cast<u32>(this->texture_type), this->addr);
     runtime.renderpass_cache.EndRendering();
 
     const RecordParams params = {
@@ -1046,6 +1073,9 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
 
 void Surface::Download(const VideoCore::BufferTextureCopy& download,
                        const VideoCore::StagingData& staging, bool wait) {
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "download", this->width, this->height,
+             this->res_scale, this->levels, static_cast<u32>(this->pixel_format), static_cast<u32>(this->type),
+             static_cast<u32>(this->texture_type), this->addr);
     // Declared first so that it also covers the scheduler.Finish() below.
     AsyncStats::ScopedTimer download_timer{wait ? AsyncStats::surface_download
                                                 : AsyncStats::surface_download_async};
@@ -1136,6 +1166,10 @@ void Surface::Download(const VideoCore::BufferTextureCopy& download,
 }
 
 void Surface::ScaleUp(u32 new_scale) {
+    LOG_DIAG(Render_Vulkan, "scale up to {}", new_scale);
+    LOG_DIAG(Render_Vulkan, "{}: {}x{} scale={} levels={} format={} type={} kind={} addr={:#x}", "scale up", this->width, this->height,
+             this->res_scale, this->levels, static_cast<u32>(this->pixel_format), static_cast<u32>(this->type),
+             static_cast<u32>(this->texture_type), this->addr);
     if (res_scale == new_scale || new_scale == 1) {
         return;
     }
@@ -1490,6 +1524,8 @@ Framebuffer::Framebuffer(TextureRuntime& runtime, const VideoCore::FramebufferPa
                          Surface* color, Surface* depth)
     : VideoCore::FramebufferParams{params}, instance{runtime.GetInstance()},
       res_scale{color ? color->res_scale : (depth ? depth->res_scale : 1u)} {
+    LOG_DIAG(Render_Vulkan, "framebuffer new: color={} depth={} scale={}", color != nullptr,
+             depth != nullptr, res_scale);
     auto& renderpass_cache = runtime.GetRenderpassCache();
     if (shadow_rendering && !color) {
         return;
