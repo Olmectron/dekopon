@@ -1,0 +1,19 @@
+diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
+index 53c742a..74fcccd 100644
+--- a/src/dynarmic/backend/arm64/address_space.cpp
++++ b/src/dynarmic/backend/arm64/address_space.cpp
+@@ -124,7 +124,14 @@ size_t AddressSpace::GetRemainingSize() {
+ 
+ EmittedBlockInfo AddressSpace::Emit(IR::Block block) {
+     if (GetRemainingSize() < 1024 * 1024) {
++        // Told before and after, so the host can time the drop itself.
++        if (code_cache_full_callback) {
++            code_cache_full_callback();
++        }
+         ClearCache();
++        if (code_cache_full_callback) {
++            code_cache_full_callback();
++        }
+     }
+ 
+     UnprotectCodeMemory();

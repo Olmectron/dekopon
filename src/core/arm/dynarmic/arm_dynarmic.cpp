@@ -410,6 +410,13 @@ void ARM_Dynarmic::PruneStaleJits() {
 
 #ifdef __SWITCH__
 void ARM_Dynarmic::OnCacheDrop() {
+    // Every call is written down with the clock: the JIT calls this before and after it
+    // drops a full code cache, so two lines close together time the drop, and what
+    // follows them is the recompiling.
+    Common::StallWatch::Mark("JIT: code cache full, dropping all compiled code", GetID());
+    LOG_WARNING(Core_ARM11, "JIT: code cache drop on core {} (call {}), heap {}/{} MiB used", GetID(),
+                cache_drops_total + 1, Common::GetHorizonMemoryUsed() >> 20,
+                Common::GetHorizonMemoryTotal() >> 20);
     ++cache_drops_total;
     ++cache_drops_window;
 
