@@ -865,7 +865,8 @@ void JitShader::Compile_EMIT(Instruction instr) {
     CBNZ(XSCRATCH0, have_emitter);
 
     ABI_PushRegisters(*this, PersistentCallerSavedRegs());
-    MOVP2R(ABI_PARAM1, reinterpret_cast<const void*>("Execute EMIT on VS"));
+    // An immediate, not MOVP2R: this code is assembled in a vector and runs elsewhere.
+    MOV(ABI_PARAM1, reinterpret_cast<std::uint64_t>("Execute EMIT on VS"));
     CallFarFunction(*this, LogCritical);
     ABI_PopRegisters(*this, PersistentCallerSavedRegs());
     B(end);
@@ -887,7 +888,7 @@ void JitShader::Compile_SETE(Instruction instr) {
     CBNZ(XSCRATCH0, have_emitter);
 
     ABI_PushRegisters(*this, PersistentCallerSavedRegs());
-    MOVP2R(ABI_PARAM1, reinterpret_cast<const void*>("Execute SETEMIT on VS"));
+    MOV(ABI_PARAM1, reinterpret_cast<std::uint64_t>("Execute SETEMIT on VS"));
     CallFarFunction(*this, LogCritical);
     ABI_PopRegisters(*this, PersistentCallerSavedRegs());
     B(end);

@@ -44,7 +44,11 @@ inline void CallFarFunction(oaknut::VectorCodeGenerator& code, const T f) {
     // X16(IP0) and X17(IP1) is the standard veneer register
     // LR is also available as an intermediate register
     // https://developer.arm.com/documentation/102374/0101/Procedure-Call-Standard
-    code.MOVP2R(oaknut::util::X16, reinterpret_cast<const void*>(f));
+    //
+    // The address is loaded as an immediate, never with MOVP2R: that one picks ADR/ADRP when
+    // the target is within reach of where the code is being assembled, and code assembled
+    // into a vector runs somewhere else once it is copied to executable memory.
+    code.MOV(oaknut::util::X16, reinterpret_cast<std::uint64_t>(f));
     code.BLR(oaknut::util::X16);
 }
 
