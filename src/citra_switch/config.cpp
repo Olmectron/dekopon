@@ -89,6 +89,7 @@ bool s_menu_input_rotated = false;
 SwitchFrontend::UpdateChannel s_update_channel = SwitchFrontend::UpdateChannel::Stable;
 std::string s_dismissed_update_tag;
 std::string s_last_seen_version;
+std::string s_last_game;
 bool s_whats_new_card = true;
 
 // Pushes the picked image onto the three camera slots the CAM service reads.
@@ -234,6 +235,7 @@ private:
             Common::StripSpaces(config->Get("Switch", "dismissed_update", ""));
         s_last_seen_version =
             Common::StripSpaces(config->Get("Switch", "last_seen_version", ""));
+        s_last_game = Common::StripSpaces(config->Get("Switch", "last_game", ""));
 
         // Each control stores the index of the physical Switch button it drives.
         for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
@@ -295,6 +297,8 @@ private:
             out += "dismissed_update = " + s_dismissed_update_tag + '\n';
             out += "# Build that last reached the launcher.\n";
             out += "last_seen_version = " + s_last_seen_version + '\n';
+            out += "# Game started last. The library opens with it selected.\n";
+            out += "last_game = " + s_last_game + '\n';
             out += "launch_count = " + std::to_string(launch_count) + '\n';
         }
         {
@@ -502,6 +506,18 @@ void RecordSeenVersion(const std::string& version) {
         return;
     }
     s_last_seen_version = version;
+    SaveConfig();
+}
+
+const std::string& GetLastGame() {
+    return s_last_game;
+}
+
+void RecordLastGame(const std::string& path) {
+    if (s_last_game == path) {
+        return;
+    }
+    s_last_game = path;
     SaveConfig();
 }
 

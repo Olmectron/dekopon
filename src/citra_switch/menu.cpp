@@ -1903,6 +1903,18 @@ private:
             install_dir = paths.roms_dir;
         }
         ApplyFilter();
+        // The library opens on the game that was started last, here and after coming
+        // back from it, instead of on the first one. A game that is no longer there
+        // leaves the selection where ApplyFilter put it.
+        if (const std::string& last = GetLastGame(); !last.empty()) {
+            for (int i = 0; i < static_cast<int>(filtered.size()); ++i) {
+                if (games[filtered[i]].path == last) {
+                    selected = i;
+                    shelf_pos = static_cast<float>(i);
+                    break;
+                }
+            }
+        }
         EnsureCoverFolders();
         ResetCoverCache();
         RequestCovers();

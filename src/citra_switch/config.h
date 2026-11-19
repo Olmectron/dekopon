@@ -89,6 +89,10 @@ void DismissUpdateTag(const std::string& tag);
 const std::string& GetLastSeenVersion();
 void RecordSeenVersion(const std::string& version);
 
+// The game that was started last, by its path: the library opens on it.
+const std::string& GetLastGame();
+void RecordLastGame(const std::string& path);
+
 // Whether a version change puts the What's New card up.
 bool IsWhatsNewCardEnabled();
 void SetWhatsNewCardEnabled(bool enabled);

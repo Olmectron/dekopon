@@ -699,6 +699,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (!rom.empty()) {
+            SwitchFrontend::RecordLastGame(rom);
             RunGame(pad, rom);
         }
     }
