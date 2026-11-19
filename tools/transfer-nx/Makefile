@@ -13,7 +13,7 @@ endif
 
 PLATFORM ?= switch1
 TARGET   := toronja-transfer
-VERSION  := 1.0.0
+VERSION  := 1.0.1
 OUT      := out/$(PLATFORM)
 
 ifeq ($(PLATFORM),switch2)

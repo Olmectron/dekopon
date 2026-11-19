@@ -44,7 +44,7 @@ using namespace SwitchFrontend::Ui;
 
 namespace {
 
-constexpr char kVersion[] = "1.0.0";
+constexpr char kVersion[] = "1.0.1";
 constexpr u16 kPort = 28302;
 constexpr u32 kMagic = 0x31585454; // "TTX1"
 constexpr std::size_t kBlockSize = 2 * 1024 * 1024;
@@ -413,6 +413,7 @@ bool DoPut(int fd, const std::string& path, const std::string& shown) {
         return false; // The data that follows cannot be told from a command: hang up.
     }
     // The whole size at once: growing the file block by block is what makes FAT slow.
+    const u64 reserve_started = armGetSystemTick();
     if (size > 0 && ftruncate(file, static_cast<off_t>(size)) != 0) {
         const int error = errno;
         close(file);
@@ -428,17 +429,59 @@ bool DoPut(int fd, const std::string& path, const std::string& shown) {
 
     SetCurrent("Receiving", shown, size);
     const u64 started = armGetSystemTick();
+    const double reserve_ms = armTicksToNs(started - reserve_started) / 1e6;
     g_pipe.Reset();
     u32 crc = crc32(0, nullptr, 0);
     int write_error = 0;
+    // Where the time goes, for the log: a transfer that stops and starts is either the card
+    // taking long over some writes or the network not delivering, and this tells which.
+    struct Timing {
+        u64 write_ticks{};   // In write().
+        u64 crc_ticks{};     // In crc32().
+        u64 starved_ticks{}; // The card thread waiting for the network.
+        u64 slowest_ticks{};
+        u32 blocks{};
+        u32 over_100ms{};
+        u32 over_500ms{};
+        u32 over_2s{};
+        // The slow writes themselves: when (ms into the transfer) and how long (ms).
+        static constexpr int kStalls = 24;
+        u32 stall_at[kStalls]{};
+        u32 stall_ms[kStalls]{};
+        int stalls{};
+    } timing;
+    u64 recv_ticks = 0;    // The network thread in recv().
+    u64 blocked_ticks = 0; // The network thread waiting for the card to free a block.
     std::thread writer{[&] {
         Block block;
-        while (g_pipe.Pop(block)) {
+        for (;;) {
+            const u64 t0 = armGetSystemTick();
+            if (!g_pipe.Pop(block)) {
+                break;
+            }
+            const u64 t1 = armGetSystemTick();
             crc = crc32(crc, block.data, static_cast<uInt>(block.size));
+            const u64 t2 = armGetSystemTick();
             if (!WriteAll(file, block.data, block.size)) {
                 write_error = errno != 0 ? errno : EIO;
                 g_pipe.Abort();
                 return;
+            }
+            const u64 t3 = armGetSystemTick();
+            timing.starved_ticks += t1 - t0;
+            timing.crc_ticks += t2 - t1;
+            timing.write_ticks += t3 - t2;
+            timing.slowest_ticks = std::max(timing.slowest_ticks, t3 - t2);
+            ++timing.blocks;
+            const u64 ms = armTicksToNs(t3 - t2) / 1'000'000;
+            timing.over_100ms += ms >= 100;
+            timing.over_500ms += ms >= 500;
+            timing.over_2s += ms >= 2000;
+            if (ms >= 500 && timing.stalls < Timing::kStalls) {
+                timing.stall_at[timing.stalls] =
+                    static_cast<u32>(armTicksToNs(t2 - started) / 1'000'000);
+                timing.stall_ms[timing.stalls] = static_cast<u32>(ms);
+                ++timing.stalls;
             }
             g_current_done += block.size;
             g_pipe.Release(block.data);
@@ -448,26 +491,59 @@ bool DoPut(int fd, const std::string& path, const std::string& shown) {
     bool network_ok = true;
     u64 left = size;
     while (left > 0) {
+        const u64 t0 = armGetSystemTick();
         u8* block = g_pipe.Acquire();
         if (block == nullptr) {
             break;
         }
+        const u64 t1 = armGetSystemTick();
         const std::size_t want = static_cast<std::size_t>(std::min<u64>(left, kBlockSize));
         if (!RecvAll(fd, block, want)) {
             network_ok = false;
             g_pipe.Abort();
             break;
         }
+        blocked_ticks += t1 - t0;
+        recv_ticks += armGetSystemTick() - t1;
         g_pipe.Push(block, want);
         left -= want;
     }
     g_pipe.Close();
     writer.join();
     const bool failed = !network_ok || write_error != 0 || g_pipe.Aborted();
+    const u64 close_started = armGetSystemTick();
     if (close(file) != 0 && write_error == 0 && !failed) {
         write_error = errno != 0 ? errno : EIO;
     }
+    const double close_ms = armTicksToNs(armGetSystemTick() - close_started) / 1e6;
     g_busy = false;
+    if (size >= 32 * 1024 * 1024) {
+        const auto seconds_of = [](u64 ticks) { return armTicksToNs(ticks) / 1e9; };
+        const double total = seconds_of(armGetSystemTick() - started);
+        const double writing = seconds_of(timing.write_ticks);
+        Log("PUT timing %s: %.1f MiB in %.1f s (%.1f MB/s). reserve %.0f ms, close %.0f ms",
+            shown.c_str(), size / 1048576.0, total, total > 0 ? size / 1048576.0 / total : 0,
+            reserve_ms, close_ms);
+        Log("  card thread: write %.1f s (%.1f MB/s while writing), crc %.1f s, waiting for "
+            "network %.1f s",
+            writing, writing > 0 ? size / 1048576.0 / writing : 0, seconds_of(timing.crc_ticks),
+            seconds_of(timing.starved_ticks));
+        Log("  network thread: recv %.1f s, waiting for card %.1f s", seconds_of(recv_ticks),
+            seconds_of(blocked_ticks));
+        Log("  %u writes of 2 MiB: slowest %.0f ms, >=100 ms: %u, >=500 ms: %u, >=2 s: %u",
+            timing.blocks, seconds_of(timing.slowest_ticks) * 1000, timing.over_100ms,
+            timing.over_500ms, timing.over_2s);
+        std::string stalls;
+        for (int i = 0; i < timing.stalls; ++i) {
+            char item[48];
+            std::snprintf(item, sizeof(item), " %.1fs:%ums", timing.stall_at[i] / 1000.0,
+                          timing.stall_ms[i]);
+            stalls += item;
+        }
+        if (!stalls.empty()) {
+            Log("  slow writes (at:took):%s", stalls.c_str());
+        }
+    }
 
     if (failed || write_error != 0) {
         unlink(part.c_str());
