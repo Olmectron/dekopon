@@ -143,7 +143,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
                         true,
                         fmt::format("{}diag_vs_{:016X}.glsl",
                                     FileUtil::GetUserPath(FileUtil::UserPath::LogDir), spirv_id),
-                        shader.program.value);
+                        shader.program);
                 }
                 LOG_DIAG(Render_Vulkan, "vs compile {:016X}: glsl begin, {} bytes", spirv_id,
                          shader.program.size());
