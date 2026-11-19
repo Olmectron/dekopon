@@ -226,6 +226,10 @@ port: what was tried, what the loader does and does not grant, and how each fix 
   games do not start.
 - The frame rate dips for a moment the first time a place is entered, while its code is
   compiled.
+- The first time a game is started with nothing compiled (a game never played on this
+  console, or every game once after a driver update) it runs a slow minute or two with
+  textures flickering, while its shaders are built. On Switch 1 that used to stop the game
+  for seconds at a time; since 0.9.36 the stops are short.
 - While a shader is being built for the first time, the draws that need it are left out.
   Something a game draws only once can then stay missing until that screen is opened
   again: seen once, with the Pokémon names of the first battle in Pokémon Omega Ruby.
