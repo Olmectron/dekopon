@@ -89,13 +89,16 @@ that want a lower resolution. A Switch 1 is slower; lower the resolution there.
 
 ## Installing
 
-1. Take the file for your console from the [releases](https://github.com/Olmectron/toronja/releases)
-   (or from the artifacts of the latest build under *Actions*):
-   `toronja-switch2.nro` or `toronja-switch1.nro`, and `toronja-link-switch1.nro` or
-   `toronja-link-switch2.nro` for a second console.
-2. Copy it to `/switch/` on the SD card and start it from the Homebrew Menu.
+1. Take the zip for your console from the [releases](https://github.com/Olmectron/toronja/releases):
+   `toronja-switch-2.zip` or `toronja-switch-1.zip`, and `toronja-link-switch-1.zip` or
+   `toronja-link-switch-2.zip` for a second console.
+2. Extract it to the root of the SD card: it holds a `switch` folder with `toronja.nro`
+   (or `toronja-link.nro`) in it. Start it from the Homebrew Menu.
 3. Put your own game dumps in the games folder shown under *Options > Folders*
    (`/switch/toronja/roms/` by default).
+
+The loose `.nro` files in each release are the same programs under the names the updater
+inside Toronja asks for; Toronja updates itself from them when the console is online.
 
 Coming from Dekopon, or from a build of Toronja that still used `/switch/dekopon/`: the folder
 is renamed to `/switch/toronja/` the first time this version starts, with everything in it.
