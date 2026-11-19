@@ -345,6 +345,8 @@ private:
     PipelineInfo info;
     std::array<Shader*, 3> stages;
     bool is_pending{};
+    // Set once a draw has sent this pipeline to the head of the workers' queue.
+    bool hurried{};
     // Whoever sets this builds the pipeline: the worker it was queued for, or the render
     // thread once it has waited long enough (see TryBuild).
     std::atomic_bool build_claimed{false};

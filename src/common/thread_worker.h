@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -85,7 +86,7 @@ public:
                             break;
                         }
                         task = std::move(requests.front());
-                        requests.pop();
+                        requests.pop_front();
                     }
                     if constexpr (with_state) {
                         task(&state);
@@ -122,7 +123,17 @@ public:
     void QueueWork(Task work) {
         {
             std::unique_lock lock{queue_mutex};
-            requests.emplace(std::move(work));
+            requests.emplace_back(std::move(work));
+            ++work_scheduled;
+        }
+        condition.notify_one();
+    }
+
+    /// Like QueueWork, but the task runs before everything already waiting.
+    void QueueWorkFront(Task work) {
+        {
+            std::unique_lock lock{queue_mutex};
+            requests.emplace_front(std::move(work));
             ++work_scheduled;
         }
         condition.notify_one();
@@ -165,7 +176,7 @@ private:
         }
     }
 
-    std::queue<Task> requests;
+    std::deque<Task> requests;
     std::mutex queue_mutex;
     std::condition_variable_any condition;
     std::condition_variable wait_condition;

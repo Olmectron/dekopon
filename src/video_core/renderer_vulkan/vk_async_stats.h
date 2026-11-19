@@ -39,6 +39,8 @@ inline std::atomic<bool> driver_cache_dirty{};
 inline std::atomic<u64> skipped_draws{};
 /// Pipelines a draw built itself after waiting too long for the worker (Switch 1).
 inline std::atomic<u64> render_thread_builds{};
+/// Pipelines a draw found waiting in the queue and sent to the head of it.
+inline std::atomic<u64> hurried_builds{};
 /// Draws sent through the CPU vertex path because their vertex shader was not ready.
 inline std::atomic<u64> software_vertex_draws{};
 

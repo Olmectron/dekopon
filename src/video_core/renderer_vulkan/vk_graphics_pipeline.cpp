@@ -126,12 +126,31 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
             }
         }
 #endif
+        // A pipeline a draw is waiting for goes ahead of the ones nothing has asked for
+        // yet. When a game starts, every pipeline in its disk cache is queued; after a
+        // driver update none of them is in the driver's cache any more and they are all
+        // compiled again: 46,000 of them for Kirby: Planet Robobot on Switch 2, minutes
+        // of work for the three workers. A pipeline needed on screen stood at the back of
+        // that queue, and its draws were left out the whole time: a map with no
+        // background, however long one waited. The job queued first still runs when its
+        // turn comes and finds the build already claimed.
+        if (!wait_built && !hurried) {
+            hurried = true;
+            AsyncStats::hurried_builds.fetch_add(1, std::memory_order_relaxed);
+            worker->QueueWorkFront([this] {
+                if (!g_abandon_pipeline_builds.load(std::memory_order_relaxed) &&
+                    !build_claimed.exchange(true)) {
+                    Build();
+                }
+            });
+        }
         return wait_built;
     }
 
     const auto queue_build = [this] {
         VideoCore::NotifyShaderCompileBegin();
         is_pending = true;
+        hurried = false;
         build_claimed = false;
         queued_at = std::chrono::steady_clock::now();
         worker->QueueWork([this] {
