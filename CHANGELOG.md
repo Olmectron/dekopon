@@ -4,6 +4,10 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.38
+
+- Shaders are built before the game starts. With async shader compilation on, a game used to start at once with everything its shader cache listed still to build: a slow first minute or two with textures missing. That work is now done while the game loads, with a count on screen, and B skips the wait. It only takes long the first time a game is started with nothing compiled; after that it passes at once. Display > Shaders > Build Shaders Before Starting turns it off.
+
 ## Toronja 0.9.37
 
 - The author line the Homebrew Menu shows reads "Olmectron (based on Azahar, Dekopon)", so it is clear whose work Toronja builds on.

@@ -139,6 +139,33 @@ public:
         condition.notify_one();
     }
 
+    /// Runs one waiting task on the calling thread. False when nothing was waiting.
+    /// For a thread that would otherwise only wait for the queue to empty.
+    bool RunOne() {
+        if constexpr (with_state) {
+            return false;
+        } else {
+            Task task;
+            {
+                std::unique_lock lock{queue_mutex};
+                if (requests.empty()) {
+                    return false;
+                }
+                task = std::move(requests.front());
+                requests.pop_front();
+            }
+            task();
+            {
+                // Under the lock, so a WaitForRequests between its check and its wait
+                // cannot miss this.
+                std::unique_lock lock{queue_mutex};
+                ++work_done;
+            }
+            wait_condition.notify_all();
+            return true;
+        }
+    }
+
     void WaitForRequests(std::stop_token stop_token = {}) {
         std::stop_callback callback(stop_token, [this] {
             for (auto& thread : threads) {

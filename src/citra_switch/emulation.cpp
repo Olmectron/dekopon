@@ -35,6 +35,7 @@
 #include "video_core/overlay.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
+#include "video_core/shader_precompile.h"
 
 #if defined(__SWITCH2__)
 extern "C" void DekoponBootMark(const char* stage);
@@ -334,11 +335,16 @@ void EmuThread(std::string path) {
                 }
                 last_update = now;
                 std::string text = "Loading shaders";
-                if (!name.empty()) {
-                    text += ": " + name;
-                }
-                if (total > 0) {
-                    text += fmt::format(" {}/{}", current, total);
+                if (VideoCore::g_precompile_active.load(std::memory_order_relaxed)) {
+                    // The wait that can be left: say how.
+                    text = fmt::format("Building shaders {}/{} - B to skip", current, total);
+                } else {
+                    if (!name.empty()) {
+                        text += ": " + name;
+                    }
+                    if (total > 0) {
+                        text += fmt::format(" {}/{}", current, total);
+                    }
                 }
                 VideoCore::PostOverlayToast(text, 1500);
                 Core::PerfStats::game_frames_updated = true;
@@ -445,6 +451,9 @@ bool BootRom(const std::string& rom_arg) {
     // Nothing left over from the last game's menu or its closing screen.
     VideoCore::SetOverlayMenuState({});
 
+    VideoCore::g_precompile_on_load.store(IsShaderPrecompileEnabled(),
+                                          std::memory_order_relaxed);
+    VideoCore::g_precompile_skip.store(false, std::memory_order_relaxed);
     s_load_ok = false;
     s_artic_disconnected = false;
     s_paused = false;

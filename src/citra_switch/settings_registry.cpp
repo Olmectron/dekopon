@@ -1019,6 +1019,11 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
                  "Builds shaders on spare cores while the game keeps running. Cuts hitching; objects "
                  "can show up a moment late the first time."},
                 v.async_shader_compilation);
+    t << LocalBool("precompile_shaders",
+                   {"Build Shaders Before Starting",
+                    "With async compilation on: builds the shaders a game is known to need "
+                    "while it loads, with a count, instead of during play. B skips the wait."},
+                   IsShaderPrecompileEnabled, SetShaderPrecompileEnabled, true);
     t.Page(Category::Graphics);
     t.Group("Shaders");
     t << Toggle({"Disk Shader Cache",

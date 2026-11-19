@@ -148,6 +148,11 @@ private:
     void WaitForCompileWorkers();
 
     /// Waits for the compile workers while reporting progress through the load callback.
+    /// Waits for the builds the disk cache queued, helping with them, until they are
+    /// done or the user asks to go on without them.
+    void PrecompileQueued(const std::atomic_bool& stop_loading,
+                          const VideoCore::DiskResourceLoadCallback& callback);
+
     void WaitForCompileWorkers(const std::atomic_bool& stop_loading,
                                const VideoCore::DiskResourceLoadCallback& callback);
 

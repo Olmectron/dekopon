@@ -91,6 +91,7 @@ std::string s_dismissed_update_tag;
 std::string s_last_seen_version;
 std::string s_last_game;
 bool s_whats_new_card = true;
+bool s_shader_precompile = true;
 
 // Pushes the picked image onto the three camera slots the CAM service reads.
 void ApplyCameraSettings() {
@@ -519,6 +520,14 @@ void RecordLastGame(const std::string& path) {
     }
     s_last_game = path;
     SaveConfig();
+}
+
+bool IsShaderPrecompileEnabled() {
+    return s_shader_precompile;
+}
+
+void SetShaderPrecompileEnabled(bool enabled) {
+    s_shader_precompile = enabled;
 }
 
 bool IsWhatsNewCardEnabled() {

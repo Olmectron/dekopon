@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/shader/generator/glsl_fs_shader_gen.h"
+#include "video_core/shader_precompile.h"
 #include "video_core/shader/generator/glsl_shader_gen.h"
 #include "video_core/shader/generator/spv_fs_shader_gen.h"
 
@@ -279,13 +280,72 @@ void PipelineCache::WaitForCompileWorkers(const std::atomic_bool& stop_loading,
              ms, total, num_worker_threads);
 }
 
+void PipelineCache::PrecompileQueued(const std::atomic_bool& stop_loading,
+                                     const VideoCore::DiskResourceLoadCallback& callback) {
+    // With asynchronous compilation the game used to start at once, with everything its
+    // disk cache had queued still to build: a slow first minute or two, textures missing
+    // and, on Switch 1, stops of seconds. Waiting here instead costs the same work
+    // before the game rather than during it, with a count on screen, and can be left at
+    // any moment: what is not built yet is then built while the game runs, as before.
+    //
+    // Without asynchronous compilation the same queue is waited for by
+    // WaitForCompileWorkers, which cannot be left.
+    const auto pending = [this] {
+        return shader_workers.PendingWork() + pipeline_workers.PendingWork();
+    };
+    const std::size_t total = pending();
+    if (total == 0) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    VideoCore::g_precompile_active.store(true, std::memory_order_relaxed);
+    std::size_t shown_total = total;
+    std::size_t left = total;
+    std::size_t helped = 0;
+    while (!stop_loading.load() &&
+           !VideoCore::g_precompile_skip.load(std::memory_order_relaxed)) {
+        left = pending();
+        if (left == 0) {
+            break;
+        }
+        // Pipelines are queued as their shaders finish, so the count can grow.
+        shown_total = std::max(shown_total, left);
+        if (callback) {
+            callback(VideoCore::LoadCallbackStage::Build, shown_total - left, shown_total,
+                     "Building shaders");
+        }
+        // This thread has nothing else to do until the queue is empty, and it is not
+        // one of the low-priority workers: it builds pipelines too. On Switch 1, where
+        // there is one worker, that is most of the speed of this wait.
+        if (pipeline_workers.RunOne()) {
+            ++helped;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        }
+    }
+    left = pending();
+    VideoCore::g_precompile_active.store(false, std::memory_order_relaxed);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+    LOG_INFO(Render_Vulkan,
+             "Built shaders before the game: {} queued, {} left when the wait ended, {} ms, "
+             "{} built by the waiting thread, {} workers{}",
+             shown_total, left, ms, helped, num_worker_threads,
+             left > 0 ? " (the wait was left early)" : "");
+}
+
 void PipelineCache::LoadCache(const std::atomic_bool& stop_loading,
                               const VideoCore::DiskResourceLoadCallback& callback) {
     WaitForCompileWorkers();
     LoadDriverPipelineDiskCache(stop_loading, callback);
     LoadDiskCache(stop_loading, callback);
-    if (!async_shader_compilation && !stop_loading.load()) {
-        WaitForCompileWorkers(stop_loading, callback);
+    if (!stop_loading.load()) {
+        if (!async_shader_compilation) {
+            WaitForCompileWorkers(stop_loading, callback);
+        } else if (VideoCore::g_precompile_on_load.load(std::memory_order_relaxed)) {
+            PrecompileQueued(stop_loading, callback);
+        }
     }
 }
 
@@ -331,8 +391,12 @@ void PipelineCache::SwitchCache(u64 title_id, const std::atomic_bool& stop_loadi
 
     // Switch the disk shader cache after driver cache is switched
     SwitchDiskCache(title_id, stop_loading, callback);
-    if (!async_shader_compilation && !stop_loading.load()) {
-        WaitForCompileWorkers(stop_loading, callback);
+    if (!stop_loading.load()) {
+        if (!async_shader_compilation) {
+            WaitForCompileWorkers(stop_loading, callback);
+        } else if (VideoCore::g_precompile_on_load.load(std::memory_order_relaxed)) {
+            PrecompileQueued(stop_loading, callback);
+        }
     }
 }
 

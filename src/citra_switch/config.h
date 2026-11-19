@@ -94,6 +94,10 @@ const std::string& GetLastGame();
 void RecordLastGame(const std::string& path);
 
 // Whether a version change puts the What's New card up.
+// Whether a game's known shaders are built before it starts (asynchronous compilation).
+bool IsShaderPrecompileEnabled();
+void SetShaderPrecompileEnabled(bool enabled);
+
 bool IsWhatsNewCardEnabled();
 void SetWhatsNewCardEnabled(bool enabled);
 

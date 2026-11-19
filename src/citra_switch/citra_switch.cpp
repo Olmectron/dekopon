@@ -17,6 +17,7 @@
 #include "citra_switch/applets/swkbd.h"
 #include "citra_switch/updater.h"
 #include "citra_switch/config.h"
+#include "video_core/shader_precompile.h"
 #include "citra_switch/game_share.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
@@ -494,6 +495,11 @@ void RunGame(PadState& pad, const std::string& rom) {
             SwitchFrontend::InputState state;
             const u64 held = PollInput(pad, state);
             u64 pressed = held & ~prev_held;
+            // While the shaders are being built before the game, B goes on without them.
+            if ((pressed & HidNpadButton_B) != 0 &&
+                VideoCore::g_precompile_active.load(std::memory_order_relaxed)) {
+                VideoCore::g_precompile_skip.store(true, std::memory_order_relaxed);
+            }
             // The receiver's pad works this console's in-game menu too: its buttons arrive
             // as InputButton bits, its stick as directions.
             static u64 prev_remote = 0;
