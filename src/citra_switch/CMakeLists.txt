@@ -90,6 +90,13 @@ find_library(SWITCH_CURL curl REQUIRED)
 target_include_directories(citra_switch PRIVATE ${SWITCH_FREETYPE_INCLUDE_DIR})
 target_include_directories(citra_switch PRIVATE ${SWITCH_CURL_INCLUDE_DIR})
 target_compile_definitions(citra_switch PRIVATE CURL_STATICLIB DEKOPON_VERSION="${DEKOPON_VERSION}")
+# The release notes the app shows are CHANGELOG.md, compiled in: a console that is not
+# online has nowhere else to get them from.
+file(READ "${CMAKE_SOURCE_DIR}/CHANGELOG.md" TORONJA_CHANGELOG)
+configure_file(changelog_data.h.in "${CMAKE_CURRENT_BINARY_DIR}/changelog_data.h" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/CHANGELOG.md")
+target_include_directories(citra_switch PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 if (DEFINED DEKOPON_UPSTREAM_VERSION)
     target_compile_definitions(citra_switch PRIVATE
         DEKOPON_UPSTREAM_VERSION="${DEKOPON_UPSTREAM_VERSION}")

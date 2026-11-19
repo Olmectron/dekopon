@@ -979,7 +979,7 @@ void BuildGeneral(std::vector<SettingEntry>& out) {
                    IsWhatsNewCardEnabled, SetWhatsNewCardEnabled, true);
     t << Modal({"Check for Updates", "Asks GitHub whether a newer build is available."},
                SettingsModal::CheckForUpdates, [] { return std::string{CurrentVersion()}; });
-    t << Modal({"Release Notes", "Shows what changed in the build you are running."},
+    t << Modal({"Release Notes", "Shows what changed in this build and the ones before it."},
                SettingsModal::ReleaseNotes, [] { return std::string{CurrentVersion()}; });
 
     t.Group("Maintenance");

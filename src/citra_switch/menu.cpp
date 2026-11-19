@@ -3852,18 +3852,14 @@ private:
         const int max_w = InfoCardTextW();
         InfoCard card;
         card.title = "What's New in Toronja " + std::string{CurrentVersion()};
-        const CachedReleaseNotes cached = LoadCachedReleaseNotes();
-        if (CompareReleaseVersions(cached.tag, CurrentVersion()) == 0) {
-            card.pages = PaginateNotes(cached.notes, NotesHeading(), max_w);
-        }
+        // From the changelog compiled into this build, every version since the one that
+        // was installed: nothing is fetched, a console need not be online for it.
+        card.pages =
+            PaginateNotes(EmbeddedChangelogSince(update_from_version), NotesHeading(), max_w);
         if (card.pages.empty()) {
             card.pages.push_back(MakeInfoPage(
                 NotesHeading(),
-                {"Toronja is now on " + std::string{CurrentVersion()} + ".", "",
-                 "The notes for this release appear here once fetched from GitHub, and "
-                 "are also under Settings > General to see later."},
-                max_w));
-            info_card_notes_pending = true;
+                {"Toronja is now on " + std::string{CurrentVersion()} + "."}, max_w));
         }
         card.pages.push_back(MakeAboutPage(max_w));
         info_card = std::move(card);
@@ -3905,12 +3901,8 @@ private:
     }
 
     void OpenReleaseNotes() {
-        const CachedReleaseNotes cached = LoadCachedReleaseNotes();
-        if (!cached.notes.empty() && CompareReleaseVersions(cached.tag, CurrentVersion()) == 0) {
-            OpenReleaseNotesCard(cached.notes);
-            return;
-        }
-        BeginUpdateCheck(UpdateCheckKind::Notes);
+        // The whole changelog, compiled into the build.
+        OpenReleaseNotesCard(EmbeddedChangelog());
     }
 
     void HandleInfoCard(u64 down, u32 nav) {

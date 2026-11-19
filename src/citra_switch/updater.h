@@ -70,6 +70,13 @@ UpdateInstallResult InstallUpdate(const UpdateRelease& release,
                                   const std::string& executable_path,
                                   UpdateProgressCallback progress);
 
+// The changelog compiled into this build (CHANGELOG.md), from its first version on.
+std::string EmbeddedChangelog();
+
+// The sections of that changelog for versions newer than `previous`, newest first. With
+// no usable `previous`, or none newer, the section of the newest version alone.
+std::string EmbeddedChangelogSince(const std::string& previous);
+
 struct CachedReleaseNotes {
     std::string tag;
     std::string notes;

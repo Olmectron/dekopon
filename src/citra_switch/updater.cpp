@@ -19,6 +19,7 @@
 #include <curl/curl.h>
 #include <cryptopp/sha.h>
 #include <json.hpp>
+#include "changelog_data.h"
 #include "citra_switch/config.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
@@ -571,6 +572,74 @@ UpdateInstallResult InstallUpdate(const UpdateRelease& release,
     LOG_INFO(Frontend, "Updated Toronja {} -> {}, backup at {}", CurrentVersion(), release.tag,
              backup);
     return result;
+}
+
+namespace {
+
+constexpr std::string_view kSectionMark = "## ";
+constexpr std::string_view kVersionMark = "## Toronja ";
+
+struct ChangelogSection {
+    std::string version; // Empty for a section that is not a version's.
+    std::string_view text;
+};
+
+std::vector<ChangelogSection> ChangelogSections() {
+    const std::string_view all{kChangelogText};
+    std::vector<std::size_t> starts;
+    for (std::size_t pos = 0; pos < all.size();) {
+        if (all.compare(pos, kSectionMark.size(), kSectionMark) == 0) {
+            starts.push_back(pos);
+        }
+        const std::size_t newline = all.find('\n', pos);
+        if (newline == std::string_view::npos) {
+            break;
+        }
+        pos = newline + 1;
+    }
+    std::vector<ChangelogSection> sections;
+    for (std::size_t i = 0; i < starts.size(); ++i) {
+        const std::size_t end = i + 1 < starts.size() ? starts[i + 1] : all.size();
+        ChangelogSection section{.version = {}, .text = all.substr(starts[i], end - starts[i])};
+        if (section.text.compare(0, kVersionMark.size(), kVersionMark) == 0) {
+            const std::size_t line_end = section.text.find_first_of("\r\n");
+            section.version = Common::StripSpaces(std::string{section.text.substr(
+                kVersionMark.size(), line_end == std::string_view::npos
+                                         ? std::string_view::npos
+                                         : line_end - kVersionMark.size())});
+        }
+        sections.push_back(std::move(section));
+    }
+    return sections;
+}
+
+} // namespace
+
+std::string EmbeddedChangelog() {
+    std::string out;
+    for (const ChangelogSection& section : ChangelogSections()) {
+        out.append(section.text);
+    }
+    return out;
+}
+
+std::string EmbeddedChangelogSince(const std::string& previous) {
+    const bool usable = ParseVersion(previous).valid;
+    std::string out;
+    std::string_view newest;
+    for (const ChangelogSection& section : ChangelogSections()) {
+        if (section.version.empty()) {
+            continue;
+        }
+        if (newest.empty()) {
+            newest = section.text;
+        }
+        if (usable && CompareReleaseVersions(section.version, previous) > 0 &&
+            CompareReleaseVersions(section.version, CurrentVersion()) <= 0) {
+            out.append(section.text);
+        }
+    }
+    return out.empty() ? std::string{newest} : out;
 }
 
 CachedReleaseNotes LoadCachedReleaseNotes() {
