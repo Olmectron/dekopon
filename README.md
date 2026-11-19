@@ -115,7 +115,7 @@ Everything lives under `/switch/toronja/` (changeable in the options):
 | `load/mods/<TITLE_ID>/` | LayeredFS mods (`romfs`, `exefs`, `exheader.bin`) |
 | `load/textures/<TITLE_ID>/` | Texture packs |
 | `amiibo/`, `camera/` | Amiibo dumps and still images for the cameras |
-| `log/` | `azahar_log.txt`, and `crash.txt` after a crash |
+| `log/` | `azahar_log.txt`, and `crash.txt` after a crash. An empty `diag.txt` put here switches on the diagnostic trace (see below) |
 
 Save backups use Checkpoint's layout under `sdmc:/3ds/Checkpoint/`, so a real 3DS can read them.
 
@@ -223,6 +223,13 @@ port: what was tried, what the loader does and does not grant, and how each fix 
   games do not start.
 - The frame rate dips for a moment the first time a place is entered, while its code is
   compiled.
+- While a shader is being built for the first time, the draws that need it are left out.
+  Something a game draws only once can then stay missing until that screen is opened
+  again: seen once, with the Pokémon names of the first battle in Pokémon Omega Ruby.
+- A crash on Switch 2 leaves no `crash.txt`. To report one, create an empty
+  `/switch/toronja/log/diag.txt`, repeat the crash and send `azahar_log.txt`: with that
+  file present every log line is written to the card at once and the renderer logs each
+  step. It is slow; delete the file afterwards.
 - Frame generation (LSFG) is not built into these binaries.
 
 ## Credits
