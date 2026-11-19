@@ -303,6 +303,78 @@ Reference: `libkaihen/JIT.md` in https://github.com/ouncebrew/kaihen.
   directly, which the game policy does not allow. It checks syscall hints, so
   it should just report unavailable (fastmem off) - unverified.
 
+## Geometry shaders closed the emulator on Switch 2 (0.9.32) - FIXED, confirmed on console
+
+**Symptom.** Pokémon Omega Ruby closed Toronja (and hbmenu with it, "an error
+occurred") at the start of its title screen, right after the language choice.
+Every time, also as the first game opened, also at 1x resolution, with OunceVK
+20261118 as with the release before it. No `crash.txt`, nothing in `boot.txt`:
+the exception and signal handlers do not fire on Switch 2. On Switch 1 the same
+build ran the title screen normally.
+
+**Cause.** The ARM64 PICA shader JIT (`shader_jit_a64_compiler.cpp`) assembles
+each shader into a `std::vector` and then copies it to executable memory. Of
+all the PICA instructions, only the geometry shader ones call into the
+emulator from compiled code: `EMIT` calls a host helper, and `EMIT`/`SETEMIT`
+load a string for an error path. Those addresses were loaded with oaknut's
+`MOVP2R`, which chooses the encoding by how far the target is from the place
+the code is *being assembled at*:
+
+- within 1 MB: `ADR` (PC-relative)
+- within 4 GB: `ADRP` + `ADD` (PC-relative)
+- otherwise: `MOV` of the full 64-bit address (position-independent)
+
+With a vector generator that place is `nullptr + offset`, a number close to
+zero, so the test really asks "is the target below 4 GB?". PC-relative code is
+only right where it was assembled for, and this code runs somewhere else, so
+whenever the answer was yes the call went to a wrong address.
+
+- Switch 1: the program is loaded above 4 GB, `MOVP2R` always took the `MOV`
+  form, and the bug never showed.
+- Switch 2 (kaiHEN): the PC-relative form was taken. That the program sits
+  below 4 GB there is deduced from the code and from the fix working; the load
+  address itself was not read.
+
+Vertex shaders never reach this: they have no `EMIT`, and most draws do not run
+the PICA shader on the CPU at all (the vertex shader is translated to GLSL and
+runs on the GPU). A geometry shader draw is never accelerated, so it always
+goes through the JIT. The first such draw still worked because the JIT compiles
+on a worker thread and the interpreter runs meanwhile; the second one ran the
+compiled code and closed the emulator. That is why the game got one frame
+further than expected and the log showed nothing unfinished in the renderer.
+
+**Fix** (commit `e0c5bebf8`). `CallFarFunction` for `VectorCodeGenerator`
+(`src/common/aarch64/oaknut_util.h`) and the two string loads in
+`Compile_EMIT` / `Compile_SETE` load the address with `MOV` of the immediate.
+Same instructions as before on Switch 1, correct ones on Switch 2.
+
+**Rule.** In code assembled into a vector, never use `MOVP2R`, `ADR`, `ADRP`
+or `BL` with an absolute host address. Labels inside the same shader are fine:
+both ends move together. The `CodeGenerator` overload of `CallFarFunction`
+(used with real executable memory) is unaffected.
+
+**What it does not fix.** Anything else. Any game using geometry shaders on
+Switch 2 had the same crash and should now run; no other game was retested.
+
+### How it was found: the diagnostic trace (`log/diag.txt`)
+
+With no crash report on Switch 2, the last line of the log is the only
+evidence, and the normal log is buffered. Since 0.9.30:
+
+- Create an empty `/switch/toronja/log/diag.txt` on the card. The log then
+  starts with `Toronja <version> (diagnostic trace on: log/diag.txt)`.
+- While it is on, every log line is written and flushed before the call
+  returns (`PushEntry` in `common/logging/backend.cpp`), and `LOG_DIAG(class,
+  ...)` lines are emitted: every draw step, texture operation, pipeline build,
+  queue submit, shader compile and PICA shader JIT compile.
+- Vertex shader GLSL is saved as `log/diag_vs_<id>.glsl` before it is compiled.
+- `boot.txt` of the previous run is kept as `boot.old.txt`.
+- It is slow (about half speed while loading). Delete `diag.txt` and the
+  `diag_vs_*.glsl` files when done.
+
+To trace something new, add `LOG_DIAG` at its begin and end: off, it costs one
+atomic load.
+
 ## Where everything lives
 
 - **Fork (ours):** https://github.com/Olmectron/dekopon
