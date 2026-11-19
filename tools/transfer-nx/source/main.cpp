@@ -445,7 +445,7 @@ bool DoPut(int fd, const std::string& path, const std::string& shown) {
         u32 over_500ms{};
         u32 over_2s{};
         // The slow writes themselves: when (ms into the transfer) and how long (ms).
-        static constexpr int kStalls = 24;
+        enum { kStalls = 24 };
         u32 stall_at[kStalls]{};
         u32 stall_ms[kStalls]{};
         int stalls{};
