@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/logging/log.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
 #include "common/scm_rev.h"
@@ -103,6 +104,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
 
         LOG_NEW_OBJECT(Render_Vulkan, "New VS config {:016X}", config_hash);
 
+        LOG_DIAG(Render_Vulkan, "vs config {:016X}: generate begin", config_hash);
         ExtraVSConfig extra_config = parent.CalcExtraConfig(config);
 
         Common::HashableString<> program;
@@ -118,6 +120,8 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
             return {};
         }
 
+        LOG_DIAG(Render_Vulkan, "vs config {:016X}: generate end, {} bytes", config_hash,
+                 program.size());
         const u64 spirv_id = program.Hash();
 
         auto [iter_prog, new_program] =
@@ -132,11 +136,25 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
             VideoCore::NotifyShaderCompileBegin();
             parent.shader_workers.QueueWork([device, &shader, this, spirv_id] {
                 AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
+                if (Common::Log::diag_trace.load(std::memory_order_relaxed)) {
+                    // The source goes to the card first: if compiling it is what ends the
+                    // process, the file is what there is to reproduce it with.
+                    FileUtil::WriteStringToFile(
+                        true,
+                        fmt::format("{}diag_vs_{:016X}.glsl",
+                                    FileUtil::GetUserPath(FileUtil::UserPath::LogDir), spirv_id),
+                        shader.program.value);
+                }
+                LOG_DIAG(Render_Vulkan, "vs compile {:016X}: glsl begin, {} bytes", spirv_id,
+                         shader.program.size());
                 auto spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
+                LOG_DIAG(Render_Vulkan, "vs compile {:016X}: glsl end, {} words", spirv_id,
+                         spirv.size());
                 AppendVSSPIRV(vs_cache, spirv, spirv_id);
                 shader.program.clear();
                 shader.module = CompileSPV(spirv, device);
                 shader.MarkDone();
+                LOG_DIAG(Render_Vulkan, "vs compile {:016X}: done", spirv_id);
                 VideoCore::NotifyShaderCompileEnd();
             });
         }
@@ -172,6 +190,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
             AsyncStats::ScopedTimer timer{AsyncStats::shader_compile};
             std::vector<u32> spirv;
             const bool use_spirv = parent.profile.vk_use_spirv_generator;
+            LOG_DIAG(Render_Vulkan, "fs compile {:016X}: begin", fs_config_hash);
             if (use_spirv && !fs_config.UsesSpirvIncompatibleConfig()) {
                 spirv = SPIRV::GenerateFragmentShader(fs_config, parent.profile);
                 shader.module = CompileSPV(spirv, parent.instance.GetDevice());
@@ -182,6 +201,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
                 shader.module = CompileSPV(spirv, parent.instance.GetDevice());
             }
             shader.MarkDone();
+            LOG_DIAG(Render_Vulkan, "fs compile {:016X}: done", fs_config_hash);
 
             if (user.IsCacheable()) {
                 // Only cache to disk if the user config is cacheable

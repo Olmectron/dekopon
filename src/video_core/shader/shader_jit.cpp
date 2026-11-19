@@ -33,6 +33,7 @@ JitEngine::~JitEngine() = default;
 void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
                              std::shared_ptr<const SwizzleData> swizzle_data) {
     std::unique_ptr<JitShader> shader;
+    LOG_DIAG(HW_GPU, "pica shader jit: compile begin, entry {}", fmt::ptr(entry));
     if (!exec_memory_exhausted.load(std::memory_order_relaxed)) {
         try {
             shader = std::make_unique<JitShader>();
@@ -50,6 +51,8 @@ void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCod
             shader.reset();
         }
     }
+    LOG_DIAG(HW_GPU, "pica shader jit: compile end, entry {} compiled={}", fmt::ptr(entry),
+             shader != nullptr);
     entry->shader = std::move(shader);
     entry->ready.store(true, std::memory_order_release);
 }
@@ -80,6 +83,8 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
         // thread without touching state the caller keeps mutating.
         auto program_code = std::make_shared<ProgramCode>(setup.GetProgramCode());
         auto swizzle_data = std::make_shared<SwizzleData>(setup.GetSwizzleData());
+        LOG_DIAG(HW_GPU, "pica shader jit: new program {:016X}, entry {}", cache_key,
+                 fmt::ptr(entry));
         compile_workers.QueueWork([this, entry, program_code, swizzle_data] {
             CompileEntry(entry, program_code, swizzle_data);
         });

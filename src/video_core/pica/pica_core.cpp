@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/logging/log.h"
 #include "common/arch.h"
 #include "common/archives.h"
 #include "common/microprofile.h"
@@ -1016,6 +1017,7 @@ void PicaCore::SubmitImmediate(u32 value) {
 }
 
 void PicaCore::DrawImmediate() {
+    LOG_DIAG(HW_GPU, "pica immediate vertex");
     // Compile the vertex shader.
     shader_engine->SetupBatch(vs_setup, regs.internal.vs.main_offset);
 
@@ -1083,6 +1085,9 @@ void PicaCore::DrawArrays(bool is_indexed) {
         return accelerate_draw;
     }();
 
+    LOG_DIAG(HW_GPU, "pica draw: vertices={} indexed={} gs={} accelerate={}",
+             static_cast<u32>(regs.internal.pipeline.num_vertices), is_indexed,
+             regs.internal.pipeline.use_gs == PipelineRegs::UseGS::Yes, accelerate_draw);
     // Add vertices to the delay generator.
     delay_generator.AddVertices(regs.internal.pipeline.num_vertices,
                                 regs.internal.pipeline.triangle_topology);
@@ -1095,7 +1100,9 @@ void PicaCore::DrawArrays(bool is_indexed) {
     }
 
     // We cannot accelerate the draw, so load and execute the vertex shader for each vertex.
+    LOG_DIAG(HW_GPU, "pica draw: software vertices begin");
     LoadVertices(is_indexed);
+    LOG_DIAG(HW_GPU, "pica draw: software vertices end");
 
     // Draw emitted triangles.
     rasterizer->DrawTriangles();
@@ -1134,10 +1141,13 @@ void PicaCore::LoadVertices(bool is_indexed) {
     ShaderUnit shader_unit;
     AttributeBuffer vs_output;
     shader_engine->SetupBatch(vs_setup, regs.internal.vs.main_offset);
+    LOG_DIAG(HW_GPU, "pica draw: vertex shader set up, compiled={}",
+             vs_setup.cached_shader != nullptr);
 
     // Setup geometry pipeline in case we are using a geometry shader.
     geometry_pipeline.Reconfigure();
     geometry_pipeline.Setup(shader_engine.get());
+    LOG_DIAG(HW_GPU, "pica draw: geometry pipeline set up");
     ASSERT(!geometry_pipeline.NeedIndexInput() || is_indexed);
 
     for (u32 index = 0; index < pipeline.num_vertices; ++index) {

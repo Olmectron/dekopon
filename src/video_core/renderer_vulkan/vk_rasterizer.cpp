@@ -551,6 +551,7 @@ bool RasterizerVulkan::AccelerateDrawBatch(bool is_indexed) {
     // Vertex data setup might involve scheduler flushes so perform it
     // early to avoid invalidating our state in the middle of the draw.
     vertex_info = AnalyzeVertexArray(is_indexed, instance.GetMinVertexStrideAlignment());
+    LOG_DIAG(Render_Vulkan, "accelerated draw: vertex array analysed");
     if (vertex_info.Invalid()) {
         // Do not draw anything if the vertex array is invalid.
         return true;
@@ -560,13 +561,16 @@ bool RasterizerVulkan::AccelerateDrawBatch(bool is_indexed) {
         MICROPROFILE_SCOPE(Vulkan_VertexArray);
         SetupVertexArray();
     }
+    LOG_DIAG(Render_Vulkan, "accelerated draw: vertex array set up");
 
     if (!SetupVertexShader()) {
+        LOG_DIAG(Render_Vulkan, "accelerated draw: vertex shader not ready");
         return false;
     }
     if (!SetupGeometryShader()) {
         return false;
     }
+    LOG_DIAG(Render_Vulkan, "accelerated draw: shaders chosen");
 
     return Draw(true, is_indexed);
 }
