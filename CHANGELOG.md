@@ -4,6 +4,10 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.37
+
+- The author line the Homebrew Menu shows reads "Olmectron (based on Azahar, Dekopon)", so it is clear whose work Toronja builds on.
+
 ## Toronja 0.9.36
 
 - Switch 1: shorter freezes while a game's shaders are built for the first time. Pipelines built by the frame that needs them were meant to take a quarter of the time and took all of it: Super Mario 3D Land froze for up to 13 seconds at a time.

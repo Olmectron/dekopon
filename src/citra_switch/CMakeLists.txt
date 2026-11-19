@@ -148,7 +148,7 @@ endif()
 
 nx_generate_nacp(OUTPUT toronja.nacp
     NAME "${DEKOPON_NACP_NAME}"
-    AUTHOR "Olmectron (Azahar, Dekopon)"
+    AUTHOR "Olmectron (based on Azahar, Dekopon)"
     VERSION "${DEKOPON_VERSION}"
 )
 
