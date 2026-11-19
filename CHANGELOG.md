@@ -4,6 +4,10 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.36
+
+- Switch 1: shorter freezes while a game's shaders are built for the first time. Pipelines built by the frame that needs them were meant to take a quarter of the time and took all of it: Super Mario 3D Land froze for up to 13 seconds at a time.
+
 ## Toronja 0.9.35
 
 - The release notes are inside the app now. The What's New card and the release notes in the settings used to be fetched from GitHub and showed nothing on a console that is not online.

@@ -107,21 +107,24 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
                 [](Shader* shader) { return shader && !shader->IsDone(); });
             // Not without limit: a battle starting in Pokemon Omega Ruby needs dozens
             // of new pipelines at once, and building them all here is a freeze of many
-            // seconds. Up to a quarter of each second goes to it; past that the draw is
-            // skipped for now, as it used to be, while the worker carries on.
-            static std::chrono::steady_clock::time_point window_start{};
-            static std::chrono::steady_clock::duration window_spent{};
+            // seconds. A quarter of the time goes to it: after a build, three times as
+            // long as it took has to pass before the next one; until then the draw is
+            // skipped, as it used to be, while the worker carries on with the pipeline
+            // the draw sent to the head of its queue.
+            //
+            // This used to be "up to 250 ms in each second", checked before the build. A
+            // pipeline takes 1.3 to 2.4 s here, so every second began with its budget
+            // unspent and the builds ran back to back: Super Mario 3D Land with an empty
+            // driver cache held the whole application for up to 13 s at a time.
+            static std::chrono::steady_clock::time_point next_build_allowed{};
             const auto now = std::chrono::steady_clock::now();
-            if (now - window_start > std::chrono::seconds{1}) {
-                window_start = now;
-                window_spent = {};
-            }
-            if (shaders_ready && window_spent < std::chrono::milliseconds{250}) {
+            if (shaders_ready && now >= next_build_allowed) {
                 if (!build_claimed.exchange(true)) {
                     Build();
                     AsyncStats::render_thread_builds.fetch_add(1, std::memory_order_relaxed);
                 }
-                window_spent += std::chrono::steady_clock::now() - now;
+                const auto after = std::chrono::steady_clock::now();
+                next_build_allowed = after + 3 * (after - now);
                 return true; // The caller waits for whoever is building it.
             }
         }
