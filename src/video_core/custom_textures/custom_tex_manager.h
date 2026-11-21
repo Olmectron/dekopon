@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <list>
 #include <span>
 #include <unordered_map>
@@ -71,6 +73,19 @@ public:
                custom_tex_mem_usage.load(std::memory_order_relaxed) >= max_custom_tex_mem;
     }
 
+    /// Cases the surface cache used to handle wrongly and now steps around; counted and
+    /// logged, to see in a log whether one of them comes before a problem.
+    enum class Guard : u32 {
+        NormalUploadSkipped, ///< The game's pixels were about to go into a replaced surface
+        SurfaceRemade,       ///< A replaced surface got a material of another size
+        StaleUploadDropped,  ///< A decoded material's surface was gone
+        Count,
+    };
+    void NoteGuard(Guard guard);
+
+    /// Writes the memory in use and the counts above to the log, when they have changed.
+    void LogStats();
+
     /// True when mipmap uploads should be skipped (legacy packs only)
     bool SkipMipmaps() const noexcept {
         return skip_mipmap;
@@ -108,6 +123,11 @@ private:
     std::list<AsyncUpload> async_uploads;
     std::unique_ptr<Common::ThreadWorker> workers;
     std::atomic<u64> custom_tex_mem_usage{0};
+    std::array<u64, static_cast<std::size_t>(Guard::Count)> guard_counts{};
+    std::array<u64, static_cast<std::size_t>(Guard::Count)> guard_counts_logged{};
+    u64 logged_mem_usage = 0;
+    bool logged_over_budget = false;
+    std::chrono::steady_clock::time_point last_stats_log{};
     u64 max_custom_tex_mem{0};
     u64 title_id{};
     bool textures_loaded{false};

@@ -4,6 +4,11 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.39
+
+- Texture packs: a texture the pack had already replaced could get the game's own pixels written into it, or a replacement of another size copied over it, when the game put a different texture at the same place (item icons do). That is fixed. It is the likely cause of a freeze seen two hours into The Legend of Zelda: Majora's Mask 3D with a 4K pack, not a proven one.
+- Texture packs: the log says how much memory the pack's textures use, once a minute while it changes, and when the limit is reached.
+
 ## Toronja 0.9.38
 
 - Shaders are built before the game starts. With async shader compilation on, a game used to start at once with everything its shader cache listed still to build: a slow first minute or two with textures missing. That work is now done while the game loads, with a count on screen, and B skips the wait. It only takes long the first time a game is started with nothing compiled; after that it passes at once. Display > Shaders > Build Shaders Before Starting turns it off.

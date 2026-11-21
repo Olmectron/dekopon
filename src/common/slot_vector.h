@@ -75,6 +75,13 @@ public:
         return SlotId{index};
     }
 
+    /// Whether the slot holds an object now. For an id kept across frames, whose object
+    /// may have been erased since.
+    [[nodiscard]] bool is_allocated(SlotId id) const noexcept {
+        return id && id.index / 64 < stored_bitset.size() &&
+               ((stored_bitset[id.index / 64] >> (id.index % 64)) & 1) != 0;
+    }
+
     void erase(SlotId id) noexcept {
         values[id.index].object.~T();
         free_list.push_back(id.index);

@@ -1044,7 +1044,17 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
         FlushRegion(params.addr, params.size);
         const bool try_custom = use_custom_textures && custom_tex_manager.HasMaterials();
         if (!try_custom || !UploadCustomSurface(surface_id, interval)) {
-            UploadSurface(surface, interval);
+            // A surface a texture pack has replaced holds an image of the pack's size and
+            // format, not the game's. The game's pixels do not belong in it: they were
+            // written into a corner of it, converted for the wrong format, and for the
+            // compressed formats not decoded at all ("Unimplemented texture decode
+            // function for pixel format = 12"). It keeps what it shows until the
+            // replacement that was just queued is uploaded.
+            if (surface.IsCustom()) {
+                custom_tex_manager.NoteGuard(CustomTexManager::Guard::NormalUploadSkipped);
+            } else {
+                UploadSurface(surface, interval);
+            }
         }
         notify_validated(params.GetInterval());
     }
@@ -1141,10 +1151,39 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
 
     surface.flags |= SurfaceFlagBits::Custom;
 
-    const auto upload = [this, level, surface_id, material]() -> bool {
-        ASSERT_MSG(True(slot_surfaces[surface_id].flags & SurfaceFlagBits::Custom),
-                   "Surface is not suitable for custom upload, aborting!");
-        if (!slot_surfaces[surface_id].IsCustom()) {
+    const auto upload = [this, level, surface_id, material, addr = surface.addr,
+                         end = surface.end, format = surface.pixel_format]() -> bool {
+        // With asynchronous loading this runs frames later, when the picture is decoded.
+        // By then the surface may be gone and its slot may hold another one.
+        if (!slot_surfaces.is_allocated(surface_id)) {
+            custom_tex_manager.NoteGuard(CustomTexManager::Guard::StaleUploadDropped);
+            return false;
+        }
+        {
+            const Surface& target = slot_surfaces[surface_id];
+            if (False(target.flags & SurfaceFlagBits::Registered) ||
+                False(target.flags & SurfaceFlagBits::Custom) || target.addr != addr ||
+                target.end != end || target.pixel_format != format) {
+                custom_tex_manager.NoteGuard(CustomTexManager::Guard::StaleUploadDropped);
+                return false;
+            }
+        }
+        // A surface already replaced was made for the material it had then. The game can
+        // write another texture to the same address (item icons do), and a surface is
+        // reused for a new texture of the same guest size: the new material can be of
+        // another size or format, and copying it into the old image writes past it.
+        const auto fits = [material](const Surface& target) {
+            const Material* const have = target.material;
+            return have != nullptr && have->width == material->width &&
+                   have->height == material->height && have->format == material->format &&
+                   (have->Map(MapType::Normal) != nullptr) ==
+                       (material->Map(MapType::Normal) != nullptr);
+        };
+        const bool was_custom = slot_surfaces[surface_id].IsCustom();
+        if (was_custom && !fits(slot_surfaces[surface_id])) {
+            custom_tex_manager.NoteGuard(CustomTexManager::Guard::SurfaceRemade);
+        }
+        if (!was_custom || !fits(slot_surfaces[surface_id])) {
             const SurfaceBase old_surface{slot_surfaces[surface_id]};
             const SurfaceId old_id =
                 slot_surfaces.swap_and_insert(surface_id, runtime, old_surface, material);

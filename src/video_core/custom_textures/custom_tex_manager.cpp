@@ -67,6 +67,7 @@ void CustomTexManager::TickFrame() {
     if (!textures_loaded) {
         return;
     }
+    LogStats();
     std::size_t num_uploads = 0;
     for (auto it = async_uploads.begin(); it != async_uploads.end();) {
         if (num_uploads >= MAX_UPLOADS_PER_TICK) {
@@ -85,6 +86,51 @@ void CustomTexManager::TickFrame() {
             break;
         }
     }
+}
+
+void CustomTexManager::NoteGuard(Guard guard) {
+    static constexpr std::array<const char*, static_cast<std::size_t>(Guard::Count)> NAMES = {
+        "the game's pixels kept out of a replaced surface",
+        "a replaced surface remade for a material of another size",
+        "a decoded material dropped, its surface was gone",
+    };
+    const std::size_t index = static_cast<std::size_t>(guard);
+    // The first of each kind at once, with the time it happened; the rest in LogStats.
+    if (guard_counts[index]++ == 0) {
+        LOG_WARNING(Render, "Custom textures: {} (first time)", NAMES[index]);
+    }
+}
+
+void CustomTexManager::LogStats() {
+    if (!has_materials) {
+        return;
+    }
+    // Decoded pictures are kept for the whole session, so this only grows. The count is
+    // kept doubled (CUSTOM_TEX_MEM_FACTOR), for the copy the GPU holds.
+    const u64 usage = custom_tex_mem_usage.load(std::memory_order_relaxed);
+    if (!logged_over_budget && IsOverMemoryBudget()) {
+        logged_over_budget = true;
+        LOG_WARNING(Render,
+                    "Custom textures: memory budget reached ({} MiB of {} MiB); textures not "
+                    "loaded yet stay as the game's own from here on",
+                    usage / 1_MiB, max_custom_tex_mem / 1_MiB);
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_stats_log < std::chrono::seconds{60}) {
+        return;
+    }
+    last_stats_log = now;
+    if (usage == logged_mem_usage && guard_counts == guard_counts_logged) {
+        return;
+    }
+    logged_mem_usage = usage;
+    guard_counts_logged = guard_counts;
+    LOG_INFO(Render,
+             "Custom textures: {} MiB of the {} MiB budget counted ({} MiB decoded), {} uploads "
+             "waiting | kept the game's pixels out of a replaced surface {}x, remade a "
+             "replaced surface {}x, dropped a decoded material {}x",
+             usage / 1_MiB, max_custom_tex_mem / 1_MiB, usage / CUSTOM_TEX_MEM_FACTOR / 1_MiB,
+             async_uploads.size(), guard_counts[0], guard_counts[1], guard_counts[2]);
 }
 
 void CustomTexManager::FindCustomTextures() {
