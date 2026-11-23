@@ -91,7 +91,13 @@ std::string s_dismissed_update_tag;
 std::string s_last_seen_version;
 std::string s_last_game;
 bool s_whats_new_card = true;
+// Switch 2 builds a game's shaders on cores of their own while it runs. Switch 1 has
+// one worker on the audio core, so there the wait before the game is the default.
+#if defined(__SWITCH2__)
+bool s_shader_precompile = false;
+#else
 bool s_shader_precompile = true;
+#endif
 
 // Pushes the picked image onto the three camera slots the CAM service reads.
 void ApplyCameraSettings() {

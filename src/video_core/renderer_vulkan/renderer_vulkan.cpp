@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_memory_util.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "video_core/shader_precompile.h"
 
 #include "video_core/host_shaders/vulkan_present_anaglyph_frag.h"
 #include "video_core/host_shaders/vulkan_present_frag.h"
@@ -1840,20 +1841,47 @@ OverlayDraw RendererVulkan::PrepareFpsOverlay(const Layout::FramebufferLayout& l
 
 OverlayDraw RendererVulkan::PrepareShaderNotice(const Layout::FramebufferLayout& layout,
                                                 Frame* frame) {
-    if (!Settings::values.show_shader_compile_notice.GetValue()) {
-        return {};
-    }
+    // A game that starts with its shaders still to build has hundreds queued, built in
+    // the background while it runs. That is said in this corner with a count, whatever
+    // the setting: without it, things missing from the picture look like a fault.
+    constexpr u32 BACKLOG = 24;
     const u32 pending = VideoCore::GetPendingShaderCompiles();
+    const u32 finished = VideoCore::GetFinishedShaderCompiles();
     const auto now = std::chrono::steady_clock::now();
     if (pending > 0) {
+        if (!shader_notice_active) {
+            shader_notice_active = true;
+            shader_notice_backlog = false;
+            shader_notice_base = finished;
+        }
+        shader_notice_done = finished - shader_notice_base;
+        shader_notice_total = shader_notice_done + pending;
+        if (shader_notice_total >= BACKLOG) {
+            shader_notice_backlog = true;
+        }
         shader_notice_until = now + std::chrono::milliseconds(500);
+    } else if (shader_notice_active) {
+        shader_notice_done = shader_notice_total;
+        if (now >= shader_notice_until) {
+            shader_notice_active = false;
+        }
     }
     if (now >= shader_notice_until) {
         return {};
     }
+    if (!shader_notice_backlog && !Settings::values.show_shader_compile_notice.GetValue()) {
+        return {};
+    }
+    // The wait before a game has its own message, in the middle of the screen.
+    if (VideoCore::g_precompile_active.load(std::memory_order_relaxed)) {
+        return {};
+    }
 
-    char text[32];
-    if (pending > 0) {
+    char text[48];
+    if (shader_notice_backlog) {
+        std::snprintf(text, sizeof(text), "Building shaders  %u/%u", shader_notice_done,
+                      shader_notice_total);
+    } else if (pending > 0) {
         std::snprintf(text, sizeof(text), "Compiling shaders  %u", pending);
     } else {
         std::snprintf(text, sizeof(text), "Compiling shaders");

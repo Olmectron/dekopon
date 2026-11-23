@@ -12,6 +12,7 @@
 #include "common/microprofile.h"
 #include "common/settings.h"
 #include "common/string_util.h"
+#include "common/thread.h"
 #include "common/texture.h"
 #include "core/core.h"
 #include "core/frontend/image_interface.h"
@@ -27,6 +28,12 @@ MICROPROFILE_DEFINE(CustomTexManager_TickFrame, "CustomTexManager", "TickFrame",
                     MP_RGB(54, 16, 32));
 
 constexpr std::size_t MAX_UPLOADS_PER_TICK = 8;
+
+/// How much picture data one frame copies to the GPU. Eight pictures of a 4K pack are
+/// well over 100 MiB, copied by the thread that draws the frame: a visible stop when an
+/// area is entered. Spread over more frames the pictures appear one after another
+/// instead. One upload always goes through, whatever its size.
+constexpr u64 MAX_UPLOAD_BYTES_PER_TICK = 24ULL * 1024 * 1024;
 
 // A resident custom texture costs roughly its decoded size twice.
 constexpr u64 CUSTOM_TEX_MEM_FACTOR = 2;
@@ -72,12 +79,18 @@ void CustomTexManager::TickFrame() {
     EvictDecoded();
     LogStats();
     std::size_t num_uploads = 0;
+    u64 uploaded_bytes = 0;
     for (auto it = async_uploads.begin(); it != async_uploads.end();) {
         if (num_uploads >= MAX_UPLOADS_PER_TICK) {
             return;
         }
         switch (it->material->state) {
         case DecodeState::Decoded:
+            if (num_uploads > 0 &&
+                uploaded_bytes + it->material->size > MAX_UPLOAD_BYTES_PER_TICK) {
+                return;
+            }
+            uploaded_bytes += it->material->size;
             it->func();
             num_uploads++;
             [[fallthrough]];
@@ -547,9 +560,31 @@ std::vector<FileUtil::FSTEntry> CustomTexManager::GetTextures(u64 title_id) {
 }
 
 void CustomTexManager::CreateWorkers() {
-    const std::size_t num_workers = std::max(std::thread::hardware_concurrency(), 2U) >> 1;
-    workers.reset(
-        new Common::ThreadWorker{num_workers, "Custom textures", {}, {Common::Horizon::CoreFrontend}});
+    // Decoding one picture of a 4K pack keeps a worker busy for a good part of a second.
+    // The workers used to be pinned to the main thread's core at its priority, so every
+    // area entered took time from the thread that presents the frames. They go to the
+    // cores nothing else is pinned to, where there are any (Switch 2), and run at low
+    // priority everywhere: a picture arrives a little later, the frame is not held.
+    std::size_t num_workers = std::max(std::thread::hardware_concurrency(), 2U) >> 1;
+    std::vector<std::uint32_t> cores;
+#ifdef __SWITCH__
+    const std::uint64_t allowed = Common::Horizon::GetAllowedCoreMask();
+    for (std::uint32_t core = Common::Horizon::CoreEmu + 1; core < 64; ++core) {
+        if (allowed & (1ULL << core)) {
+            cores.push_back(core);
+        }
+    }
+    if (cores.empty()) {
+        cores.push_back(Common::Horizon::CoreFrontend);
+    } else {
+        num_workers = std::min<std::size_t>(cores.size(), 4);
+    }
+    LOG_INFO(Render, "Custom textures: {} decode workers at low priority, first core {} of {} "
+                     "(allowed core mask {:#x})",
+             num_workers, cores.front(), cores.size(), allowed);
+#endif
+    workers.reset(new Common::ThreadWorker{num_workers, "Custom textures", {}, std::move(cores),
+                                           Common::ThreadPriority::Low});
 }
 
 void CustomTexManager::ComputeMemoryBudget() {

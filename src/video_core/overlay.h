@@ -101,6 +101,8 @@ bool IsOverlayMenuVisible();
 void NotifyShaderCompileBegin();
 void NotifyShaderCompileEnd();
 u32 GetPendingShaderCompiles();
+// How many have ended since the application started; only differences mean anything.
+u32 GetFinishedShaderCompiles();
 
 // A short-lived message shown over the game, used to report things the player asked for.
 // Posting a new one replaces whatever is showing.

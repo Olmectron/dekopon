@@ -203,6 +203,13 @@ private:
     // Keeps the shader-compile notice on screen for a short tail after the last build so
     // one can actually read it.
     std::chrono::steady_clock::time_point shader_notice_until{};
+    // The run of builds being shown: the finished count when it began, and whether it
+    // grew into a backlog, which is shown with its progress whatever the setting says.
+    bool shader_notice_active = false;
+    bool shader_notice_backlog = false;
+    u32 shader_notice_base = 0;
+    u32 shader_notice_done = 0;
+    u32 shader_notice_total = 0;
 
     bool drawing_screenshot = false; // DrawScreens is filling a screenshot, not the display.
     bool isSecondaryWindow = false;

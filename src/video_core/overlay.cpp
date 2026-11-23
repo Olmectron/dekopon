@@ -16,6 +16,7 @@ std::mutex s_mutex;
 OverlayMenuState s_state;
 std::atomic<bool> s_visible{false};
 std::atomic<u32> s_pending_shader_compiles{0};
+std::atomic<u32> s_finished_shader_compiles{0};
 
 std::atomic<u32> s_rotation{0};
 
@@ -54,7 +55,12 @@ void NotifyShaderCompileBegin() {
 }
 
 void NotifyShaderCompileEnd() {
+    s_finished_shader_compiles.fetch_add(1, std::memory_order_acq_rel);
     s_pending_shader_compiles.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+u32 GetFinishedShaderCompiles() {
+    return s_finished_shader_compiles.load(std::memory_order_acquire);
 }
 
 u32 GetPendingShaderCompiles() {

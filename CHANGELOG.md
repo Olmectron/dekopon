@@ -4,6 +4,11 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.41
+
+- Texture packs: fewer stops when an area is entered. The pack's pictures were decoded on the main thread's core at its priority; they are now decoded on the spare cores (Switch 2) and at low priority. A frame copies at most 24 MiB of pictures to the GPU, so they appear one after another instead of holding the frame.
+- Switch 2: a game starts at once again, and the shaders it is known to need are built while it runs. A count in the bottom left corner ("Building shaders 120/800") shows how far that is. Switch 1 still waits before the game, where it has one core to build with. Display > Shaders > Build Shaders Before Starting chooses; the setting starts from its new default on both consoles.
+
 ## Toronja 0.9.40
 
 - Texture packs no longer run the emulator out of memory. Every picture of the pack that had been shown stayed in memory for the whole session; hours into The Legend of Zelda: Majora's Mask 3D with a 4K pack there was none left, and Toronja closed. Pictures are now freed some time after they are uploaded, and when memory is short new ones wait and the game's own textures are shown instead.

@@ -1019,11 +1019,20 @@ void BuildGraphics(std::vector<SettingEntry>& out) {
                  "Builds shaders on spare cores while the game keeps running. Cuts hitching; objects "
                  "can show up a moment late the first time."},
                 v.async_shader_compilation);
-    t << LocalBool("precompile_shaders",
+    // A new id: the old one ("precompile_shaders") was saved as on for everyone, and the
+    // default is now off on Switch 2.
+    t << LocalBool("wait_for_shaders",
                    {"Build Shaders Before Starting",
-                    "With async compilation on: builds the shaders a game is known to need "
-                    "while it loads, with a count, instead of during play. B skips the wait."},
-                   IsShaderPrecompileEnabled, SetShaderPrecompileEnabled, true);
+                    "With async compilation on. On: waits while a game loads for the shaders "
+                    "it is known to need, with a count; B skips the wait. Off: the game "
+                    "starts at once and they are built while it runs, with a count in the "
+                    "corner."},
+                   IsShaderPrecompileEnabled, SetShaderPrecompileEnabled,
+#if defined(__SWITCH2__)
+                   false);
+#else
+                   true);
+#endif
     t.Page(Category::Graphics);
     t.Group("Shaders");
     t << Toggle({"Disk Shader Cache",
