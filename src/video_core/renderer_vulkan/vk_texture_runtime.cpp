@@ -1001,6 +1001,11 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
 
     const auto upload = [&](Type type, VideoCore::CustomTexture* texture) {
         const u32 custom_size = static_cast<u32>(texture->data.size());
+        if (custom_size == 0) {
+            LOG_ERROR(Render_Vulkan, "Custom texture {}x{} has no pixels, not uploaded", width,
+                      height);
+            return;
+        }
         if (custom_size > runtime.upload_buffer.GetSize()) {
             LOG_ERROR(Render_Vulkan, "Custom texture {}x{} needs {} KiB, upload buffer holds {} KiB",
                       width, height, custom_size / 1024, runtime.upload_buffer.GetSize() / 1024);

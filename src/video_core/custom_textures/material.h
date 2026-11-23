@@ -70,6 +70,8 @@ struct Material {
     u32 height;
     u64 size;
     u64 hash;
+    /// When the material was last asked for, to drop the pictures not needed longest.
+    u64 last_used = 0;
     CustomPixelFormat format;
     std::array<CustomTexture*, MAX_MAPS> textures;
     std::atomic<DecodeState> state{};

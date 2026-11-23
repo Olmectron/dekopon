@@ -5,7 +5,11 @@
 #include "common/horizon_meminfo.h"
 
 #ifdef __SWITCH__
+#include <malloc.h>
 #include <switch.h>
+
+extern char* fake_heap_start;
+extern char* fake_heap_end;
 #endif
 
 namespace Common {
@@ -24,7 +28,19 @@ std::uint64_t GetHorizonMemoryTotal() {
     return total;
 }
 
+std::uint64_t GetHorizonHeapFree() {
+    const struct mallinfo info = mallinfo();
+    const std::uint64_t total = static_cast<std::uint64_t>(fake_heap_end - fake_heap_start);
+    const std::uint64_t used = static_cast<std::uint64_t>(info.uordblks);
+    // Never 0, which means unknown.
+    return total > used ? total - used : 1;
+}
+
 #else
+
+std::uint64_t GetHorizonHeapFree() {
+    return 0;
+}
 
 std::uint64_t GetHorizonMemoryUsed() {
     return 0;

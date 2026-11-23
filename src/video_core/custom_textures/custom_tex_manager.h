@@ -69,6 +69,12 @@ public:
 
     /// True once the decoded custom textures have reached the memory budget.
     bool IsOverMemoryBudget() const noexcept {
+        // On a console, by what is really left of the heap: the pictures share it with
+        // the GPU's copies of them and with everything else, and no count kept here
+        // knows about those.
+        if (heap_free != 0 && heap_free < HEAP_RESERVE) {
+            return true;
+        }
         return max_custom_tex_mem != 0 &&
                custom_tex_mem_usage.load(std::memory_order_relaxed) >= max_custom_tex_mem;
     }
@@ -85,6 +91,9 @@ public:
 
     /// Writes the memory in use and the counts above to the log, when they have changed.
     void LogStats();
+
+    /// Frees decoded pictures not asked for longest, once they have been uploaded.
+    void EvictDecoded();
 
     /// True when mipmap uploads should be skipped (legacy packs only)
     bool SkipMipmaps() const noexcept {
@@ -127,6 +136,17 @@ private:
     std::array<u64, static_cast<std::size_t>(Guard::Count)> guard_counts_logged{};
     u64 logged_mem_usage = 0;
     bool logged_over_budget = false;
+    /// New pictures are not loaded with less than this left of the heap.
+    static constexpr u64 HEAP_RESERVE = 1024ULL << 20;
+    /// Left of the heap when last looked (twice a second); 0 when not known.
+    u64 heap_free = 0;
+    u64 heap_free_min = 0;
+    u64 use_counter = 0;
+    u64 evicted_count = 0;
+    u64 evicted_bytes = 0;
+    u64 evicted_count_logged = 0;
+    std::chrono::steady_clock::time_point last_evict_check{};
+    std::chrono::steady_clock::time_point last_budget_log{};
     std::chrono::steady_clock::time_point last_stats_log{};
     u64 max_custom_tex_mem{0};
     u64 title_id{};

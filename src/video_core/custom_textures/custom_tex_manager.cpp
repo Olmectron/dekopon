@@ -2,8 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <json.hpp>
 #include "common/file_util.h"
+#include "common/horizon_meminfo.h"
 #include "common/horizon_thread.h"
 #include "common/literals.h"
 #include "common/memory_detect.h"
@@ -67,6 +69,7 @@ void CustomTexManager::TickFrame() {
     if (!textures_loaded) {
         return;
     }
+    EvictDecoded();
     LogStats();
     std::size_t num_uploads = 0;
     for (auto it = async_uploads.begin(); it != async_uploads.end();) {
@@ -105,32 +108,128 @@ void CustomTexManager::LogStats() {
     if (!has_materials) {
         return;
     }
-    // Decoded pictures are kept for the whole session, so this only grows. The count is
-    // kept doubled (CUSTOM_TEX_MEM_FACTOR), for the copy the GPU holds.
     const u64 usage = custom_tex_mem_usage.load(std::memory_order_relaxed);
-    if (!logged_over_budget && IsOverMemoryBudget()) {
-        logged_over_budget = true;
-        LOG_WARNING(Render,
-                    "Custom textures: memory budget reached ({} MiB of {} MiB); textures not "
-                    "loaded yet stay as the game's own from here on",
-                    usage / 1_MiB, max_custom_tex_mem / 1_MiB);
-    }
     const auto now = std::chrono::steady_clock::now();
+    const bool over = IsOverMemoryBudget();
+    if (over && (!logged_over_budget || now - last_budget_log > std::chrono::seconds{60})) {
+        last_budget_log = now;
+        LOG_WARNING(Render,
+                    "Custom textures: memory is short ({} MiB left of the heap, {} MiB of pictures "
+                    "decoded); textures not loaded yet stay as the game's own until there is room",
+                    heap_free / 1_MiB, usage / CUSTOM_TEX_MEM_FACTOR / 1_MiB);
+    }
+    logged_over_budget = over;
     if (now - last_stats_log < std::chrono::seconds{60}) {
         return;
     }
     last_stats_log = now;
-    if (usage == logged_mem_usage && guard_counts == guard_counts_logged) {
+    if (usage == logged_mem_usage && guard_counts == guard_counts_logged &&
+        evicted_count == evicted_count_logged) {
         return;
     }
     logged_mem_usage = usage;
     guard_counts_logged = guard_counts;
+    evicted_count_logged = evicted_count;
     LOG_INFO(Render,
-             "Custom textures: {} MiB of the {} MiB budget counted ({} MiB decoded), {} uploads "
-             "waiting | kept the game's pixels out of a replaced surface {}x, remade a "
-             "replaced surface {}x, dropped a decoded material {}x",
-             usage / 1_MiB, max_custom_tex_mem / 1_MiB, usage / CUSTOM_TEX_MEM_FACTOR / 1_MiB,
-             async_uploads.size(), guard_counts[0], guard_counts[1], guard_counts[2]);
+             "Custom textures: {} MiB of pictures decoded, {} MiB left of the heap (least seen "
+             "{} MiB), {} uploads waiting, {} pictures freed after use ({} MiB) | kept the game's "
+             "pixels out of a replaced surface {}x, remade a replaced surface {}x, dropped a "
+             "decoded material {}x",
+             usage / CUSTOM_TEX_MEM_FACTOR / 1_MiB, heap_free / 1_MiB, heap_free_min / 1_MiB,
+             async_uploads.size(), evicted_count, evicted_bytes / 1_MiB, guard_counts[0],
+             guard_counts[1], guard_counts[2]);
+}
+
+void CustomTexManager::EvictDecoded() {
+    // A decoded picture is only needed until it has been uploaded: the GPU has its own copy
+    // from then on. They used to be kept for the whole session, 64 MiB for each 4096x4096
+    // one, until a long session with a 4K pack had no memory left: a picture failed to
+    // decode and the GPU was lost. They are kept for a while, since the game often asks for
+    // the same one again (item icons), and the ones not asked for longest go first.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_evict_check < std::chrono::milliseconds{500}) {
+        return;
+    }
+    last_evict_check = now;
+    heap_free = Common::GetHorizonHeapFree();
+    if (heap_free == 0) {
+        // Not a console: nothing is known about the memory left, keep them as before.
+        return;
+    }
+    if (heap_free_min == 0 || heap_free < heap_free_min) {
+        heap_free_min = heap_free;
+    }
+    static constexpr u64 KEEP = 1024_MiB;
+    static constexpr u64 KEEP_WHEN_SHORT = 128_MiB;
+    static constexpr u64 SHORT = 1536_MiB;
+    const u64 keep = (heap_free < SHORT ? KEEP_WHEN_SHORT : KEEP) * CUSTOM_TEX_MEM_FACTOR;
+    const u64 usage = custom_tex_mem_usage.load(std::memory_order_relaxed);
+    if (usage <= keep) {
+        return;
+    }
+
+    // Pictures a worker may be decoding now, or an upload still to come will read.
+    std::unordered_set<const CustomTexture*> busy;
+    const auto mark_busy = [&busy](const Material& material) {
+        for (const CustomTexture* texture : material.textures) {
+            if (texture) {
+                busy.insert(texture);
+            }
+        }
+    };
+    for (const AsyncUpload& upload : async_uploads) {
+        mark_busy(*upload.material);
+    }
+    std::vector<Material*> candidates;
+    for (const auto& [hash, material] : material_map) {
+        if (material->IsPending()) {
+            mark_busy(*material);
+        } else if (material->IsDecoded()) {
+            candidates.push_back(material.get());
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Material* a, const Material* b) { return a->last_used < b->last_used; });
+
+    u64 freed = 0;
+    std::unordered_set<const CustomTexture*> gone;
+    for (Material* const material : candidates) {
+        if (usage - freed <= keep) {
+            break;
+        }
+        const bool in_use = std::any_of(
+            material->textures.begin(), material->textures.end(),
+            [&busy](const CustomTexture* texture) { return texture && busy.contains(texture); });
+        if (in_use) {
+            continue;
+        }
+        for (CustomTexture* const texture : material->textures) {
+            if (texture && texture->IsLoaded()) {
+                freed += texture->data.size() * CUSTOM_TEX_MEM_FACTOR;
+                std::vector<u8>{}.swap(texture->data);
+                gone.insert(texture);
+                ++evicted_count;
+            }
+        }
+    }
+    if (gone.empty()) {
+        return;
+    }
+    // A picture can belong to several materials: all of them have to be loaded again.
+    for (const auto& [hash, material] : material_map) {
+        if (!material->IsDecoded()) {
+            continue;
+        }
+        const bool lost = std::any_of(
+            material->textures.begin(), material->textures.end(),
+            [&gone](const CustomTexture* texture) { return texture && gone.contains(texture); });
+        if (lost) {
+            material->size = 0;
+            material->state = DecodeState::None;
+        }
+    }
+    evicted_bytes += freed / CUSTOM_TEX_MEM_FACTOR;
+    custom_tex_mem_usage.fetch_sub(std::min(freed, usage), std::memory_order_relaxed);
 }
 
 void CustomTexManager::FindCustomTextures() {
@@ -349,6 +448,7 @@ Material* CustomTexManager::GetMaterial(u64 data_hash) {
 }
 
 bool CustomTexManager::Decode(Material* material, std::function<bool()>&& upload) {
+    material->last_used = ++use_counter;
     if (!async_custom_loading) {
         const bool was_unloaded = material->IsUnloaded();
         material->LoadFromDisk(flip_png_files);

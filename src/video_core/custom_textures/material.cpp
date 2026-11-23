@@ -113,6 +113,17 @@ void Material::LoadFromDisk(bool flip_png) noexcept {
         state = DecodeState::Failed;
         return;
     }
+    // A picture that could not be decoded (a bad file, or no memory for it) leaves no
+    // pixels and no size. Called decoded, it was uploaded: nothing copied into an image
+    // of whatever size was left in the fields, and the GPU was lost.
+    for (const CustomTexture* texture : textures) {
+        if (texture && !texture->IsLoaded()) {
+            LOG_ERROR(Render, "{} map {} could not be loaded, the material is left out",
+                      MapTypeName(texture->type), texture->path);
+            state = DecodeState::Failed;
+            return;
+        }
+    }
     width = textures[0]->width;
     height = textures[0]->height;
     format = textures[0]->format;

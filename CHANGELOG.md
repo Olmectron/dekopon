@@ -4,6 +4,11 @@ This file is compiled into Toronja: the What's New card and Settings > General >
 notes show it, with no network needed. Newest first. Each section starts with a line
 "## Toronja <version>"; keep that form, the app looks for it.
 
+## Toronja 0.9.40
+
+- Texture packs no longer run the emulator out of memory. Every picture of the pack that had been shown stayed in memory for the whole session; hours into The Legend of Zelda: Majora's Mask 3D with a 4K pack there was none left, and Toronja closed. Pictures are now freed some time after they are uploaded, and when memory is short new ones wait and the game's own textures are shown instead.
+- Texture packs: a picture that cannot be loaded is left out. It used to be uploaded empty, which could close the emulator.
+
 ## Toronja 0.9.39
 
 - Texture packs: a texture the pack had already replaced could get the game's own pixels written into it, or a replacement of another size copied over it, when the game put a different texture at the same place (item icons do). That is fixed. It is the likely cause of a freeze seen two hours into The Legend of Zelda: Majora's Mask 3D with a 4K pack, not a proven one.
